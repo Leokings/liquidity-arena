@@ -547,3 +547,57 @@ test('same-origin SSE middleware sends hub payloads and enforces per-IP capacity
 
   first.req.emit('close');
 });
+
+test('SSE middleware ends cleanly at its configured lifetime and releases the client', async () => {
+  const timers = createTimers();
+  const hub = {
+    configured: true,
+    running: false,
+    clientCount: 0,
+    start() { this.running = true; },
+    subscribe() {
+      this.clientCount += 1;
+      return () => { this.clientCount -= 1; };
+    },
+  };
+  const middleware = createBinanceStreamMiddleware({
+    hub,
+    sseKeepaliveMs: 0,
+    sseLifetimeMs: 285_000,
+    sseSetTimeoutImpl: timers.setTimeoutImpl,
+    sseClearTimeoutImpl: timers.clearTimeoutImpl,
+  });
+  const request = requestResponse('/api/binance/stream');
+  await middleware(request.req, request.res, () => assert.fail('stream route should be handled'));
+
+  assert.equal(hub.clientCount, 1);
+  assert.deepEqual(timers.timeoutDelays(), [285_000]);
+  await timers.runDelay(285_000);
+  assert.equal(request.res.writableEnded, true);
+  assert.equal(hub.clientCount, 0);
+  assert.deepEqual(timers.counts(), { timeouts: 0, intervals: 0 });
+
+  const disconnected = requestResponse('/api/binance/stream');
+  await middleware(disconnected.req, disconnected.res, () => assert.fail('stream route should be handled'));
+  assert.equal(hub.clientCount, 1);
+  disconnected.req.emit('close');
+  assert.equal(hub.clientCount, 0);
+  assert.deepEqual(timers.counts(), { timeouts: 0, intervals: 0 });
+});
+
+test('SSE lifetime timer injection does not replace hub timer injection', () => {
+  const hubSetTimeout = () => 1;
+  const hubClearTimeout = () => {};
+  const sseSetTimeout = () => 2;
+  const sseClearTimeout = () => {};
+  const middleware = createBinanceStreamMiddleware({
+    setTimeoutImpl: hubSetTimeout,
+    clearTimeoutImpl: hubClearTimeout,
+    sseSetTimeoutImpl: sseSetTimeout,
+    sseClearTimeoutImpl: sseClearTimeout,
+  });
+
+  assert.equal(middleware.hub.setTimeoutImpl, hubSetTimeout);
+  assert.equal(middleware.hub.clearTimeoutImpl, hubClearTimeout);
+  middleware.hub.destroy();
+});
