@@ -29,6 +29,38 @@ function configuration() {
   };
 }
 
+function studioSuccessfulReceipt({ method = 'resolve_epoch', args = [String(TEST_EPOCH)] } = {}) {
+  return {
+    status_name: 'FINALIZED',
+    result: 6,
+    result_name: 'MAJORITY_AGREE',
+    consensus_data: {
+      leader_receipt: [
+        {
+          mode: 'leader',
+          execution_result: 'SUCCESS',
+          result: { status: 'return' },
+        },
+        {
+          mode: 'validator',
+          vote: 'idle',
+          execution_result: 'ERROR',
+          result: { status: 'return' },
+          genvm_result: {
+            raw_error: { fatal: false, causes: ['VALIDATOR_QUORUM_REACHED'] },
+            error_code: 'VALIDATOR_QUORUM_REACHED',
+          },
+        },
+      ],
+    },
+    data: {
+      calldata: {
+        readable: `{"args":${JSON.stringify(args)}"method":${JSON.stringify(method)}}`,
+      },
+    },
+  };
+}
+
 test('StudioNet chain reader verifies 0xf22f and reads only allowlisted deployment state', async () => {
   const deployment = testDeployment();
   const calls = [];
@@ -209,6 +241,83 @@ test('proof verifier derives kind from finalized decoded call and rejects caller
   assert.equal(proof.proofMetadata.independentOracle, false);
 });
 
+test('proof verifier accepts successful StudioNet consensus receipts and ignores idle validators', async () => {
+  const deployment = testDeployment();
+  const hash = `0x${'1'.repeat(64)}`;
+  const raw = {
+    hash,
+    status: 'FINALIZED',
+    recipient: deployment.addressKey,
+    sender: TEST_OWNER,
+    type: 2,
+    value: 0,
+  };
+  const chain = createStudioNetHistoryChain({
+    configuration: configuration(),
+    createClientImpl: () => ({
+      async waitForTransactionReceipt() {
+        return studioSuccessfulReceipt();
+      },
+    }),
+    fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body);
+      if (request.method === 'eth_chainId') return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0xf22f' });
+      return jsonResponse({ jsonrpc: '2.0', id: 1, result: raw });
+    },
+  });
+
+  const proof = await chain.verifyProof({
+    deploymentId: deployment.deploymentId,
+    hash,
+    assertedKind: 'RESOLVE_EPOCH',
+    expectedDeploymentHash: null,
+  });
+
+  assert.equal(proof.executionResult, 'FINISHED_WITH_RETURN');
+  assert.equal(proof.proofKind, 'RESOLVE_EPOCH');
+});
+
+test('proof verifier rejects StudioNet consensus receipts whose authoritative leader failed', async () => {
+  const deployment = testDeployment();
+  const hash = `0x${'2'.repeat(64)}`;
+  const receipt = studioSuccessfulReceipt();
+  receipt.consensus_data.leader_receipt[0].execution_result = 'ERROR';
+  const chain = createStudioNetHistoryChain({
+    configuration: configuration(),
+    createClientImpl: () => ({
+      async waitForTransactionReceipt() {
+        return receipt;
+      },
+    }),
+    fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body);
+      if (request.method === 'eth_chainId') return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0xf22f' });
+      return jsonResponse({
+        jsonrpc: '2.0',
+        id: 1,
+        result: {
+          hash,
+          status: 'FINALIZED',
+          recipient: deployment.addressKey,
+          sender: TEST_OWNER,
+          type: 2,
+          value: 0,
+        },
+      });
+    },
+  });
+
+  await assert.rejects(
+    () => chain.verifyProof({
+      deploymentId: deployment.deploymentId,
+      hash,
+      assertedKind: 'RESOLVE_EPOCH',
+      expectedDeploymentHash: null,
+    }),
+    /did not prove successful FINALIZED execution/,
+  );
+});
+
 test('proof verifier recognizes the deployed enter and withdraw_accrued_fees ABI methods', async () => {
   const deployment = testDeployment();
   const cases = [
@@ -242,6 +351,12 @@ test('proof verifier recognizes the deployed enter and withdraw_accrued_fees ABI
       configuration: configuration(),
       createClientImpl: () => ({
         async waitForTransactionReceipt() {
+          if (proofCase.assertedKind === 'WAGER') {
+            return studioSuccessfulReceipt({
+              method: proofCase.method,
+              args: proofCase.args,
+            });
+          }
           return {
             statusName: 'FINALIZED',
             txExecutionResultName: 'FINISHED_WITH_RETURN',
@@ -311,15 +426,19 @@ test('claim proof is accepted only after deriving one finalized credited child f
   };
   const client = {
     async waitForTransactionReceipt({ hash }) {
-      if (hash === childHash) return { statusName: 'FINALIZED' };
-      return {
-        statusName: 'FINALIZED',
-        txExecutionResultName: 'FINISHED_WITH_RETURN',
-        txDataDecoded: {
-          type: 'call',
-          callData: { method: 'claim', args: [String(TEST_EPOCH), 'LOW'] },
-        },
-      };
+      if (hash === childHash) {
+        return {
+          status: 7,
+          status_name: 'FINALIZED',
+          result: 5,
+          result_name: 'NO_MAJORITY',
+          value_credited: true,
+        };
+      }
+      return studioSuccessfulReceipt({
+        method: 'claim',
+        args: [String(TEST_EPOCH), 'LOW'],
+      });
     },
   };
   let tamperChild = false;
