@@ -70,10 +70,10 @@ test('StudioNet chain reader verifies 0xf22f and reads only allowlisted deployme
 test('scheduled history reads the latest resolvable epoch instead of the pre-seeded future tail', async () => {
   const deployment = testDeployment();
   const ids = [
-    TEST_EPOCH,
-    TEST_EPOCH + 3_600,
-    TEST_EPOCH + 7_200,
     TEST_EPOCH + 10_800,
+    TEST_EPOCH + 3_600,
+    TEST_EPOCH,
+    TEST_EPOCH + 7_200,
   ];
   const epochReads = [];
   const client = {

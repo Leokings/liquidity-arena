@@ -377,6 +377,7 @@ export function createStudioNetHistoryChain({
         const selected = ids
           .map((epochEndTimestamp, index) => ({ epochEndTimestamp, index: scanOffset + index }))
           .filter(({ epochEndTimestamp }) => Number(epochEndTimestamp) <= latestResolvableEpoch)
+          .sort((left, right) => Number(left.epochEndTimestamp) - Number(right.epochEndTimestamp))
           .slice(-maxEpochs);
         ids = selected.map(({ epochEndTimestamp }) => epochEndTimestamp);
         offset = selected[0]?.index ?? count;
