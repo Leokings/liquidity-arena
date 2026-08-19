@@ -10,8 +10,10 @@ const FINALIZED = 'FINALIZED';
 const SUCCESS = 'FINISHED_WITH_RETURN';
 const MAX_RPC_BYTES = 512 * 1024;
 const MAX_CONCURRENCY = 3;
+const MAX_EPOCH_INDEX_WINDOW = 50;
 const CALL_TIMEOUT_MS = 8_000;
 const REQUEST_DEADLINE_MS = 75_000;
+const RESOLUTION_PUBLICATION_DELAY_SECONDS = 120;
 const METHOD_KIND = Object.freeze({
   create_epoch: 'CREATE_EPOCH',
   resolve_epoch: 'RESOLVE_EPOCH',
@@ -345,18 +347,39 @@ export function createStudioNetHistoryChain({
     if (!Number.isSafeInteger(count) || count < 0 || count > 1_000_000) {
       fail('HISTORY_CHAIN_SCHEMA', 'StudioNet epoch count is invalid.');
     }
-    const offset = startOffset === null ? Math.max(0, count - maxEpochs) : Math.min(startOffset, count);
-    const limit = Math.min(maxEpochs, count - offset);
+    const scanOffset = startOffset === null
+      ? Math.max(0, count - MAX_EPOCH_INDEX_WINDOW)
+      : Math.min(startOffset, count);
+    const scanLimit = Math.min(
+      startOffset === null ? MAX_EPOCH_INDEX_WINDOW : maxEpochs,
+      count - scanOffset,
+    );
     let ids = [];
-    if (limit > 0) {
-      const page = await read(deployment, 'get_epoch_page', [offset, limit], until);
-      if (!page || Number(page.offset) !== offset || Number(page.next_offset) !== offset + limit
-        || Number(page.total) !== count || !Array.isArray(page.epoch_ids) || page.epoch_ids.length !== limit) {
+    let offset = scanOffset;
+    if (scanLimit > 0) {
+      const page = await read(deployment, 'get_epoch_page', [scanOffset, scanLimit], until);
+      if (!page || Number(page.offset) !== scanOffset || Number(page.next_offset) !== scanOffset + scanLimit
+        || Number(page.total) !== count || !Array.isArray(page.epoch_ids) || page.epoch_ids.length !== scanLimit) {
         fail('HISTORY_CHAIN_SCHEMA', 'StudioNet epoch page is inconsistent.');
       }
       ids = page.epoch_ids.map((value) => String(value));
       if (new Set(ids).size !== ids.length || ids.some((value) => !/^\d+$/.test(value))) {
         fail('HISTORY_CHAIN_SCHEMA', 'StudioNet epoch page contains malformed identifiers.');
+      }
+      if (startOffset === null) {
+        // Keep scheduled projection work on epochs whose resolution may already
+        // be published. V7 is deliberately seeded more than a day ahead, so a
+        // raw tail page otherwise contains only future OPEN epochs and never
+        // revisits the hourly epoch that has just become terminal.
+        const latestResolvableEpoch = Math.floor(
+          ((now() / 1_000) - RESOLUTION_PUBLICATION_DELAY_SECONDS) / 3_600,
+        ) * 3_600;
+        const selected = ids
+          .map((epochEndTimestamp, index) => ({ epochEndTimestamp, index: scanOffset + index }))
+          .filter(({ epochEndTimestamp }) => Number(epochEndTimestamp) <= latestResolvableEpoch)
+          .slice(-maxEpochs);
+        ids = selected.map(({ epochEndTimestamp }) => epochEndTimestamp);
+        offset = selected[0]?.index ?? count;
       }
     }
     const epochs = await mapConcurrent(ids, async (epochEndTimestamp) => {

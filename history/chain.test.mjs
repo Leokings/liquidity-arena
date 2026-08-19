@@ -6,6 +6,7 @@ import {
   TEST_EPOCH,
   TEST_OWNER,
   testAssetCatalog,
+  testAssets,
   testConfig,
   testDeployment,
   testDeterminedEpoch,
@@ -64,6 +65,91 @@ test('StudioNet chain reader verifies 0xf22f and reads only allowlisted deployme
     () => chain.readDeployment(`studionet:0x${'9'.repeat(40)}`, { maxEpochs: 1, startOffset: null }),
     /not allowlisted/,
   );
+});
+
+test('scheduled history reads the latest resolvable epoch instead of the pre-seeded future tail', async () => {
+  const deployment = testDeployment();
+  const ids = [
+    TEST_EPOCH,
+    TEST_EPOCH + 3_600,
+    TEST_EPOCH + 7_200,
+    TEST_EPOCH + 10_800,
+  ];
+  const epochReads = [];
+  const client = {
+    async readContract({ functionName, args }) {
+      if (functionName === 'get_config') return testConfig();
+      if (functionName === 'get_asset_catalog') return testAssetCatalog();
+      if (functionName === 'get_venue_catalog') return testVenueCatalog();
+      if (functionName === 'get_epoch_count') return ids.length;
+      if (functionName === 'get_epoch_page') {
+        assert.deepEqual(args, [0, ids.length]);
+        return { offset: 0, next_offset: ids.length, total: ids.length, epoch_ids: ids.map(String) };
+      }
+      if (functionName === 'get_epoch') {
+        epochReads.push(Number(args[0]));
+        return { ...testDeterminedEpoch(), result_status: 'PENDING' };
+      }
+      throw new Error(`unexpected ${functionName}`);
+    },
+  };
+  const chain = createStudioNetHistoryChain({
+    configuration: configuration(),
+    createClientImpl: () => client,
+    now: () => (TEST_EPOCH + 7_200 + 121) * 1_000,
+    fetchImpl: async () => jsonResponse({ jsonrpc: '2.0', id: 1, result: '0xf22f' }),
+  });
+
+  const result = await chain.readDeployment(deployment.deploymentId, { maxEpochs: 2, startOffset: null });
+
+  assert.deepEqual(epochReads, [TEST_EPOCH + 3_600, TEST_EPOCH + 7_200]);
+  assert.equal(result.offset, 1);
+  assert.equal(result.epochs.length, 2);
+});
+
+test('two determined scheduled epochs stay below StudioNet thirty-call quota', async () => {
+  const deployments = [testDeployment('v7'), testDeployment('v6')];
+  let networkReads = 0;
+  let contractReads = 0;
+  const client = {
+    async readContract({ address, functionName, args }) {
+      contractReads += 1;
+      const alias = address === deployments[0].address ? 'v7' : 'v6';
+      if (functionName === 'get_config') return testConfig(alias);
+      if (functionName === 'get_asset_catalog') return testAssetCatalog();
+      if (functionName === 'get_venue_catalog') return testVenueCatalog();
+      if (functionName === 'get_epoch_count') return 1;
+      if (functionName === 'get_epoch_page') {
+        return { offset: 0, next_offset: 1, total: 1, epoch_ids: [String(TEST_EPOCH)] };
+      }
+      if (functionName === 'get_epoch') return testDeterminedEpoch();
+      if (functionName === 'get_epoch_asset') {
+        return testAssets().find((asset) => asset.asset_id === args[1]);
+      }
+      throw new Error(`unexpected ${functionName}`);
+    },
+  };
+  const chain = createStudioNetHistoryChain({
+    configuration: {
+      ...configuration(),
+      deployments,
+    },
+    createClientImpl: () => client,
+    now: () => (TEST_EPOCH + 121) * 1_000,
+    fetchImpl: async () => {
+      networkReads += 1;
+      return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0xf22f' });
+    },
+  });
+
+  for (const deployment of deployments) {
+    const result = await chain.readDeployment(deployment.deploymentId, { maxEpochs: 1, startOffset: null });
+    assert.equal(result.epochs.length, 1);
+    assert.equal(result.epochs[0].assets.length, 5);
+  }
+
+  assert.equal(networkReads + contractReads, 23);
+  assert.ok(networkReads + contractReads < 30);
 });
 
 test('proof verifier derives kind from finalized decoded call and rejects caller-selected mismatch', async () => {

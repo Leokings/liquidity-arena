@@ -42,6 +42,15 @@ test('Vercel retains the deployment manifests required by history sync', async (
   assert.equal(rules.includes('deployments/*.json'), false);
 });
 
+test('scheduled history projection stays within the StudioNet read quota', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/studionet-v7-keeper.yml', import.meta.url), 'utf8');
+  assert.match(
+    workflow,
+    /history-sync\.mjs --deployment v7 --deployment v6 --max-epochs 2 --no-known-proofs/,
+  );
+  assert.doesNotMatch(workflow, /history-sync\.mjs[^\r\n]*--max-epochs 10/);
+});
+
 test('public history endpoint uses keyset pagination and never exposes repository internals', async () => {
   const repository = {
     configured: true,
