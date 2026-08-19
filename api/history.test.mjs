@@ -46,7 +46,7 @@ test('scheduled history projection stays within the StudioNet read quota', async
   const workflow = await readFile(new URL('../.github/workflows/studionet-v7-keeper.yml', import.meta.url), 'utf8');
   assert.match(
     workflow,
-    /history-sync\.mjs --deployment v7 --deployment v6 --max-epochs 2 --no-known-proofs/,
+    /history-sync\.mjs --deployment v7 --deployment v6 --max-epochs 2 --no-known-proofs --idempotency-key "history-sync:\$\{\{ github\.run_id \}\}"/,
   );
   assert.doesNotMatch(workflow, /history-sync\.mjs[^\r\n]*--max-epochs 10/);
 });
