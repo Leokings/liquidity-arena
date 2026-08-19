@@ -843,9 +843,12 @@ export class BinanceStreamHub {
 export function createBinanceStreamMiddleware({
   hub,
   sseKeepaliveMs = 15_000,
+  sseLifetimeMs = 0,
   maxClients = DEFAULT_MAX_SSE_CLIENTS,
   maxClientsPerIp = DEFAULT_MAX_SSE_CLIENTS_PER_IP,
   resolveClientIp = (req) => String(req?.socket?.remoteAddress || 'unknown'),
+  sseSetTimeoutImpl = globalThis.setTimeout,
+  sseClearTimeoutImpl = globalThis.clearTimeout,
   setIntervalImpl = globalThis.setInterval,
   clearIntervalImpl = globalThis.clearInterval,
   ...hubOptions
@@ -856,7 +859,13 @@ export function createBinanceStreamMiddleware({
   if (!Number.isSafeInteger(maxClientsPerIp) || maxClientsPerIp <= 0) {
     throw new TypeError('maxClientsPerIp must be a positive safe integer.');
   }
+  if (!Number.isSafeInteger(sseLifetimeMs) || sseLifetimeMs < 0) {
+    throw new TypeError('sseLifetimeMs must be a non-negative safe integer.');
+  }
   if (typeof resolveClientIp !== 'function') throw new TypeError('resolveClientIp must be a function.');
+  if (typeof sseSetTimeoutImpl !== 'function' || typeof sseClearTimeoutImpl !== 'function') {
+    throw new TypeError('SSE timeout functions are required.');
+  }
   const streamHub = hub || new BinanceStreamHub(hubOptions);
   let reservedClients = 0;
   const reservedClientsByIp = new Map();
@@ -942,6 +951,7 @@ export function createBinanceStreamMiddleware({
 
     let closed = false;
     let keepaliveTimer = null;
+    let lifetimeTimer = null;
     let backpressured = false;
     let pendingPayload = null;
     const writeChunk = (chunk) => {
@@ -979,6 +989,8 @@ export function createBinanceStreamMiddleware({
       res.off?.('drain', flushPending);
       if (keepaliveTimer !== null) clearIntervalImpl(keepaliveTimer);
       keepaliveTimer = null;
+      if (lifetimeTimer !== null) sseClearTimeoutImpl(lifetimeTimer);
+      lifetimeTimer = null;
       req.off?.('close', cleanup);
       res.off?.('close', cleanup);
     };
@@ -988,6 +1000,14 @@ export function createBinanceStreamMiddleware({
       keepaliveTimer = setIntervalImpl(() => {
         if (!closed && !res.writableEnded && !backpressured) writeChunk(': keepalive\n\n');
       }, sseKeepaliveMs);
+    }
+    if (sseLifetimeMs > 0) {
+      lifetimeTimer = sseSetTimeoutImpl(() => {
+        lifetimeTimer = null;
+        if (closed || res.writableEnded) return;
+        cleanup();
+        res.end();
+      }, sseLifetimeMs);
     }
     return undefined;
   };

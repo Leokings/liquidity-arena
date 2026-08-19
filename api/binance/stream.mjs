@@ -15,6 +15,10 @@ import {
 const middleware = createBinanceStreamMiddleware({
   maxClientsPerIp: DEFAULT_MAX_SSE_CLIENTS_PER_IP,
   resolveClientIp: vercelClientKey,
+  // End normally before Vercel's 300-second function ceiling. EventSource
+  // reconnects after the advertised one-second retry without surfacing a
+  // platform timeout as an application error.
+  sseLifetimeMs: 285_000,
 });
 
 export default async function handler(req, res) {
