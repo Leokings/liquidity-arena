@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 
@@ -30,6 +31,16 @@ function response() {
     end(value = '') { this.body = value; this.writableEnded = true; },
   };
 }
+
+test('Vercel retains the deployment manifests required by history sync', async () => {
+  const ignore = await readFile(new URL('../.vercelignore', import.meta.url), 'utf8');
+  const rules = ignore
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'));
+  assert.equal(rules.includes('deployments/'), false);
+  assert.equal(rules.includes('deployments/*.json'), false);
+});
 
 test('public history endpoint uses keyset pagination and never exposes repository internals', async () => {
   const repository = {

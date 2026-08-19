@@ -7,7 +7,6 @@ __pycache__/
 .env.*
 !.env.example
 artifacts/
-deployments/
 docs/screenshots/
 tests/
 **/*.test.mjs
