@@ -272,7 +272,7 @@ export function normalizeV7KeeperConfig(rawValue, { environment = process.env } 
         { minimum: 100, maximum: 60_000 },
       ),
       finalityWaitAttempts: integer(
-        operator.finalityWaitAttempts ?? 3,
+        operator.finalityWaitAttempts ?? 6,
         'operator.finalityWaitAttempts',
         { minimum: 1, maximum: 10 },
       ),
