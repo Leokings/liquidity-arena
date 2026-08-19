@@ -270,6 +270,32 @@ test('any active StudioNet signer can execute and each exact write finalizes bef
   assert.deepEqual(result.completed.map(({ status }) => status), ['TIMED_OUT', 'RESOLVED']);
 });
 
+test('receipt propagation retries the recorded hash with finality-paced backoff', async () => {
+  const fake = fakeOperator({ epochs: [epochRecord(NOW - 3_600)] });
+  const originalWait = fake.operator.waitFinalized;
+  const retryDelays = [];
+  let waitAttempts = 0;
+  fake.operator.waitFinalized = async (hash, policy) => {
+    waitAttempts += 1;
+    if (waitAttempts === 1) throw new Error('transaction not found');
+    return originalWait(hash, policy);
+  };
+
+  const result = await runV6DrainOnce({
+    config: config(),
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    sleep: async (delayMs) => retryDelays.push(delayMs),
+    logger: silentLogger,
+  });
+
+  assert.equal(result.completed.length, 1);
+  assert.equal(waitAttempts, 2);
+  assert.deepEqual(retryDelays, [100]);
+  assert.equal(fake.calls.submits.length, 1);
+});
+
 test('locked signer without a password is rejected even though owner identity is irrelevant', async () => {
   const fake = fakeOperator({
     epochs: sampleEpochs(),

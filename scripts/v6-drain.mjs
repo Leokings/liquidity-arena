@@ -269,7 +269,10 @@ async function waitForFinalizedReceipt(context, transactionHash) {
     }),
     {
       attempts: context.config.operator.finalityWaitAttempts,
-      baseMs: context.config.operator.retryBaseMs,
+      baseMs: Math.max(
+        context.config.operator.retryBaseMs,
+        context.config.operator.finalityIntervalMs,
+      ),
       sleep: context.sleep,
       label: `FINALIZED receipt ${transactionHash}`,
     },

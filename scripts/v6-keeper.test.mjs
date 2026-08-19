@@ -350,6 +350,7 @@ test('FINALIZED polling retries the same recorded hash without resubmitting the 
   const fake = fakeOperator({ keeperConfig });
   const originalWait = fake.operator.waitFinalized;
   let waitAttempts = 0;
+  const retryDelays = [];
   fake.operator.waitFinalized = async (hash, policy) => {
     waitAttempts += 1;
     if (waitAttempts === 1) throw new Error('temporary receipt transport error');
@@ -362,10 +363,11 @@ test('FINALIZED polling retries the same recorded hash without resubmitting the 
     execute: true,
     nowEpochSeconds: NOW,
     logger: silentLogger,
-    sleep: noSleep,
+    sleep: async (delayMs) => retryDelays.push(delayMs),
   });
   assert.equal(result.completed.length, 1);
   assert.equal(waitAttempts, 2);
+  assert.deepEqual(retryDelays, [100]);
   assert.equal(fake.calls.submits.length, 1);
   assert.equal(fake.calls.submits[0].hash, result.completed[0].transactionHash);
 });

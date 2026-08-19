@@ -637,7 +637,14 @@ async function waitForFinalizedReceipt(context, transactionHash) {
     }),
     {
       attempts: config.operator.finalityWaitAttempts,
-      baseMs: config.operator.retryBaseMs,
+      // The Studio gateway may briefly return "transaction not found" after
+      // broadcasting even though the hash is authoritative. Space outer CLI
+      // retries by at least the receipt polling interval so all attempts are
+      // not exhausted inside that propagation window.
+      baseMs: Math.max(
+        config.operator.retryBaseMs,
+        config.operator.finalityIntervalMs,
+      ),
       sleep,
       label: `FINALIZED receipt ${transactionHash}`,
       logger: context.logger,

@@ -505,7 +505,10 @@ async function waitForFinalizedReceipt(context, transactionHash) {
     }),
     {
       attempts: config.operator.finalityWaitAttempts,
-      baseMs: config.operator.retryBaseMs,
+      baseMs: Math.max(
+        config.operator.retryBaseMs,
+        config.operator.finalityIntervalMs,
+      ),
       sleep,
       label: `FINALIZED receipt ${transactionHash}`,
     },
