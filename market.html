@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#080b18">
+  <meta name="description" content="Liquidity Arena maps BTC, ETH, BNB, SOL and XRP in exact-hour, 20-minute return battles with transparent provisional evidence.">
+  <title>Liquidity Arena</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/vendor/fonts.css">
+  <link rel="stylesheet" href="/market/styles.css">
+</head>
+<body>
+  <main class="market-shell" id="market-app">
+    <div class="ambient-grid" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Liquidity Arena home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>
+          <strong>LIQUIDITY ARENA</strong>
+          <small>EXACT-HOUR CRYPTO RETURN MAP</small>
+        </span>
+      </a>
+
+      <div class="session-meta" aria-label="Market data status">
+        <button class="live-pill" id="feed-toggle" type="button" data-state="connecting" title="Toggle live or demo market data"><i></i><span id="feed-status">CONNECTING LIVE</span></button>
+        <span class="session-clock" id="session-clock">--:--:-- UTC</span>
+      </div>
+
+      <nav class="top-actions" aria-label="Primary actions">
+        <button class="text-button" id="how-button" type="button">HOW IT WORKS</button>
+        <button class="wallet-button" id="wallet-button" type="button">
+          <span class="wallet-orb" aria-hidden="true"></span>
+          <span id="wallet-label">CONNECT GENLAYER</span>
+        </button>
+      </nav>
+    </header>
+
+    <section class="timeframe-bar" aria-label="Live market prices and comparison lookback">
+      <div class="timeframe-copy">
+        <span>ARENA VIEW</span>
+        <div class="timeframe-value">
+          <strong id="window-label">ACTIVE ROUND</strong>
+          <small id="window-kind">ROUND SCOREBOARD</small>
+        </div>
+      </div>
+      <div class="timeframe-controls-wrap">
+        <div class="segmented" id="timeframe-controls" role="group" aria-label="Choose comparison lookback; live price updates continue">
+          <button type="button" class="active" data-window="ROUND" aria-pressed="true">ROUND</button>
+          <button type="button" data-window="1H">1H</button>
+          <button type="button" data-window="4H">4H</button>
+          <button type="button" data-window="1D">1D</button>
+          <button type="button" data-window="1W">1W</button>
+        </div>
+        <span class="live-window-note" id="live-window-note" data-state="connecting"><i aria-hidden="true"></i><span id="live-window-status">CONNECTING LIVE</span></span>
+      </div>
+      <div class="market-regime">
+        <span>CRYPTO REGIME</span>
+        <strong id="regime-label">PRICE DISCOVERY</strong>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <aside class="asset-panel" aria-labelledby="asset-heading">
+        <div class="panel-heading">
+          <span id="asset-heading">MARKET TERRITORIES</span>
+          <span>DOMINANCE</span>
+        </div>
+        <div class="asset-list" id="asset-list"></div>
+        <p class="data-note" id="view-explanation"><strong>Round return controls territory.</strong> ROUND resets from the exact 1m candle open at battle start. Momentum changes flow; volatility changes turbulence—neither changes rank or area.</p>
+      </aside>
+
+      <section class="arena-stage" aria-label="Circular market dominance map">
+        <canvas id="arena-canvas" role="img" aria-label="Animated circular map showing the relative dominance of five crypto assets"></canvas>
+        <div class="arena-title" aria-hidden="true">
+          <span>24 / 7 CRYPTO LIQUIDITY</span>
+          <strong id="arena-leader">BTC LEADS</strong>
+        </div>
+        <section class="battle-card" id="battle-card" data-state="loading"
+          data-target-protocol="BUILD_CONFIGURED" data-target-policy="CRYPTO_SPOT_1M_MEDIAN_V1"
+          aria-labelledby="battle-card-title">
+          <header class="battle-card-header">
+            <span class="battle-card-brand"><i aria-hidden="true"></i><strong id="battle-card-title">HOURLY RETURN BATTLE</strong></span>
+            <span class="battle-card-state" id="battle-card-state"><i></i><span id="battle-card-state-label">PROVISIONAL</span></span>
+          </header>
+          <div class="round-leaderboard" aria-label="Provisional highest and lowest return leaders">
+            <div><span>HIGH</span><strong id="round-high-leader">--</strong><small id="round-high-return">--</small></div>
+            <div><span>LOW</span><strong id="round-low-leader">--</strong><small id="round-low-return">--</small></div>
+          </div>
+          <div class="battle-card-main">
+            <div class="battle-card-identity">
+              <span id="battle-type">RETURN BATTLE</span>
+              <strong id="battle-round-id">ROUND --</strong>
+            </div>
+            <div class="battle-card-timer">
+              <span id="battle-countdown-label">NEXT PHASE</span>
+              <strong id="battle-countdown" aria-label="Round countdown unavailable">--:--</strong>
+            </div>
+          </div>
+          <div class="battle-card-footer">
+            <p id="battle-status" role="status" aria-live="polite" aria-atomic="true">Loading local exact-hour schedule and provisional Binance boundary evidence.</p>
+            <div class="battle-result" id="battle-result" aria-label="Battle result">
+              <span>EVIDENCE</span>
+              <strong id="battle-winner">--</strong>
+              <span id="battle-return">--</span>
+            </div>
+          </div>
+        </section>
+        <button class="selected-orb" id="selected-orb" type="button" aria-label="Inspect selected asset">
+          <span class="orb-symbol" id="orb-symbol">BTC</span>
+          <strong id="orb-value">--.-%</strong>
+          <small id="orb-label">ROUND TERRITORY</small>
+        </button>
+        <div class="map-key" aria-hidden="true">
+          <span><i class="calm"></i>CALM</span>
+          <span><i class="volatile"></i>VOLATILE</span>
+        </div>
+      </section>
+
+      <aside class="insight-panel" aria-labelledby="insight-heading">
+        <div class="panel-heading">
+          <span id="insight-heading">SELECTED MARKET</span>
+          <span id="selected-source">CONNECTING</span>
+        </div>
+        <div class="asset-identity">
+          <span class="identity-swatch" id="identity-swatch"></span>
+          <div>
+            <span id="selected-name">BITCOIN</span>
+            <strong id="selected-pair">BTC / USDT</strong>
+          </div>
+        </div>
+        <div class="price-line">
+          <div class="price-value">
+            <strong id="selected-price">—</strong>
+          <small id="selected-unit">USDT</small>
+          </div>
+          <span id="selected-change">—</span>
+        </div>
+        <p class="observation-meta" id="selected-observation" data-state="connecting">CONNECTING TO MARKET DATA</p>
+        <div class="spark-wrap">
+          <canvas id="spark-canvas" role="img" aria-label="Selected asset price history"></canvas>
+        </div>
+        <dl class="market-facts">
+          <div><dt>MOMENTUM</dt><dd id="selected-momentum">—</dd></div>
+          <div><dt>VOLATILITY</dt><dd id="selected-volatility">—</dd></div>
+          <div><dt>RETURN BAND</dt><dd id="selected-range">—</dd></div>
+          <div><dt>MARKET SESSION</dt><dd id="selected-session">SIMULATED</dd></div>
+          <div><dt>LAST PRICE UPDATE</dt><dd id="selected-tick">—</dd></div>
+        </dl>
+        <button class="prediction-cta" id="prediction-button" type="button" disabled>
+          <span>
+            <small id="prediction-kicker">STUDIONET ARENA</small>
+            <strong id="prediction-label">LOADING ROUND</strong>
+          </span>
+          <span aria-hidden="true">→</span>
+        </button>
+        <p class="prediction-availability" id="prediction-availability" role="status">Checking the current StudioNet epoch and wager window.</p>
+      </aside>
+    </section>
+
+    <section class="event-dock" aria-label="Market event timeline">
+      <div class="event-summary">
+        <span class="event-icon" id="event-icon" aria-hidden="true">↗</span>
+        <div>
+          <span id="event-time">NOW</span>
+          <strong id="event-title">LIQUIDITY SHIFT DETECTED</strong>
+        </div>
+      </div>
+      <p id="event-copy">Bitcoin is absorbing territory as relative momentum strengthens.</p>
+      <div class="playback-controls">
+        <button type="button" id="play-button" aria-label="Pause replay">Ⅱ</button>
+        <label for="timeline-slider">MARKET REPLAY</label>
+        <input id="timeline-slider" type="range" min="0" max="1000" value="1000" aria-label="Market replay position">
+        <span id="replay-label">LIVE EDGE</span>
+      </div>
+    </section>
+
+    <footer class="footer-bar">
+      <span>MARKET VISUALIZATION · NOT FINANCIAL ADVICE</span>
+      <span class="footer-center"><i></i> PROVISIONAL MARKET EVIDENCE</span>
+      <a id="network-explorer" href="https://explorer-studio.genlayer.com/" target="_blank" rel="noopener noreferrer">STUDIONET EXPLORER</a>
+    </footer>
+
+    <div class="mobile-asset-strip" id="mobile-asset-strip" aria-label="Select an asset"></div>
+
+    <div class="modal-layer" id="prediction-modal" hidden>
+      <button class="modal-backdrop" type="button" data-close-modal aria-label="Close prediction dialog"></button>
+      <section class="prediction-modal" role="dialog" aria-modal="true" aria-labelledby="prediction-title">
+        <button class="modal-close" type="button" data-close-modal aria-label="Close">×</button>
+        <span class="modal-eyebrow">GENLAYER NATIVE-GEN ARENA · <span id="round-network">STUDIONET</span></span>
+        <h1 id="prediction-title">Which asset wins this return battle?</h1>
+        <p id="prediction-rule-copy">Choose one asset per objective. Same-asset top-ups remain available until the exact wager close.</p>
+
+        <div class="battle-objective-controls" id="battle-objective-controls" aria-label="Select return objective">
+          <button type="button" data-objective="HIGH" aria-pressed="true">HIGHEST RETURN</button>
+          <button type="button" data-objective="LOW" aria-pressed="false">LOWEST RETURN</button>
+        </div>
+
+        <div class="round-meta">
+          <div><span>ROUND</span><strong id="round-id">LOADING</strong></div>
+          <div><span>ENTRY CLOSES</span><strong id="round-entry-deadline">—</strong></div>
+          <div><span>RESOLVES</span><strong id="round-resolution">—</strong></div>
+          <div><span>PHASE</span><strong id="round-phase">UNVERIFIED</strong></div>
+        </div>
+
+        <fieldset class="prediction-assets">
+          <legend id="prediction-legend">HIGH RETURN PICK</legend>
+          <div id="prediction-assets"></div>
+        </fieldset>
+
+        <section class="wager-entry" aria-labelledby="stake-label">
+          <div class="wager-entry-heading">
+            <label id="stake-label" for="stake-amount">STAKE AMOUNT</label>
+            <span>WALLET <strong id="wallet-balance">— GEN</strong></span>
+          </div>
+          <div class="stake-input-row">
+            <div class="stake-input-shell">
+              <input id="stake-amount" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" value="1" aria-describedby="stake-help stake-error">
+              <span>TEST GEN</span>
+            </div>
+            <div class="stake-presets" id="stake-presets" aria-label="Stake presets">
+              <button type="button" data-stake="0.1">0.1</button>
+              <button type="button" data-stake="0.5">0.5</button>
+              <button type="button" data-stake="1">1</button>
+            </div>
+          </div>
+          <p class="stake-help" id="stake-help">Exact 18-decimal GEN input. StudioNet is gasless; your wallet needs faucet GEN to cover the wager value.</p>
+          <p class="stake-error" id="stake-error" role="status"></p>
+          <dl class="wager-quote">
+            <div><dt>ROUND POOL</dt><dd id="round-pool">— GEN</dd></div>
+            <div><dt>SELECTED POOL</dt><dd id="selected-pool">— GEN</dd></div>
+            <div><dt>EST. PAYOUT</dt><dd id="estimated-payout">— GEN</dd></div>
+          </dl>
+          <p class="estimate-note">PARIMUTUEL ESTIMATE · PAYOUT CHANGES AS WAGERS ENTER UNTIL CLOSE</p>
+        </section>
+
+        <section class="wallet-position" id="wallet-position" data-state="empty" aria-labelledby="position-title">
+          <div class="position-heading">
+            <span id="position-title">YOUR ON-CHAIN POSITION</span>
+            <strong id="position-state">CONNECT WALLET</strong>
+          </div>
+          <dl>
+            <div><dt>PICK</dt><dd id="position-choice">—</dd></div>
+            <div><dt>STAKED</dt><dd id="position-stake">— GEN</dd></div>
+            <div><dt>CLAIMABLE</dt><dd id="position-claimable">— GEN</dd></div>
+          </dl>
+          <button class="claim-wager" id="claim-wager" type="button" disabled>CLAIM UNAVAILABLE</button>
+          <button class="unlock-refund" id="unlock-refund" type="button" hidden disabled>
+            EMERGENCY PRINCIPAL UNLOCK UNAVAILABLE
+          </button>
+        </section>
+
+        <section class="wallet-activity" aria-labelledby="activity-title">
+          <div class="activity-heading">
+            <span id="activity-title">MY WAGERS &amp; CLAIMS</span>
+            <strong>ON-CHAIN + THIS BROWSER</strong>
+          </div>
+          <p class="claim-reminder" id="claim-reminder" hidden></p>
+          <p class="activity-empty" id="activity-empty">Transaction hashes will remain here after a refresh.</p>
+          <ol id="activity-list"></ol>
+          <button class="load-more-positions" id="load-more-positions" type="button" hidden>
+            LOAD OLDER ON-CHAIN POSITIONS
+          </button>
+        </section>
+
+        <div class="consensus-note">
+          <span class="consensus-glyph" aria-hidden="true">◎</span>
+          <div class="consensus-copy">
+            <p><strong>Provisional map, authoritative contract.</strong> ROUND uses exact Binance one-minute boundaries for immediate feedback. The selected deployment's FINALIZED five-exchange median result alone controls payouts.</p>
+            <p><strong>StudioNet test escrow.</strong> <span id="network-escrow-copy">The build-configured arena deployment escrows faucet-issued test GEN and uses pull-based claims/refunds.</span></p>
+          </div>
+        </div>
+
+        <button class="submit-prediction" id="submit-prediction" type="button" disabled>
+          <span>SELECT AN ASSET</span><span aria-hidden="true">→</span>
+        </button>
+        <p class="modal-status" id="modal-status" role="status">Connect a StudioNet wallet and wait for the verified active wager window, or open a legacy claim.</p>
+        <p class="testnet-warning"><strong>TESTNET ONLY.</strong> GEN used here is faucet-issued test currency with no real-world value.</p>
+      </section>
+    </div>
+
+    <div class="modal-layer" id="how-modal" hidden>
+      <button class="modal-backdrop" type="button" data-close-how aria-label="Close explanation"></button>
+      <section class="how-modal" role="dialog" aria-modal="true" aria-labelledby="how-title">
+        <button class="modal-close" type="button" data-close-how aria-label="Close">×</button>
+        <span class="modal-eyebrow">HOW TO READ THE ARENA</span>
+        <h1 id="how-title">One map. Comparable movement.</h1>
+        <ol>
+          <li><span>01</span><div><strong>Territory is return-only</strong><p>The larger territory always has the higher signed return for the selected view. Every asset keeps at least five percent of the map.</p></div></li>
+          <li><span>02</span><div><strong>Only ROUND resets</strong><p>ROUND resets at the canonical battle-start candle. 1H–1W are rolling market context and are never used as the active battle scoreboard.</p></div></li>
+          <li><span>03</span><div><strong id="how-resolution-title">Live leaders are provisional; GenLayer settles funds</strong><p id="how-resolution-copy">The live ROUND map uses Binance boundary data for immediate feedback. The allowlisted StudioNet deployment independently evaluates the five-exchange policy; only its FINALIZED result controls claims.</p></div></li>
+          <li><span>04</span><div><strong>Freshness stays visible</strong><p>Crypto trades 24/7, but a feed can still pause or carry a prior quote. The arena shows when each price was genuinely updated instead of treating every packet as new.</p></div></li>
+        </ol>
+      </section>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </main>
+  <script type="module" src="/market/app.js"></script>
+</body>
+</html>

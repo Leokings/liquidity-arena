@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "network": "studionet",
+  "contractAddress": "${V6_CONTRACT_ADDRESS}",
+  "expected": {
+    "protocolVersion": "LIQUIDITY_ARENA_V6",
+    "policyVersion": "CRYPTO_SPOT_1M_MEDIAN_V1",
+    "platformFeeBps": 200
+  },
+  "epochs": {
+    "futureHours": 3,
+    "minimumCreationLeadSeconds": 7200,
+    "minStakeGen": "0.1",
+    "maxStakePerWalletGen": "10"
+  },
+  "operator": {
+    "pageSize": 50,
+    "scanIntervalMs": 25,
+    "maxWritesPerRun": 12,
+    "readAttempts": 3,
+    "retryBaseMs": 500,
+    "finalityRetries": 180,
+    "finalityIntervalMs": 5000,
+    "finalityWaitAttempts": 3,
+    "postStateAttempts": 5,
+    "postStateIntervalMs": 2000
+  }
+}

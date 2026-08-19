@@ -1,0 +1,161 @@
+# Security policy
+
+## Status and scope
+
+The active review target is `LIQUIDITY_ARENA_V7` at
+`0xb2ae59aE641f571726Ae81E30080f8c2192b15EF` on GenLayer StudioNet. The immutable evidence policy is
+`CRYPTO_SPOT_1M_MEDIAN_V1`. Contract lint and direct tests have passed, and the complete V7 canary
+proved finalized resolution, refund/payout delivery, loser rejection, liability conservation, and
+fee withdrawal. Dedicated keeper rotation is complete; public browser cutover, default-branch
+scheduler proof, initial history ingestion, and an independent security review are still release
+gates. The payment path must not be described as production-ready.
+
+V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is a legacy liability surface only. It remains readable
+and claimable for existing positions; supported public app and automation paths must not use it for
+new epochs or wagers. Its deployed owner-only creation capability remains, so owner abstention and
+monitoring are part of the retirement control.
+
+StudioNet is temporary, hosted, rate-limited development infrastructure. Faucet GEN has no promised
+monetary value, and observed finality or transfer behavior is not a live-network guarantee or SLA.
+
+## Critical invariants
+
+V7 must preserve all of the following:
+
+- one exact-hour epoch contains both HIGH and LOW pools;
+- one immutable five-asset vector resolves both objectives;
+- wagering closes before the battle baseline is measured;
+- no result or payment is final at `ACCEPTED`;
+- the normal fee applies only to the losing pool, defaults to 2%, and cannot be configured above 5%;
+- every exceptional refund charges zero fee;
+- only explicitly accrued fees are withdrawable;
+- player liability plus accrued fees never exceeds contract balance;
+- claim and refund effects are recorded before value transfer;
+- the same epoch, position, resolution, timeout, claim, or transaction proof cannot be replayed;
+- a missing or unreadable legacy liability must never be interpreted as zero.
+
+## Authorization and key separation
+
+V7 separates roles:
+
+- owner: keeper rotation, future fee setting, and two-step ownership administration;
+- keeper: future `create_epoch(E)` only as a privileged operation, with a 26-hour horizon;
+- treasury/owner: withdrawal of already accrued fees only;
+- any account: resolution and timeout after immutable gates;
+- participant: its own wager and claim.
+
+The owner key must never be installed in GitHub Actions or Vercel. The workflow uses a dedicated,
+encrypted keeper keystore whose on-chain privilege cannot change fees, treasury, ownership, stake
+limits, results, balances, or claims. The dedicated keeper
+`0x12ba664a1ec9ca78b070d103c6a69e20673f4b51` replaced the bootstrap wallet through finalized
+transaction `0xbca440cc838e6d5dcb595e18124e363e0fa1780a498e3ce49703f9d822aa2fdc`;
+`get_config` and repository variable `V7_KEEPER_ADDRESS` match that address. The environment stores
+the encrypted keeper material under the dedicated keeper secret names; runtime signer proof still
+requires an activated workflow run. Local use of the dedicated signer successfully created only
+fixed-term epochs `1787256000` and `1787259600`; both transactions finalized and both post-states
+were verified OPEN.
+
+Secrets must not appear in source, browser bundles, workflow artifacts, or logs. GenLayer CLI 0.39.2
+offers only `--password`/`--source-password` for the noninteractive create, export, import, and unlock
+operations used here, so the keeper password necessarily appears briefly in the local process
+argument list. Run bootstrap on a trusted single-user machine and CI only on an isolated ephemeral
+GitHub-hosted runner; disable shell tracing/debug logging, never echo the command, minimize the
+process lifetime, decode the encrypted keystore only into a randomly named temporary file, and
+remove it on every exit path. Treat host/process-list access during that interval as credential
+access. Migrate to a non-argv CLI input mechanism if a future supported release provides one.
+
+## Market-data threats
+
+Settlement allowlists Binance, OKX, Bybit, Gate, and KuCoin and fixed USDT spot symbols for BTC, ETH,
+BNB, SOL, and XRP. A venue qualifies only with a complete five-asset basket. The adapter must enforce
+completed one-minute boundaries, timestamp alignment, bounded responses, strict schemas, positive
+prices, fixed-point arithmetic, deterministic ordering, and at least three complete venues.
+
+Tests and monitoring must cover stale/revised candles, clock skew, missing or duplicated assets,
+malformed JSON, HTTP failure, wrong quote markets, extreme values, endpoint redirection, partial
+venue outage, and disagreement between validators. Live visualization ticks are never settlement
+evidence. A quorum failure must not guess a winner; the immutable 24-hour timeout is the deterministic
+zero-fee fallback for an epoch that remains open.
+
+Public endpoints do not imply production redistribution or settlement rights. Provider terms,
+availability, jurisdiction, and commercial licensing require separate review.
+
+## Accounting and value delivery
+
+Review focus includes integer rounding, last-winning-claimant remainder, fee isolation, duplicate
+claims, solvency, maximum stake arithmetic, and asynchronous native value delivery. The browser and
+operator must verify the exact transaction recipient, method, arguments, value, final status,
+authoritative execution, post-state, and emitted EOA child.
+
+The claim-delivery monitor is deliberately read-only. It may alert and preserve evidence, but it
+must never automatically resubmit `claim` or re-emit value. Once V7 has effects-first marked a claim
+paid, an automatic retry without proof of child failure could double-pay if the original child later
+finalizes. A protocol-backed recoverable-transfer design or documented delivery guarantee is still
+required before real value.
+
+## Keeper and availability threats
+
+Every keeper invocation must fail closed unless chain, protocol, policy, source catalogs, timing,
+fee, stake limits, owner, keeper, treasury, and signer all match. The signer is rechecked immediately
+before each submission. Writes are serialized and bounded, hashes captured immediately, and success
+requires exact receipt identity, `FINALIZED`, successful execution, and matching post-state.
+
+GitHub cron is best-effort. It does not define epoch time and is not an availability guarantee.
+Permissionless resolution and timeout reduce operator lock-in, but monitoring must still alert on
+missing coverage, source quorum loss, finality lag, scheduler failure, and unexpected role/config
+changes.
+
+## Web, history, and migration threats
+
+The browser must never receive exchange credentials, database credentials, or keeper material.
+Server routes require allowlisted hosts, bounded input and output, timeouts, caching, rate limits,
+restrictive CORS, CSP, and log redaction. Wallet confirmation must show StudioNet, exact contract,
+epoch, objective, asset, value, and fee behavior before signing.
+
+The deployment registry must allowlist only the recorded V7 and V6 addresses. V7 becomes the sole new
+wager target after cutover; V6 remains limited to legacy reads, claims, and eligible permissionless
+resolve/timeouts, with no epoch creation or new wagers. URL parameters cannot introduce an arbitrary
+contract. A rollback may restore an earlier browser artifact, but it must not re-enable a public V6
+creation or wager path.
+
+Neon durable settled-epoch history is an off-chain projection. Its production migration was applied
+with normalized marked-DDL SHA-256 `dd95ed3a5c55bf55d02090605a46557377778afb220126451bb4e750dbc280b2`
+(raw migration-file SHA-256 `8a6cb36aed985575fa797ab446481c89a1495c8d6d99a8024931cbda67674af5`), and the expected six
+tables/four indexes were read back without exposing connection or ingestion secrets. Database rows
+must retain chain, contract, epoch, and finalized transaction identity, be idempotently ingested, and
+remain replaceable from authoritative chain reads. Until initial and repeated ingestion checks pass,
+the application must not claim populated durable history is live. Database availability can affect
+discovery, never settlement or claim eligibility.
+
+## Release gates
+
+Before the V7 public cutover:
+
+1. rerun GenVM lint, V7 direct tests, full JavaScript tests, build, and dependency audit;
+2. complete an independent focused review of contract, evidence adapters, keeper, deployment
+   registry, server boundary, and database ingestion;
+3. activate the workflow, prove its runtime signer is the recorded dedicated keeper, and prove no
+   owner material exists in automation;
+4. independently review the recorded funded V7 canary, including its shared resolution, fee/refund
+   math, loser rejection, conserved balances, and finalized parent/child deliveries;
+5. verify V6 legacy reads, resolve/timeout, and claims while proving public app/automation V6 writes
+   remain disabled and the retained owner creation capability is monitored and unused;
+6. complete initial/idempotent Neon ingestion validation and a rollback rehearsal; the production
+   schema migration and schema read-back are complete;
+7. test outage, delayed finality, restart, rate limit, and the independent 24-hour timeout path;
+8. finish provider data-use and applicable legal review.
+
+The earlier V6 funded round is valuable regression evidence, not a substitute for the V7 canary.
+The current Vercel production site remains on the V6 compatibility release until these gates pass.
+Deployment `dpl_DQEvnGup417wvTxuxzeNfJvySiM5` verifies that both the default V6 route and an explicit
+`?deployment=v7` route disable new wagers while V6 is active. V7 becomes write-capable only after
+the active deployment is deliberately switched to V7. Its current `/readyz` response is expected to
+be `503` because the active legacy V6 compatibility artifact lacks future keeper coverage; this is
+not a chain, feed, or market-data configuration failure.
+
+## Reporting
+
+Never publish private keys, seed phrases, encrypted keystores, passwords, provider credentials,
+database connection strings, or complete secrets. A report should identify the affected commit and
+contract, minimal reproduction conditions, impact, and safe evidence. Security reports must clearly
+separate locally tested behavior, observed StudioNet behavior, and assumptions that remain unproven.

@@ -1,0 +1,975 @@
+#!/usr/bin/env node
+
+import { spawn as nodeSpawn } from 'node:child_process';
+import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+
+import {
+  assertFinalizedGenlayerExecution,
+  parseGenlayerCallOutput,
+  resolveGenlayerCommand,
+  runGenlayerCall,
+  runGenlayerStreamingCommand,
+  submitGenlayerWrite,
+  waitForGenlayerFinalizedReceipt,
+} from './genlayer-command.mjs';
+import {
+  expectedEpochRecord,
+  loadV7KeeperConfig,
+  plannedFutureEpochEnds,
+  V7_ASSET_IDS,
+  V7_BATTLE_OPEN_OFFSET_SECONDS,
+  V7_DEFAULT_PLATFORM_FEE_BPS,
+  V7_MAX_PLATFORM_FEE_BPS,
+  V7_KEEPER_MAX_SCHEDULE_AHEAD_SECONDS,
+  V7_MINIMUM_EPOCH_CREATION_LEAD_SECONDS,
+  V7_MINIMUM_QUALIFIED_VENUES,
+  V7_NETWORK,
+  V7_POLICY_VERSION,
+  V7_OWNER_MAX_SCHEDULE_AHEAD_SECONDS,
+  V7_PRICE_SCALE,
+  V7_PROTOCOL_VERSION,
+  V7_RESOLUTION_PUBLICATION_DELAY_SECONDS,
+  V7_RETURN_SCALE,
+  V7_TIMEOUT_REFUND_DELAY_SECONDS,
+  V7_VALIDATOR_RETURN_TOLERANCE_PPB,
+  V7_VENUES,
+  V7_WAGER_OPEN_OFFSET_SECONDS,
+} from './v7-keeper-config.mjs';
+
+const TERMINAL_EPOCH_STATUSES = new Set(['RESOLVED', 'UNDETERMINED', 'TIMED_OUT']);
+const RESOLUTION_TERMINAL_STATUSES = new Set(['RESOLVED', 'UNDETERMINED']);
+const EXPECTED_SETTLEMENT_MODES = Object.freeze([
+  'PENDING',
+  'PARIMUTUEL',
+  'REFUND_TIE',
+  'REFUND_UNBACKED_WINNER',
+  'REFUND_NO_LOSING_SIDE',
+  'REFUND_UNDETERMINED',
+  'REFUND_TIMEOUT',
+]);
+const NO_OUTPUT = () => {};
+
+export class V7KeeperError extends Error {
+  constructor(code, message, details = {}) {
+    super(message);
+    this.name = 'V7KeeperError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
+function fail(code, message, details) {
+  throw new V7KeeperError(code, message, details);
+}
+
+function chainField(value, snakeCase, camelCase) {
+  return value?.[snakeCase] ?? value?.[camelCase];
+}
+
+function integerText(value, field) {
+  const raw = typeof value === 'bigint' ? value.toString() : String(value ?? '');
+  const normalized = /^\d+n$/.test(raw) ? raw.slice(0, -1) : raw;
+  if (!/^\d+$/.test(normalized)) fail('CHAIN_SCHEMA', `${field} must be a nonnegative integer`);
+  return normalized;
+}
+
+function safeInteger(value, field) {
+  const normalized = integerText(value, field);
+  const result = Number(normalized);
+  if (!Number.isSafeInteger(result)) fail('CHAIN_SCHEMA', `${field} exceeds a safe integer`);
+  return result;
+}
+
+function exactText(value, expected, field) {
+  if (String(value ?? '') !== String(expected)) {
+    fail('CONTRACT_CONFIG_MISMATCH', `${field} must be ${expected}; received ${value ?? '(missing)'}`);
+  }
+}
+
+function exactInteger(value, expected, field) {
+  if (integerText(value, field) !== String(expected)) {
+    fail('CONTRACT_CONFIG_MISMATCH', `${field} must be ${expected}; received ${value ?? '(missing)'}`);
+  }
+}
+
+function exactArray(value, expected, field) {
+  if (!Array.isArray(value) || value.length !== expected.length
+    || value.some((item, index) => String(item) !== String(expected[index]))) {
+    fail(
+      'CONTRACT_CONFIG_MISMATCH',
+      `${field} must be [${expected.join(', ')}]`,
+      { received: value },
+    );
+  }
+}
+
+function contractAddress(value, field, { allowZero = false } = {}) {
+  const result = String(value ?? '');
+  if (!/^0x[\da-f]{40}$/i.test(result) || (!allowZero && /^0x0{40}$/i.test(result))) {
+    fail(
+      'CONTRACT_CONFIG_MISMATCH',
+      `get_config.${field} is not a ${allowZero ? '' : 'nonzero '}address`,
+    );
+  }
+  return result.toLowerCase();
+}
+
+export function assertV7ContractConfiguration(config, contractConfig, assetCatalog, venueCatalog) {
+  exactText(
+    chainField(contractConfig, 'protocol_version', 'protocolVersion'),
+    V7_PROTOCOL_VERSION,
+    'protocol_version',
+  );
+  exactText(
+    chainField(contractConfig, 'policy_version', 'policyVersion'),
+    V7_POLICY_VERSION,
+    'policy_version',
+  );
+  exactText(
+    chainField(contractConfig, 'native_token_symbol', 'nativeTokenSymbol'),
+    'GEN',
+    'native_token_symbol',
+  );
+  exactInteger(
+    chainField(contractConfig, 'native_token_decimals', 'nativeTokenDecimals'),
+    18,
+    'native_token_decimals',
+  );
+  exactInteger(
+    chainField(contractConfig, 'current_platform_fee_bps', 'currentPlatformFeeBps'),
+    config.expected.platformFeeBps,
+    'current_platform_fee_bps',
+  );
+  exactInteger(
+    chainField(contractConfig, 'default_platform_fee_bps', 'defaultPlatformFeeBps'),
+    V7_DEFAULT_PLATFORM_FEE_BPS,
+    'default_platform_fee_bps',
+  );
+  exactInteger(
+    chainField(contractConfig, 'max_platform_fee_bps', 'maxPlatformFeeBps'),
+    V7_MAX_PLATFORM_FEE_BPS,
+    'max_platform_fee_bps',
+  );
+  exactInteger(
+    chainField(contractConfig, 'epoch_min_stake_atto', 'epochMinStakeAtto'),
+    config.epochs.minStakeAtto,
+    'epoch_min_stake_atto',
+  );
+  exactInteger(
+    chainField(
+      contractConfig,
+      'epoch_max_stake_per_wallet_atto',
+      'epochMaxStakePerWalletAtto',
+    ),
+    config.epochs.maxStakePerWalletAtto,
+    'epoch_max_stake_per_wallet_atto',
+  );
+  exactInteger(
+    chainField(
+      contractConfig,
+      'minimum_epoch_creation_lead_seconds',
+      'minimumEpochCreationLeadSeconds',
+    ),
+    V7_MINIMUM_EPOCH_CREATION_LEAD_SECONDS,
+    'minimum_epoch_creation_lead_seconds',
+  );
+  exactInteger(
+    chainField(
+      contractConfig,
+      'keeper_max_schedule_ahead_seconds',
+      'keeperMaxScheduleAheadSeconds',
+    ),
+    V7_KEEPER_MAX_SCHEDULE_AHEAD_SECONDS,
+    'keeper_max_schedule_ahead_seconds',
+  );
+  exactInteger(
+    chainField(
+      contractConfig,
+      'owner_max_schedule_ahead_seconds',
+      'ownerMaxScheduleAheadSeconds',
+    ),
+    V7_OWNER_MAX_SCHEDULE_AHEAD_SECONDS,
+    'owner_max_schedule_ahead_seconds',
+  );
+  exactInteger(
+    chainField(contractConfig, 'wager_open_offset_seconds', 'wagerOpenOffsetSeconds'),
+    V7_WAGER_OPEN_OFFSET_SECONDS,
+    'wager_open_offset_seconds',
+  );
+  exactInteger(
+    chainField(contractConfig, 'battle_open_offset_seconds', 'battleOpenOffsetSeconds'),
+    V7_BATTLE_OPEN_OFFSET_SECONDS,
+    'battle_open_offset_seconds',
+  );
+  exactInteger(
+    chainField(
+      contractConfig,
+      'resolution_publication_delay_seconds',
+      'resolutionPublicationDelaySeconds',
+    ),
+    V7_RESOLUTION_PUBLICATION_DELAY_SECONDS,
+    'resolution_publication_delay_seconds',
+  );
+  exactInteger(
+    chainField(contractConfig, 'timeout_refund_delay_seconds', 'timeoutRefundDelaySeconds'),
+    V7_TIMEOUT_REFUND_DELAY_SECONDS,
+    'timeout_refund_delay_seconds',
+  );
+  exactInteger(
+    chainField(contractConfig, 'minimum_qualified_venues', 'minimumQualifiedVenues'),
+    V7_MINIMUM_QUALIFIED_VENUES,
+    'minimum_qualified_venues',
+  );
+  exactInteger(
+    chainField(
+      contractConfig,
+      'validator_return_tolerance_ppb',
+      'validatorReturnTolerancePpb',
+    ),
+    V7_VALIDATOR_RETURN_TOLERANCE_PPB,
+    'validator_return_tolerance_ppb',
+  );
+  exactInteger(chainField(contractConfig, 'price_scale', 'priceScale'), V7_PRICE_SCALE, 'price_scale');
+  exactInteger(chainField(contractConfig, 'return_scale', 'returnScale'), V7_RETURN_SCALE, 'return_scale');
+  exactText(
+    chainField(contractConfig, 'four_venue_median_policy', 'fourVenueMedianPolicy'),
+    'FLOOR_AVERAGE_OF_MIDDLE_TWO',
+    'four_venue_median_policy',
+  );
+  exactText(
+    chainField(contractConfig, 'rounding_policy', 'roundingPolicy'),
+    'LAST_WINNING_CLAIMANT_RECEIVES_REMAINDER',
+    'rounding_policy',
+  );
+  exactText(
+    chainField(contractConfig, 'transfer_finality', 'transferFinality'),
+    'FINALIZED',
+    'transfer_finality',
+  );
+  exactArray(
+    chainField(contractConfig, 'supported_objectives', 'supportedObjectives'),
+    ['HIGH', 'LOW'],
+    'supported_objectives',
+  );
+  exactArray(
+    chainField(contractConfig, 'supported_settlement_modes', 'supportedSettlementModes'),
+    EXPECTED_SETTLEMENT_MODES,
+    'supported_settlement_modes',
+  );
+
+  const assets = assetCatalog?.assets;
+  if (!Array.isArray(assets)) fail('CONTRACT_CONFIG_MISMATCH', 'asset catalog is malformed');
+  exactArray(assets.map((asset) => asset?.asset_id ?? asset?.assetId), V7_ASSET_IDS, 'asset catalog');
+  for (const asset of assets) {
+    exactText(asset?.quote_asset ?? asset?.quoteAsset, 'USDT', 'asset quote_asset');
+  }
+
+  exactArray(venueCatalog?.venues, V7_VENUES, 'venue catalog');
+  if (venueCatalog?.adapters_immutable !== true && venueCatalog?.adaptersImmutable !== true) {
+    fail('CONTRACT_CONFIG_MISMATCH', 'venue adapters must be immutable');
+  }
+  exactText(
+    venueCatalog?.candle_interval ?? venueCatalog?.candleInterval,
+    '1m',
+    'venue candle_interval',
+  );
+  exactText(
+    venueCatalog?.start_price_rule ?? venueCatalog?.startPriceRule,
+    'OPEN_AT_E_MINUS_20_MINUTES',
+    'venue start_price_rule',
+  );
+  exactText(
+    venueCatalog?.end_price_rule ?? venueCatalog?.endPriceRule,
+    'CLOSE_AT_E_MINUS_1_MINUTE',
+    'venue end_price_rule',
+  );
+
+  const roles = {
+    owner: contractAddress(contractConfig?.owner, 'owner'),
+    pendingOwner: contractAddress(
+      chainField(contractConfig, 'pending_owner', 'pendingOwner'),
+      'pending_owner',
+      { allowZero: true },
+    ),
+    keeper: contractAddress(contractConfig?.keeper, 'keeper'),
+    treasury: contractAddress(contractConfig?.treasury, 'treasury'),
+  };
+  exactText(roles.owner, config.expected.ownerAddress, 'owner');
+  exactText(roles.keeper, config.expected.keeperAddress, 'keeper');
+  exactText(roles.treasury, config.expected.treasuryAddress, 'treasury');
+  return Object.freeze(roles);
+}
+
+function assertNetwork(networkInfo) {
+  const alias = String(networkInfo?.alias ?? '').trim().toLowerCase();
+  if (alias !== V7_NETWORK) {
+    fail('NETWORK_MISMATCH', `Active GenLayer network must be ${V7_NETWORK}; received ${alias || '(missing)'}`);
+  }
+}
+
+function assertSigningAccount(accountInfo, keeper, canSignLockedAccount) {
+  const activeAddress = String(accountInfo?.address ?? '').toLowerCase();
+  if (!/^0x[\da-f]{40}$/.test(activeAddress) || accountInfo?.active !== true) {
+    fail('ACCOUNT_INACTIVE', 'An active GenLayer keeper account is required for --execute');
+  }
+  if (activeAddress !== keeper) {
+    fail('KEEPER_MISMATCH', 'The active GenLayer account is not the configured V7 keeper', {
+      activeAddress,
+      keeper,
+    });
+  }
+  const status = String(accountInfo?.status ?? '').toLowerCase();
+  if (status !== 'unlocked' && !canSignLockedAccount) {
+    fail(
+      'ACCOUNT_LOCKED',
+      'The keeper account is locked and GENLAYER_KEYSTORE_PASSWORD was not supplied',
+    );
+  }
+}
+
+function rateLimitFields(value, seen = new Set(), depth = 0) {
+  if (value === null || value === undefined || depth > 6) return { code: false, seconds: null };
+  if (typeof value === 'string') {
+    const code = /(?:error\s+code|["']?code["']?\s*[:=])\s*-32029\b/i.test(value);
+    const match = value.match(/["']?retry_after_seconds["']?\s*[:=]\s*["']?(\d+(?:\.\d+)?)/i);
+    return { code, seconds: match ? Number(match[1]) : null };
+  }
+  if (typeof value !== 'object' || seen.has(value)) return { code: false, seconds: null };
+  seen.add(value);
+
+  let code = Number(value.code) === -32029;
+  let seconds = Number.isFinite(Number(value.retry_after_seconds))
+    ? Number(value.retry_after_seconds)
+    : null;
+  for (const key of ['message', 'stdout', 'stderr', 'output', 'details', 'data', 'error', 'cause']) {
+    const nested = rateLimitFields(value[key], seen, depth + 1);
+    code ||= nested.code;
+    if (seconds === null && nested.seconds !== null) seconds = nested.seconds;
+  }
+  return { code, seconds };
+}
+
+export function genlayerRetryAfterMilliseconds(error) {
+  const { code, seconds } = rateLimitFields(error);
+  if (!code || !Number.isFinite(seconds) || seconds < 0) return null;
+  const milliseconds = seconds * 1_000;
+  return Number.isSafeInteger(milliseconds) ? milliseconds : null;
+}
+
+function logRateLimitBackoff(logger, label, delayMs) {
+  logger?.({
+    event: 'V7_KEEPER_RATE_LIMIT_BACKOFF',
+    label,
+    retryAfterSeconds: delayMs / 1_000,
+  });
+}
+
+async function withRetries(task, {
+  attempts,
+  baseMs,
+  sleep,
+  label,
+  logger,
+}) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await task(attempt);
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        const rateLimitDelayMs = genlayerRetryAfterMilliseconds(error);
+        const delayMs = rateLimitDelayMs ?? baseMs * (2 ** (attempt - 1));
+        if (rateLimitDelayMs !== null) logRateLimitBackoff(logger, label, delayMs);
+        await sleep(delayMs);
+      }
+    }
+  }
+  throw new V7KeeperError('RETRY_EXHAUSTED', `${label} failed after ${attempts} attempts`, {
+    cause: lastError,
+  });
+}
+
+function epochTimestamp(value) {
+  const normalized = integerText(value, 'epoch ID');
+  const result = Number(normalized);
+  if (!Number.isSafeInteger(result) || result <= 0 || result % 3_600 !== 0) {
+    fail('CHAIN_SCHEMA', `Epoch ID ${normalized} is not an exact UTC hour`);
+  }
+  return result;
+}
+
+export function classifyOpenEpoch(epoch, nowEpochSeconds) {
+  if (String(epoch?.status ?? '') !== 'OPEN') return null;
+  const resolutionAvailable = safeInteger(
+    chainField(epoch, 'resolution_available_timestamp', 'resolutionAvailableTimestamp'),
+    'resolution_available_timestamp',
+  );
+  const timeoutAvailable = safeInteger(
+    chainField(epoch, 'timeout_refund_available_timestamp', 'timeoutRefundAvailableTimestamp'),
+    'timeout_refund_available_timestamp',
+  );
+  if (nowEpochSeconds >= timeoutAvailable) return 'TIMEOUT';
+  if (nowEpochSeconds >= resolutionAvailable) return 'RESOLVE';
+  return null;
+}
+
+export function assertEpochMatchesConfiguration(config, epoch, epochEndTimestamp) {
+  const expected = expectedEpochRecord(config, epochEndTimestamp);
+  exactInteger(
+    chainField(epoch, 'epoch_end_timestamp', 'epochEndTimestamp'),
+    expected.epochEndTimestamp,
+    'epoch.epoch_end_timestamp',
+  );
+  exactInteger(
+    chainField(epoch, 'wager_opens_timestamp', 'wagerOpensTimestamp'),
+    expected.wagerOpensTimestamp,
+    'epoch.wager_opens_timestamp',
+  );
+  exactInteger(
+    chainField(epoch, 'wager_closes_timestamp', 'wagerClosesTimestamp'),
+    expected.wagerClosesTimestamp,
+    'epoch.wager_closes_timestamp',
+  );
+  exactInteger(
+    chainField(epoch, 'battle_starts_timestamp', 'battleStartsTimestamp'),
+    expected.wagerClosesTimestamp,
+    'epoch.battle_starts_timestamp',
+  );
+  exactInteger(
+    chainField(epoch, 'resolution_available_timestamp', 'resolutionAvailableTimestamp'),
+    expected.resolutionAvailableTimestamp,
+    'epoch.resolution_available_timestamp',
+  );
+  exactInteger(
+    chainField(epoch, 'timeout_refund_available_timestamp', 'timeoutRefundAvailableTimestamp'),
+    expected.timeoutRefundAvailableTimestamp,
+    'epoch.timeout_refund_available_timestamp',
+  );
+  exactText(
+    chainField(epoch, 'policy_version', 'policyVersion'),
+    expected.policyVersion,
+    'epoch.policy_version',
+  );
+  exactInteger(
+    chainField(epoch, 'platform_fee_bps_snapshot', 'platformFeeBpsSnapshot'),
+    expected.platformFeeBpsSnapshot,
+    'epoch.platform_fee_bps_snapshot',
+  );
+  exactInteger(
+    chainField(epoch, 'min_stake_atto', 'minStakeAtto'),
+    expected.minStakeAtto,
+    'epoch.min_stake_atto',
+  );
+  exactInteger(
+    chainField(epoch, 'max_stake_per_wallet_atto', 'maxStakePerWalletAtto'),
+    expected.maxStakePerWalletAtto,
+    'epoch.max_stake_per_wallet_atto',
+  );
+  const status = String(epoch?.status ?? '');
+  if (status !== 'OPEN' && !TERMINAL_EPOCH_STATUSES.has(status)) {
+    fail('CHAIN_SCHEMA', `Epoch ${epochEndTimestamp} has unknown status ${status || '(missing)'}`);
+  }
+  return epoch;
+}
+
+function readPacing(context) {
+  if (!context.readPacing) {
+    context.readPacing = {
+      started: false,
+      nextDelayMs: context.config.operator.readIntervalMs,
+    };
+  }
+  return context.readPacing;
+}
+
+async function waitForReadSlot(context) {
+  const pacing = readPacing(context);
+  if (pacing.started) await context.sleep(pacing.nextDelayMs);
+  pacing.started = true;
+  pacing.nextDelayMs = context.config.operator.readIntervalMs;
+}
+
+async function readChain(context, label, task, { attempts, baseMs } = {}) {
+  const { config, logger } = context;
+  const maximumAttempts = attempts ?? config.operator.readAttempts;
+  const retryBaseMs = baseMs ?? config.operator.retryBaseMs;
+  let lastError;
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+    await waitForReadSlot(context);
+    try {
+      return await task(attempt);
+    } catch (error) {
+      lastError = error;
+      if (attempt < maximumAttempts) {
+        const rateLimitDelayMs = genlayerRetryAfterMilliseconds(error);
+        const delayMs = rateLimitDelayMs
+          ?? Math.max(config.operator.readIntervalMs, retryBaseMs * (2 ** (attempt - 1)));
+        readPacing(context).nextDelayMs = delayMs;
+        if (rateLimitDelayMs !== null) logRateLimitBackoff(logger, label, delayMs);
+      }
+    }
+  }
+  throw new V7KeeperError('RETRY_EXHAUSTED', `${label} failed after ${maximumAttempts} attempts`, {
+    cause: lastError,
+  });
+}
+
+async function fetchOpenEpochIds(context) {
+  const countValue = await readChain(
+    context,
+    'get_open_epoch_count',
+    () => context.operator.getOpenEpochCount(),
+  );
+  const count = safeInteger(countValue, 'get_open_epoch_count');
+  const ids = [];
+  let offset = 0;
+  while (offset < count) {
+    const limit = Math.min(context.config.operator.pageSize, count - offset);
+    const page = await readChain(
+      context,
+      `get_open_epoch_page(${offset}, ${limit})`,
+      () => context.operator.getOpenEpochPage(offset, limit),
+    );
+    const pageOffset = safeInteger(page?.offset, 'epoch page offset');
+    const nextOffset = safeInteger(
+      chainField(page, 'next_offset', 'nextOffset'),
+      'epoch page next_offset',
+    );
+    const total = safeInteger(page?.total, 'epoch page total');
+    if (pageOffset !== offset || nextOffset <= offset || nextOffset > count || total < count) {
+      fail('CHAIN_SCHEMA', 'get_open_epoch_page returned inconsistent pagination metadata');
+    }
+    if (!Array.isArray(page?.epoch_ids ?? page?.epochIds)) {
+      fail('CHAIN_SCHEMA', 'get_open_epoch_page did not return epoch_ids');
+    }
+    const pageIds = page.epoch_ids ?? page.epochIds;
+    if (pageIds.length !== nextOffset - offset) {
+      fail('CHAIN_SCHEMA', 'get_open_epoch_page returned an unexpected number of IDs');
+    }
+    ids.push(...pageIds.map((id) => integerText(id, 'epoch ID')));
+    offset = nextOffset;
+  }
+  if (new Set(ids).size !== ids.length) {
+    fail('CHAIN_SCHEMA', 'get_open_epoch_page returned duplicate IDs');
+  }
+  return Object.freeze(ids);
+}
+
+async function fetchEpoch(context, epochEndTimestamp) {
+  const epoch = await readChain(
+    context,
+    `get_epoch(${epochEndTimestamp})`,
+    () => context.operator.getEpoch(epochEndTimestamp),
+  );
+  return assertEpochMatchesConfiguration(context.config, epoch, epochEndTimestamp);
+}
+
+export async function planV7KeeperRun(context) {
+  const { config, nowEpochSeconds } = context;
+  // The contract-maintained open index is authoritative and bounded by only
+  // unresolved work, so historical terminal epochs never make each run slower.
+  const knownIds = await fetchOpenEpochIds(context);
+  const knownSet = new Set(knownIds);
+  const targets = plannedFutureEpochEnds(config, nowEpochSeconds);
+  const actions = [];
+
+  for (const epochEndTimestamp of targets) {
+    const key = String(epochEndTimestamp);
+    if (!knownSet.has(key)) {
+      actions.push(Object.freeze({ type: 'CREATE', epochEndTimestamp }));
+    }
+  }
+
+  const allDueIds = knownIds
+    .map(epochTimestamp)
+    .filter((value) => value + V7_RESOLUTION_PUBLICATION_DELAY_SECONDS <= nowEpochSeconds)
+    .sort((left, right) => left - right);
+  const dueIds = allDueIds.slice(0, config.operator.maxEpochReadsPerRun);
+  for (const epochEndTimestamp of dueIds) {
+    const epoch = await fetchEpoch(context, epochEndTimestamp);
+    const actionType = classifyOpenEpoch(epoch, nowEpochSeconds);
+    if (actionType) actions.push(Object.freeze({ type: actionType, epochEndTimestamp }));
+  }
+
+  const priority = { CREATE: 0, TIMEOUT: 1, RESOLVE: 2 };
+  actions.sort((left, right) => priority[left.type] - priority[right.type]
+    || left.epochEndTimestamp - right.epochEndTimestamp);
+  const selected = actions.slice(0, config.operator.maxWritesPerRun);
+  const deferredEpochReadCount = allDueIds.length - dueIds.length;
+  return Object.freeze({
+    knownEpochCount: knownIds.length,
+    targetEpochEnds: targets,
+    actions: Object.freeze(selected),
+    deferredEpochReadCount,
+    deferredActionCount: actions.length - selected.length + deferredEpochReadCount,
+  });
+}
+
+export function validateReceiptIdentity(receipt, contractAddress, method, args) {
+  assertFinalizedGenlayerExecution(receipt);
+  const recipient = String(receipt?.recipient ?? '').toLowerCase();
+  const decoded = receipt?.txDataDecoded;
+  const actualArgs = decoded?.callData?.args;
+  const expectedArgs = args.map(String);
+  if (recipient !== contractAddress.toLowerCase()
+    || decoded?.type !== 'call'
+    || decoded?.callData?.method !== method
+    || !Array.isArray(actualArgs)
+    || actualArgs.length !== expectedArgs.length
+    || actualArgs.some((value, index) => String(value) !== expectedArgs[index])) {
+    fail('RECEIPT_IDENTITY_MISMATCH', `Finalized receipt does not prove ${method}`, {
+      recipient,
+      method: decoded?.callData?.method,
+      args: actualArgs,
+    });
+  }
+  return receipt;
+}
+
+async function waitForFinalizedReceipt(context, transactionHash) {
+  const { config, operator, sleep } = context;
+  const receipt = await withRetries(
+    () => operator.waitFinalized(transactionHash, {
+      retries: config.operator.finalityRetries,
+      intervalMs: config.operator.finalityIntervalMs,
+    }),
+    {
+      attempts: config.operator.finalityWaitAttempts,
+      baseMs: config.operator.retryBaseMs,
+      sleep,
+      label: `FINALIZED receipt ${transactionHash}`,
+      logger: context.logger,
+    },
+  );
+  return receipt;
+}
+
+async function readVerifiedPostState(context, action) {
+  const { config, operator, logger } = context;
+  let lastError;
+  for (let attempt = 1; attempt <= config.operator.postStateAttempts; attempt += 1) {
+    try {
+      const current = await readChain(
+        context,
+        `post-state get_epoch(${action.epochEndTimestamp})`,
+        () => operator.getEpoch(action.epochEndTimestamp),
+      );
+      assertEpochMatchesConfiguration(config, current, action.epochEndTimestamp);
+      assertPostState(action, current);
+      return current;
+    } catch (error) {
+      lastError = error;
+      if (attempt < config.operator.postStateAttempts) {
+        const rateLimitDelayMs = genlayerRetryAfterMilliseconds(error);
+        const delayMs = rateLimitDelayMs ?? Math.max(
+          config.operator.readIntervalMs,
+          config.operator.postStateIntervalMs,
+        );
+        readPacing(context).nextDelayMs = delayMs;
+        if (rateLimitDelayMs !== null) {
+          logRateLimitBackoff(
+            logger,
+            `post-state get_epoch(${action.epochEndTimestamp})`,
+            delayMs,
+          );
+        }
+      }
+    }
+  }
+  throw new V7KeeperError(
+    'RETRY_EXHAUSTED',
+    `post-state ${action.type} ${action.epochEndTimestamp} failed after ${config.operator.postStateAttempts} attempts`,
+    { cause: lastError },
+  );
+}
+
+function assertPostState(action, epoch) {
+  const status = String(epoch?.status ?? '');
+  if (action.type === 'CREATE') {
+    if (status !== 'OPEN') fail('POST_STATE_MISMATCH', 'Created epoch is not OPEN');
+    return;
+  }
+  if (action.type === 'RESOLVE') {
+    if (!RESOLUTION_TERMINAL_STATUSES.has(status)) {
+      fail('POST_STATE_MISMATCH', `Resolved epoch remains ${status || '(missing)'}`);
+    }
+    const resultStatus = String(
+      chainField(epoch, 'result_status', 'resultStatus') ?? '',
+    );
+    if (!['DETERMINED', 'UNDETERMINED'].includes(resultStatus)) {
+      fail('POST_STATE_MISMATCH', `Resolved epoch result is ${resultStatus || '(missing)'}`);
+    }
+    const digest = String(chainField(epoch, 'resolution_digest', 'resolutionDigest') ?? '');
+    if (digest === '') fail('POST_STATE_MISMATCH', 'Resolved epoch has no resolution digest');
+    return;
+  }
+  if (status !== 'TIMED_OUT') fail('POST_STATE_MISMATCH', `Timed-out epoch remains ${status}`);
+  exactText(
+    chainField(epoch, 'result_status', 'resultStatus'),
+    'TIMEOUT',
+    'timeout result_status',
+  );
+  exactText(
+    epoch?.high?.settlement_mode ?? epoch?.high?.settlementMode,
+    'REFUND_TIMEOUT',
+    'timeout HIGH settlement_mode',
+  );
+  exactText(
+    epoch?.low?.settlement_mode ?? epoch?.low?.settlementMode,
+    'REFUND_TIMEOUT',
+    'timeout LOW settlement_mode',
+  );
+}
+
+function actionCall(config, action) {
+  if (action.type === 'CREATE') {
+    return Object.freeze({
+      method: 'create_epoch',
+      args: Object.freeze([String(action.epochEndTimestamp)]),
+    });
+  }
+  return Object.freeze({
+    method: action.type === 'RESOLVE' ? 'resolve_epoch' : 'activate_timeout_refund',
+    args: Object.freeze([String(action.epochEndTimestamp)]),
+  });
+}
+
+async function executeAction(context, action) {
+  const { config, operator, logger } = context;
+  const call = actionCall(config, action);
+  // The CLI active account is process-global local state and can be changed by
+  // another terminal after initial preflight. Re-bind every individual write
+  // to the dedicated on-chain keeper immediately before submission.
+  const accountInfo = await readChain(
+    context,
+    `account info before ${call.method}`,
+    () => operator.getAccountInfo(),
+  );
+  assertSigningAccount(
+    accountInfo,
+    config.expected.keeperAddress,
+    operator.canSignLockedAccount === true,
+  );
+  let transactionHash;
+  const submission = await operator.submitWrite(call.method, call.args, (hash) => {
+    transactionHash = hash;
+    logger({
+      event: 'V7_KEEPER_TRANSACTION_SUBMITTED',
+      action: action.type,
+      epochEndTimestamp: action.epochEndTimestamp,
+      transactionHash: hash,
+    });
+  });
+  transactionHash = transactionHash || submission?.transactionHash;
+  if (!/^0x[\da-f]{64}$/i.test(String(transactionHash ?? ''))) {
+    fail('TRANSACTION_HASH_MISSING', `${call.method} did not report a transaction hash`);
+  }
+  const receipt = await waitForFinalizedReceipt(context, transactionHash);
+  validateReceiptIdentity(receipt, config.contractAddress, call.method, call.args);
+
+  const epoch = await readVerifiedPostState(context, action);
+  logger({
+    event: 'V7_KEEPER_ACTION_VERIFIED',
+    action: action.type,
+    epochEndTimestamp: action.epochEndTimestamp,
+    transactionHash,
+    status: epoch.status,
+  });
+  return Object.freeze({ ...action, transactionHash, status: epoch.status });
+}
+
+async function revalidateSettlementAction(context, action) {
+  if (action.type === 'CREATE') return action;
+  const epoch = await fetchEpoch(context, action.epochEndTimestamp);
+  const currentType = classifyOpenEpoch(epoch, context.nowEpochSeconds);
+  if (currentType === null) return null;
+  return Object.freeze({ ...action, type: currentType });
+}
+
+export async function runV7KeeperOnce({
+  config,
+  execute = false,
+  nowEpochSeconds = Math.floor(Date.now() / 1_000),
+  operator,
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  logger = (event) => console.log(JSON.stringify(event)),
+}) {
+  if (!config || !operator) fail('KEEPER_ARGUMENT', 'config and operator are required');
+  const now = safeInteger(nowEpochSeconds, 'nowEpochSeconds');
+  const context = { config, execute, nowEpochSeconds: now, operator, sleep, logger };
+
+  const networkInfo = await readChain(context, 'network info', () => operator.getNetworkInfo());
+  assertNetwork(networkInfo);
+  // Keep preflight reads on the same global quota-aware lane as the open-index
+  // scan. Parallel reads can burst through StudioNet's per-minute bucket.
+  const contractConfig = await readChain(context, 'get_config', () => operator.getConfig());
+  const assetCatalog = await readChain(
+    context,
+    'get_asset_catalog',
+    () => operator.getAssetCatalog(),
+  );
+  const venueCatalog = await readChain(
+    context,
+    'get_venue_catalog',
+    () => operator.getVenueCatalog(),
+  );
+  const verified = assertV7ContractConfiguration(
+    config,
+    contractConfig,
+    assetCatalog,
+    venueCatalog,
+  );
+  if (execute) {
+    const accountInfo = await readChain(context, 'account info', () => operator.getAccountInfo());
+    assertSigningAccount(accountInfo, verified.keeper, operator.canSignLockedAccount === true);
+  }
+
+  const plan = await planV7KeeperRun(context);
+  logger({
+    event: execute ? 'V7_KEEPER_EXECUTION_PLAN' : 'V7_KEEPER_DRY_RUN_PLAN',
+    nowEpochSeconds: now,
+    actions: plan.actions,
+    deferredEpochReadCount: plan.deferredEpochReadCount,
+    deferredActionCount: plan.deferredActionCount,
+  });
+  if (!execute) return Object.freeze({ ...plan, execute: false, completed: [], skipped: [], failures: [] });
+
+  const completed = [];
+  const skipped = [];
+  const failures = [];
+  for (const plannedAction of plan.actions) {
+    try {
+      const action = await revalidateSettlementAction(context, plannedAction);
+      if (!action) {
+        skipped.push(Object.freeze({ ...plannedAction, reason: 'NO_LONGER_ACTIONABLE' }));
+        continue;
+      }
+      completed.push(await executeAction(context, action));
+    } catch (error) {
+      failures.push(Object.freeze({
+        ...plannedAction,
+        code: error?.code || 'ACTION_FAILED',
+        message: error instanceof Error ? error.message : String(error),
+      }));
+      logger({
+        event: 'V7_KEEPER_ACTION_FAILED',
+        action: plannedAction.type,
+        epochEndTimestamp: plannedAction.epochEndTimestamp,
+        code: error?.code || 'ACTION_FAILED',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  const summary = Object.freeze({ ...plan, execute: true, completed, skipped, failures });
+  if (failures.length > 0) {
+    throw new V7KeeperError(
+      'ACTION_FAILURES',
+      `${failures.length} V7 keeper action(s) failed; successful actions remain verified`,
+      { summary },
+    );
+  }
+  return summary;
+}
+
+function passwordWritingSpawn(password) {
+  return (command, args, options) => {
+    const child = nodeSpawn(command, args, options);
+    child.once('spawn', () => child.stdin?.end(`${password}\n`));
+    return child;
+  };
+}
+
+export function createCliV7KeeperOperator({ config, environment = process.env } = {}) {
+  const invocation = resolveGenlayerCommand();
+  const password = environment.GENLAYER_KEYSTORE_PASSWORD || '';
+  const quiet = { writeStdout: NO_OUTPUT, writeStderr: NO_OUTPUT };
+  const call = (method, args = []) => runGenlayerCall({
+    invocation,
+    contractAddress: config.contractAddress,
+    method,
+    args,
+    ...quiet,
+  });
+  const inspect = async (command, args = []) => {
+    const result = await runGenlayerStreamingCommand({
+      invocation,
+      command,
+      args,
+      ...quiet,
+    });
+    return parseGenlayerCallOutput(result.output);
+  };
+  return Object.freeze({
+    canSignLockedAccount: password !== '',
+    getNetworkInfo: () => inspect('network', ['info']),
+    getAccountInfo: () => inspect('account'),
+    getConfig: () => call('get_config'),
+    getAssetCatalog: () => call('get_asset_catalog'),
+    getVenueCatalog: () => call('get_venue_catalog'),
+    getOpenEpochCount: () => call('get_open_epoch_count'),
+    getOpenEpochPage: (offset, limit) => call('get_open_epoch_page', [offset, limit]),
+    getEpoch: (epochEndTimestamp) => call('get_epoch', [epochEndTimestamp]),
+    submitWrite: (method, args, onTransactionHash) => submitGenlayerWrite({
+      invocation,
+      args: [config.contractAddress, method, '--args', ...args.map(String)],
+      onTransactionHash,
+      stdin: password ? 'pipe' : 'inherit',
+      spawnImpl: password ? passwordWritingSpawn(password) : nodeSpawn,
+      ...quiet,
+    }),
+    waitFinalized: (transactionHash, policy) => waitForGenlayerFinalizedReceipt({
+      invocation,
+      transactionHash,
+      retries: policy.retries,
+      intervalMs: policy.intervalMs,
+      ...quiet,
+    }),
+  });
+}
+
+function usage() {
+  return `Reconcile exact-hour Liquidity Arena V7 epochs on StudioNet.\n\nUsage:\n  node scripts/v7-keeper.mjs --config <file> [--execute]\n\nOptions:\n  --config <file>  V7 keeper JSON configuration (required)\n  --execute        Submit serialized writes; the default is a read-only dry run\n  --help           Show this help\n\nThe selected GenLayer network must already be studionet. Set V7_CONTRACT_ADDRESS when the config uses the environment placeholder. Locked CI keystores use GENLAYER_KEYSTORE_PASSWORD via stdin; the value is never logged.`;
+}
+
+function parseArguments(argv) {
+  const result = { execute: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === '--execute') result.execute = true;
+    else if (argument === '--help' || argument === '-h') result.help = true;
+    else if (argument === '--config') {
+      const value = argv[index + 1];
+      if (!value || value.startsWith('--')) throw new Error('--config requires a value');
+      result.configPath = value;
+      index += 1;
+    } else throw new Error(`Unknown option: ${argument}`);
+  }
+  return result;
+}
+
+export async function runV7KeeperCli(argv = process.argv.slice(2)) {
+  const parsed = parseArguments(argv);
+  if (parsed.help) {
+    console.log(usage());
+    return undefined;
+  }
+  if (!parsed.configPath) throw new Error('--config is required');
+  const config = loadV7KeeperConfig(parsed.configPath);
+  const operator = createCliV7KeeperOperator({ config });
+  return runV7KeeperOnce({ config, execute: parsed.execute, operator });
+}
+
+const invokedPath = process.argv[1] ? fileURLToPath(import.meta.url) : '';
+if (invokedPath && process.argv[1] === invokedPath) {
+  runV7KeeperCli().catch((error) => {
+    const output = {
+      event: 'V7_KEEPER_FAILED',
+      code: error?.code || 'UNEXPECTED',
+      message: error instanceof Error ? error.message : String(error),
+    };
+    console.error(JSON.stringify(output));
+    process.exitCode = 1;
+  });
+}

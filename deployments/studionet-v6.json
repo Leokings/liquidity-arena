@@ -1,0 +1,406 @@
+{
+  "network": "studionet",
+  "chainId": 61999,
+  "protocolVersion": "LIQUIDITY_ARENA_V6",
+  "policyVersion": "CRYPTO_SPOT_1M_MEDIAN_V1",
+  "contractAddress": "0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1",
+  "owner": "0x797d3b25fb2cca0ff93f60df1910267f3822d655",
+  "treasury": "0x797d3b25fb2cca0ff93f60df1910267f3822d655",
+  "sourceFile": "contracts/LiquidityArenaV6.py",
+  "sourceSha256": "06327333f3978a74fbcb0363fec4aae25ba25204f7bbcc6bf9acb4c12c616097",
+  "sourceMatchesDeployedCode": true,
+  "deployedAt": "2026-08-19T13:33:42.946998Z",
+  "deployment": {
+    "transactionHash": "0x766b0023e06f4622f9b0f7588add9a29e75a4a8f7276b4475bd2ca67587dfaa4",
+    "status": "FINALIZED",
+    "consensusResult": "MAJORITY_AGREE",
+    "executionResult": "FINISHED_WITH_RETURN",
+    "acceptedAfterSeconds": 5.068,
+    "observedFinality": "UNDER_ONE_MINUTE"
+  },
+  "config": {
+    "nativeTokenSymbol": "GEN",
+    "nativeTokenDecimals": 18,
+    "currentPlatformFeeBps": 200,
+    "maxPlatformFeeBps": 500,
+    "wagerOpenOffsetSeconds": 2400,
+    "battleOpenOffsetSeconds": 1200,
+    "resolutionPublicationDelaySeconds": 120,
+    "timeoutRefundDelaySeconds": 86400,
+    "minimumQualifiedVenues": 3,
+    "venues": ["BINANCE", "OKX", "BYBIT", "GATE", "KUCOIN"],
+    "assets": ["BTC", "ETH", "BNB", "SOL", "XRP"],
+    "objectives": ["HIGH", "LOW"],
+    "transferFinality": "FINALIZED"
+  },
+  "verification": {
+    "schemaVerified": true,
+    "configVerified": true,
+    "assetCatalogVerified": true,
+    "venueCatalogVerified": true,
+    "deployedSourceHashVerified": true,
+    "verifiedAt": "2026-08-19T13:39:44Z"
+  },
+  "epochs": [
+    {
+      "epochEndTimestamp": 1787151600,
+      "epochEndUtc": "2026-08-19T15:00:00Z",
+      "transactionHash": "0xd25adf2ec103517f0f2a601757847e8ef7d35c870fa8a18b5b82f890c3ba9a5d",
+      "transactionStatus": "FINALIZED",
+      "contractStatus": "RESOLVED"
+    },
+    {
+      "epochEndTimestamp": 1787155200,
+      "epochEndUtc": "2026-08-19T16:00:00Z",
+      "transactionHash": "0x667615fe93f3e597450ec8bad7ae294a1c2bfd25cc949c4962c4236e65e2652a",
+      "transactionStatus": "FINALIZED",
+      "contractStatus": "RESOLVED",
+      "resolutionTransactionHash": "0xae0ce45340fdeaf1c40c41cf12f10bc2dc42319a03aed0c5a706cd5a3ade1480",
+      "statusHistory": [
+        {
+          "observedOn": "2026-08-19",
+          "contractStatus": "OPEN",
+          "evidence": "pre-drain deployment-record snapshot"
+        },
+        {
+          "observedOn": "2026-08-19",
+          "contractStatus": "RESOLVED",
+          "transactionHash": "0xae0ce45340fdeaf1c40c41cf12f10bc2dc42319a03aed0c5a706cd5a3ade1480"
+        }
+      ]
+    },
+    {
+      "epochEndTimestamp": 1787158800,
+      "epochEndUtc": "2026-08-19T17:00:00Z",
+      "transactionHash": "0xbcf4577652979cb525f174e13e9d2435678438085883de59bde2acb4c9594f92",
+      "transactionStatus": "FINALIZED",
+      "contractStatus": "RESOLVED",
+      "resolutionTransactionHash": "0x09f01c2afb065a5ae27df1b791215a421fb2592d1eb65c85988c20072cc0e735",
+      "statusHistory": [
+        {
+          "observedOn": "2026-08-19",
+          "contractStatus": "OPEN",
+          "evidence": "pre-drain deployment-record snapshot"
+        },
+        {
+          "observedOn": "2026-08-19",
+          "contractStatus": "RESOLVED",
+          "transactionHash": "0x09f01c2afb065a5ae27df1b791215a421fb2592d1eb65c85988c20072cc0e735"
+        }
+      ]
+    },
+    {
+      "epochEndTimestamp": 1787162400,
+      "epochEndUtc": "2026-08-19T18:00:00Z",
+      "transactionHash": "0x619e1968eb59d4bf8d912d89fa40b051ce70b216cad3f199f42b38e1f5f8ad91",
+      "transactionStatus": "FINALIZED",
+      "contractStatus": "RESOLVED",
+      "latestKnownPhase": "TERMINAL",
+      "resolutionTransactionHash": "0x03f2ac803896b84fdfadbc4329ea4a085851d0559f0c3213c8eca4be659e0399",
+      "statusHistory": [
+        {
+          "observedOn": "2026-08-19",
+          "contractStatus": "OPEN",
+          "phase": "RESOLVABLE",
+          "evidence": "earlier pre-resolution drain observation; superseded below"
+        },
+        {
+          "observedOn": "2026-08-19",
+          "contractStatus": "RESOLVED",
+          "transactionHash": "0x03f2ac803896b84fdfadbc4329ea4a085851d0559f0c3213c8eca4be659e0399"
+        }
+      ]
+    },
+    {
+      "epochEndTimestamp": 1787166000,
+      "epochEndUtc": "2026-08-19T19:00:00Z",
+      "transactionHash": "0x2970217ba7fae7a8954aaeacca7f8bd0fa3bb6025201db842225093e4cd80213",
+      "transactionStatus": "FINALIZED",
+      "contractStatus": "RESOLVED",
+      "latestKnownPhase": "TERMINAL",
+      "resolutionTransactionHash": "0x7e8030f0975d86479a01a398b88d10b2606c466eec78046fc84eca18c55d27bb",
+      "statusHistory": [
+        {
+          "observedOn": "2026-08-19",
+          "contractStatus": "OPEN",
+          "phase": "SCHEDULED",
+          "evidence": "earlier pre-resolution drain observation; superseded below"
+        },
+        {
+          "observedOn": "2026-08-19",
+          "contractStatus": "RESOLVED",
+          "transactionHash": "0x7e8030f0975d86479a01a398b88d10b2606c466eec78046fc84eca18c55d27bb"
+        }
+      ]
+    }
+  ],
+  "livePaymentEvidence": {
+    "epochEndTimestamp": 1787151600,
+    "epochEndUtc": "2026-08-19T15:00:00Z",
+    "stakeAttoPerPosition": "100000000000000000",
+    "totalEscrowedAtto": "400000000000000000",
+    "positions": [
+      {
+        "account": "0x797d3b25fb2cca0ff93f60df1910267f3822d655",
+        "objective": "HIGH",
+        "asset": "BTC",
+        "transactionHash": "0xc74160ec71afe16e29a2d37960cc26c7eb539ceb8e6519f9f9cb247aded968d4",
+        "status": "FINALIZED",
+        "postStateVerified": true
+      },
+      {
+        "account": "0x797d3b25fb2cca0ff93f60df1910267f3822d655",
+        "objective": "LOW",
+        "asset": "XRP",
+        "transactionHash": "0x2c2e5c6649b3c9df68274e6bd1e9817afee29776e6a9aad5afde1cb7127c7cce",
+        "status": "FINALIZED",
+        "postStateVerified": true
+      },
+      {
+        "account": "0x87e94edab4418e8a9ea37c0fab0675cf0602a9f2",
+        "objective": "HIGH",
+        "asset": "ETH",
+        "transactionHash": "0x4fa5cb085b16084c8ddb87ba355a5d4b9c4361014e8e98f2f72a13085e162d4a",
+        "status": "FINALIZED",
+        "postStateVerified": true
+      },
+      {
+        "account": "0x87e94edab4418e8a9ea37c0fab0675cf0602a9f2",
+        "objective": "LOW",
+        "asset": "BNB",
+        "transactionHash": "0x31cdd788c5ba6a80f28b89792278fbb141ac24519d521e39e1747824a671d4d7",
+        "status": "FINALIZED",
+        "postStateVerified": true
+      }
+    ],
+    "resolution": {
+      "transactionHash": "0x482f9c3342eaf6590b7e14b5201a8cf23da93b7ed24a6ac2594966bb908c461b",
+      "transactionStatus": "FINALIZED",
+      "postStateVerified": true,
+      "contractStatus": "RESOLVED",
+      "resultStatus": "DETERMINED",
+      "resolvedAtTimestamp": 1787151727,
+      "observedLifecycle": {
+        "createdAtUnix": "1787151727.925026",
+        "pendingAtUnix": "1787151728.682271",
+        "acceptedAtUnix": "1787151749.498400",
+        "finalizedAtUnix": "1787151781.304780",
+        "recordToAcceptedSeconds": "21.57",
+        "acceptedToFinalizedSeconds": "31.81",
+        "recordToFinalizedSeconds": "53.38",
+        "leaderExecutionSeconds": "6.72",
+        "slowestValidatorExecutionSecondsApprox": "13.65",
+        "singleObservedRunNotSla": true
+      },
+      "venueCount": 4,
+      "qualifiedVenues": ["BINANCE", "OKX", "GATE", "KUCOIN"],
+      "resolutionDigest": "c3c347198d874d6f3ae9d9ad1ab9565621162cf027265da33681360a9ed01bc4",
+      "assetReturns": [
+        {
+          "asset": "BTC",
+          "returnPpb": 6584236,
+          "returnPercent": "0.6584236",
+          "venueReturnsPpb": [6614749, 6499286, 6576486, 6591987]
+        },
+        {
+          "asset": "ETH",
+          "returnPpb": 15208107,
+          "returnPercent": "1.5208107",
+          "venueReturnsPpb": [15181878, 15154793, 15234336, 15347047]
+        },
+        {
+          "asset": "BNB",
+          "returnPpb": 3398614,
+          "returnPercent": "0.3398614",
+          "venueReturnsPpb": [3511201, 3297065, 3461918, 3335311]
+        },
+        {
+          "asset": "SOL",
+          "returnPpb": 26589668,
+          "returnPercent": "2.6589668",
+          "venueReturnsPpb": [26653128, 26269035, 26526208, 26653128]
+        },
+        {
+          "asset": "XRP",
+          "returnPpb": 10218571,
+          "returnPercent": "1.0218571",
+          "venueReturnsPpb": [10464547, 10070394, 9973599, 10366748]
+        }
+      ],
+      "objectives": {
+        "HIGH": {
+          "winnerAsset": "SOL",
+          "winnerReturnPpb": 26589668,
+          "settlementMode": "REFUND_UNBACKED_WINNER",
+          "totalStakeAtto": "200000000000000000",
+          "winningStakeAtto": "0",
+          "losingStakeAtto": "0",
+          "payoutPoolAtto": "200000000000000000",
+          "platformFeeAtto": "0",
+          "paidAtto": "200000000000000000",
+          "remainingPayoutAtto": "0"
+        },
+        "LOW": {
+          "winnerAsset": "BNB",
+          "winnerReturnPpb": 3398614,
+          "settlementMode": "PARIMUTUEL",
+          "totalStakeAtto": "200000000000000000",
+          "winningStakeAtto": "100000000000000000",
+          "losingStakeAtto": "100000000000000000",
+          "payoutPoolAtto": "198000000000000000",
+          "platformFeeAtto": "2000000000000000",
+          "paidAtto": "198000000000000000",
+          "remainingPayoutAtto": "0"
+        }
+      }
+    },
+    "deliveries": [
+      {
+        "account": "0x797d3b25fb2cca0ff93f60df1910267f3822d655",
+        "objective": "HIGH",
+        "kind": "UNBACKED_WINNER_REFUND",
+        "amountAtto": "100000000000000000",
+        "parentTransactionHash": "0x6426da6088ab4e50be0c294059e177ae672f6e1bea0ea092f5adbb12f814ca82",
+        "parentStatus": "FINALIZED",
+        "childTransactionHash": "0xc1d8c185130bf7ba45942c2b2e5fc16deed8de423aaa8187ea16ca7d52a10aa8",
+        "childStatus": "FINALIZED"
+      },
+      {
+        "account": "0x87e94edab4418e8a9ea37c0fab0675cf0602a9f2",
+        "objective": "HIGH",
+        "kind": "UNBACKED_WINNER_REFUND",
+        "amountAtto": "100000000000000000",
+        "parentTransactionHash": "0x6ac203a6e9bfe661e23074f45c9135d3a5d60e8301b6112b3150cf1317256d3a",
+        "parentStatus": "FINALIZED",
+        "childTransactionHash": "0xe7cbdfb79c5c2392e54963b69e04a3cbfcf216a79df03bfb1b69661a16d48182",
+        "childStatus": "FINALIZED"
+      },
+      {
+        "account": "0x87e94edab4418e8a9ea37c0fab0675cf0602a9f2",
+        "objective": "LOW",
+        "kind": "PARIMUTUEL_PAYOUT",
+        "amountAtto": "198000000000000000",
+        "parentTransactionHash": "0xcb1538a1fbe14becda085d64a2a33d0e572b63b80c16675a5aa879ea353e7fde",
+        "parentStatus": "FINALIZED",
+        "childTransactionHash": "0x8e249a9e03c2f5bfa235c008ada76f40719c8c5a4f7bd71ea1a1b5d14f087b6c",
+        "childStatus": "FINALIZED"
+      }
+    ],
+    "loserRejection": {
+      "account": "0x797d3b25fb2cca0ff93f60df1910267f3822d655",
+      "objective": "LOW",
+      "asset": "XRP",
+      "transactionHash": "0xfa3a29763ca1c974e2d5eea3850025492f269e2b34a848c58e2f2bb2a6ee26c8",
+      "transactionStatus": "FINALIZED",
+      "executionResult": "EXPECTED_ROLLBACK",
+      "error": "[EXPECTED] NOT_ELIGIBLE: Wallet is not eligible for proceeds"
+    },
+    "balanceProof": {
+      "accountA": {
+        "address": "0x797d3b25fb2cca0ff93f60df1910267f3822d655",
+        "initialAtto": "1000000000000000000",
+        "postWagerAtto": "800000000000000000",
+        "deliveredAtto": "100000000000000000",
+        "finalAtto": "900000000000000000",
+        "netDeltaAtto": "-100000000000000000"
+      },
+      "accountB": {
+        "address": "0x87e94edab4418e8a9ea37c0fab0675cf0602a9f2",
+        "initialAtto": "750000000000000000",
+        "postWagerAtto": "550000000000000000",
+        "deliveredAtto": "298000000000000000",
+        "finalAtto": "848000000000000000",
+        "netDeltaAtto": "98000000000000000"
+      },
+      "contract": {
+        "address": "0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1",
+        "postWagerAtto": "400000000000000000",
+        "deliveredAtto": "398000000000000000",
+        "finalAtto": "2000000000000000",
+        "platformFeeRetainedAtto": "2000000000000000"
+      },
+      "playerLiabilityBeforeClaimsAtto": "398000000000000000",
+      "playerLiabilityAfterClaimsAtto": "0",
+      "conservedTotalAtto": "1750000000000000000"
+    },
+    "proofBasis": {
+      "rawExactJsonVerified": true,
+      "balancesAndAmountsEncodedAsDecimalAttoStrings": true,
+      "returnsEncodedAsIntegerPpb": true,
+      "allDeliveryParentsFinalized": true,
+      "allDeliveryChildrenFinalized": true,
+      "exactBalanceAndLiabilityDeltasReconciled": true,
+      "timeoutRefundTested": false,
+      "claimChildFailureRecoveryProven": false,
+      "browserExactIntegerProofParserDeployed": true,
+      "browserExactIntegerProofParserVerified": true
+    }
+  },
+  "vercel": {
+    "target": "production",
+    "status": "RETIRED_DELETED",
+    "historicalSnapshot": true,
+    "productionAlias": "https://liquidity-arena.vercel.app",
+    "deploymentId": "dpl_434vv5XyxeMx2PjZRW5h5oTnA7YW",
+    "deploymentUrl": "https://liquidity-arena-6po41060l-leokings588-5902s-projects.vercel.app",
+    "deploymentUrlStatus": "DELETED_404",
+    "sourceCommit": "0924c800c0de12caea9219e55daae5b1b5b7d31c",
+    "verifiedOn": "2026-08-19",
+    "checks": {
+      "publicAccessAtVerification": true,
+      "healthz": true,
+      "readyz": true,
+      "rpcChainId": "0xf22f",
+      "klineRows": 240,
+      "sseSymbols": ["BTC", "ETH", "BNB", "SOL", "XRP"],
+      "browserConsoleClean": true,
+      "applicationConsoleErrorCount": 0,
+      "resolvedEpochProofRendered": true,
+      "exactIntegerProofSuitePassed": true,
+      "productionRawParentChildProofPassed": true,
+      "productionRawParentChildProofAmountAtto": "198000000000000000",
+      "browserAssetsRendered": 5,
+      "circularMapRendered": true,
+      "pricesAndTerritoriesChanged": true,
+      "marketDataLabel": "LIVE · 2S REST FALLBACK",
+      "bundleFile": "market-Cfvx0fWe.js",
+      "bundleSha256": "0db02e96518ecec2207634985ee4156bd0501fdf7ad7fcb2300450d89e9e5563",
+      "bundleByteIdenticalToSourceCommit": true,
+      "testCount": 207,
+      "publicVerificationResult": "PASSED_NO_P0_P1"
+    }
+  },
+  "currentPublicCompatibility": {
+    "recordedOn": "2026-08-19",
+    "productionAlias": "https://liquidity-arena.vercel.app",
+    "deploymentId": "dpl_DQEvnGup417wvTxuxzeNfJvySiM5",
+    "deploymentUrl": "https://liquidity-arena-2qlh5a5kn-leokings588-5902s-projects.vercel.app",
+    "sourceCommit": "dbc2288a6adc745261128a55b555e8a34574db1e",
+    "bundleFile": "market-Co0HBgo2.js",
+    "bundleSha256": "484b3c8ba3e40cb249a694ecd30bbe97df6685e1c858ea54639e8039eec43cd9",
+    "activeDeployment": "v6",
+    "intendedMode": "CLAIM_ONLY",
+    "modeMeaning": "PUBLIC_APP_NEW_WAGERS_DISABLED_WITH_LEGACY_READ_RESOLVE_TIMEOUT_CLAIM_RECOVERY",
+    "publicAppNewEpochCreationEnabled": false,
+    "publicAppNewWagersEnabled": false,
+    "automationCreateEpochEnabled": false,
+    "deployedOwnerCreateEpochCapabilityRemains": true,
+    "directWagersToOwnerCreatedOpenEpochCapabilityRemains": true,
+    "ownerCreateEpochUsePolicy": "FORBIDDEN_OPERATIONALLY_NOT_REVOKED_ON_CHAIN",
+    "legacyPermittedActions": ["READ", "RESOLVE", "TIMEOUT", "CLAIM"],
+    "publicWriteGatingVerification": "PASS_DEFAULT_AND_EXPLICIT_V7_ROUTE_DISABLED",
+    "v7Cutover": "PENDING",
+    "browserVerification": "PASS_HTTP_AND_DEPLOYED_REGISTRY",
+    "retiredOlderDeploymentCount": 6,
+    "knownUnsafeImmutableDeploymentStatus": "REMOVED_404_VERIFIED",
+    "readinessStatus": "EXPECTED_503_ACTIVE_V6_LEGACY_RECOVERY_MODE_LACKS_FUTURE_KEEPER_COVERAGE"
+  },
+  "remainingLiveEvidence": [
+    "24-hour timeout refund path; the unbacked-winner refund path is proven",
+    "claim-child failure recovery or a documented protocol delivery guarantee",
+    "scheduled V7 keeper workflow activation after dedicated keeper rotation, environment secrets, and default-branch publication",
+    "durable server-side market telemetry",
+    "provider data-use and legal review",
+    "independent security review"
+  ]
+}

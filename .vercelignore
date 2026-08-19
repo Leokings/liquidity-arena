@@ -1,0 +1,15 @@
+.git/
+.pytest_cache/
+__pycache__/
+.keeper/
+.keeper-*/
+.env
+.env.*
+!.env.example
+artifacts/
+deployments/
+docs/screenshots/
+tests/
+**/*.test.mjs
+**/*.pyc
+*.log
