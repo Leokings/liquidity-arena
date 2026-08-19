@@ -148,6 +148,16 @@ export async function runHistorySyncCli(
   const idempotencyKey = normalizedIdempotencyKey(
     parsed.idempotencyKey || defaultIdempotencyKey(request, now),
   );
+  // `parseHistorySyncBody` normalizes an omitted offset to null for hashing and
+  // service code. The wire schema is intentionally non-nullable, so omit that
+  // normalized sentinel before the server performs its own strict parse.
+  const wireRequest = {
+    ...(request.deployments ? { deployments: request.deployments } : {}),
+    ...(request.startOffset === null ? {} : { startOffset: request.startOffset }),
+    maxEpochs: request.maxEpochs,
+    proofs: request.proofs,
+    includeKnownProofs: request.includeKnownProofs,
+  };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   timer.unref?.();
@@ -161,7 +171,7 @@ export async function runHistorySyncCli(
         'content-type': 'application/json',
         'idempotency-key': idempotencyKey,
       },
-      body: JSON.stringify(request),
+      body: JSON.stringify(wireRequest),
       redirect: 'error',
       signal: controller.signal,
     });

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { parseHistorySyncBody } from '../history/schema.mjs';
 import { parseHistorySyncArguments, runHistorySyncCli } from './history-sync.mjs';
 
 test('history sync CLI parses only bounded selector and proof assertions', () => {
@@ -45,6 +46,8 @@ test('history sync CLI sends the secret only in Authorization and never logs it'
   const body = JSON.parse(captured.options.body);
   assert.deepEqual(body.deployments, ['v7']);
   assert.equal(body.maxEpochs, 1);
+  assert.equal(Object.hasOwn(body, 'startOffset'), false);
+  assert.equal(parseHistorySyncBody(body).startOffset, null);
   assert.equal(logs.join('\n').includes(secret), false);
 });
 
