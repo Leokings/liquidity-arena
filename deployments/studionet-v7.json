@@ -68,7 +68,25 @@
         }
       ]
     },
-    "defaultBranchWorkflowActivation": "PENDING"
+    "defaultBranchWorkflowActivation": "PASS",
+    "defaultBranchWorkflowEvidence": {
+      "firstScheduledRunId": "32298454771",
+      "firstScheduledReconcileStatus": "SUCCESS",
+      "firstScheduledHistoryStatus": "SUPERSEDED_PROVIDER_QUOTA_FAILURE",
+      "successfulRunId": "32299468899",
+      "reconcileJobId": "96218469576",
+      "reconcileStatus": "SUCCESS",
+      "profileAndRuntimeSignerPreflight": "PASS",
+      "actionsSubmitted": 0,
+      "historyJobId": "96218806119",
+      "historyStatus": "SUCCESS",
+      "latestSuccessfulRunId": "32300282482",
+      "latestReconcileJobId": "96221017562",
+      "latestReconcileStatus": "SUCCESS",
+      "latestHistoryJobId": "96221327115",
+      "latestHistoryStatus": "SUCCESS",
+      "longRunMonitoring": "PENDING"
+    }
   },
   "configuration": {
     "platformFeeBps": 200,
@@ -88,7 +106,8 @@
     "fullDayLastEpochEndTimestamp": 1787252400,
     "fullDayFirstCreateTransactionHash": "0x7b94b2d0dc4d0970482e60a2cec1fc4d3c3bcf0592816e992b3acbc9474b7726",
     "fullDayFinalCreateTransactionHash": "0x443afcf771f1c5751bdc0e525b75b8d04e7378ef37bb7f817799f98f36c7677f",
-    "continuousAutomationActivation": "PENDING"
+    "continuousAutomationActivation": "PASS_FIRST_SCHEDULED_RECONCILE_OBSERVED",
+    "longRunAutomationSoak": "PENDING"
   },
   "fundedCanary": {
     "epochEndTimestamp": 1787166000,
@@ -257,11 +276,55 @@
     "schemaReadback": "PASS",
     "expectedTableCount": 6,
     "expectedIndexCount": 4,
-    "initialFinalizedEpochIngestion": "PENDING"
+    "initialFinalizedEpochIngestion": "PASS",
+    "initialSuccessfulSyncEvidence": {
+      "workflowRunId": "32299468899",
+      "jobId": "96218806119",
+      "status": "SUCCESS",
+      "stateReadAt": "2026-08-19T20:38:39.397Z",
+      "deploymentsSynced": 2,
+      "epochsSynced": 2,
+      "snapshotsSynced": 2,
+      "epochEndTimestamp": 1787166000,
+      "deploymentAliases": ["v7", "v6"],
+      "publicReadback": "PASS_FULL_RESOLVED_DETERMINED_SNAPSHOTS"
+    },
+    "latestSuccessfulSyncEvidence": {
+      "workflowRunId": "32300282482",
+      "sourceCommit": "45be825084cce9e97579ca42266e318e2e97fe17",
+      "reconcileJobId": "96221017562",
+      "historyJobId": "96221327115",
+      "status": "SUCCESS",
+      "stateReadAt": "2026-08-19T20:47:19.912Z",
+      "deploymentsSynced": 2,
+      "epochsSynced": 2,
+      "snapshotsSynced": 2,
+      "proofsVerified": 0,
+      "publicReadback": {
+        "v7Count": 2,
+        "v7ResolvedEpochEndTimestamps": [1787169600, 1787166000],
+        "v6Count": 1,
+        "v6ResolvedEpochEndTimestamps": [1787166000],
+        "allResultStatuses": "DETERMINED",
+        "allVerifiedProofCounts": 0
+      }
+    },
+    "supersededQuotaIncident": {
+      "workflowRunId": "32298454771",
+      "reconcileStatus": "SUCCESS",
+      "historyStatus": "FAILED_PROVIDER_QUOTA",
+      "supersededBySuccessfulRunId": "32299468899"
+    },
+    "repeatProjectionVerification": "PASS_NO_DUPLICATE_OVERLAPPING_V6_E19",
+    "verifiedProofBackfill": "NOT_RUN",
+    "publicSnapshotVerifiedProofCounts": {
+      "v7": 0,
+      "v6": 0
+    }
   },
   "publicRelease": {
     "productionAlias": "https://liquidity-arena.vercel.app",
-    "activeDeployment": "v6",
+    "activeDeployment": "v7",
     "intendedV6Mode": "CLAIM_ONLY_COMPATIBILITY",
     "v6ModeMeaning": "PUBLIC_APP_NEW_WAGERS_DISABLED_WITH_LEGACY_READ_RESOLVE_TIMEOUT_CLAIM_RECOVERY",
     "v6PublicAppNewEpochCreationEnabled": false,
@@ -271,7 +334,7 @@
     "v6DirectWagersToOwnerCreatedOpenEpochCapabilityRemains": true,
     "v6OwnerCreateEpochUsePolicy": "FORBIDDEN_OPERATIONALLY_NOT_REVOKED_ON_CHAIN",
     "v6LegacyPermittedActions": ["READ", "RESOLVE", "TIMEOUT", "CLAIM"],
-    "publicWriteGatingVerification": "PASS_DEFAULT_AND_EXPLICIT_V7_ROUTE_DISABLED",
+    "publicWriteGatingVerification": "PASS_V7_ACTIVE_V6_NEW_WRITES_DISABLED",
     "compatibilityDeploymentId": "dpl_DQEvnGup417wvTxuxzeNfJvySiM5",
     "compatibilityDeploymentUrl": "https://liquidity-arena-2qlh5a5kn-leokings588-5902s-projects.vercel.app",
     "compatibilitySourceCommit": "dbc2288a6adc745261128a55b555e8a34574db1e",
@@ -280,7 +343,34 @@
     "compatibilityReadiness": "EXPECTED_503_ACTIVE_V6_LEGACY_RECOVERY_MODE_LACKS_FUTURE_KEEPER_COVERAGE",
     "retiredOlderDeploymentCount": 6,
     "retiredOlderDeploymentsStatus": "DELETED",
-    "v7Cutover": "PENDING"
+    "v7Cutover": "PASS",
+    "verifiedCodeArtifactBeforeEvidenceOnlyDocumentationRefresh": {
+      "sourceCommit": "45be825084cce9e97579ca42266e318e2e97fe17",
+      "ci": {
+        "runId": "32299866117",
+        "event": "push",
+        "status": "SUCCESS",
+        "browserAndOperatorJobId": "96219707620",
+        "browserAndOperatorStatus": "SUCCESS",
+        "intelligentContractsJobId": "96219707869",
+        "intelligentContractsStatus": "SUCCESS"
+      },
+      "vercel": {
+        "deploymentId": "dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3",
+        "deploymentUrl": "https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app",
+        "productionAlias": "https://liquidity-arena.vercel.app",
+        "status": "READY",
+        "bundleFile": "market-DECrh0Dy.js",
+        "bundleSha256": "d82c6975f0275add1e355a3d298a0170aae483f26788d4e9431a2a259cfe85ac",
+        "healthzStatus": 200,
+        "readyzStatus": 200,
+        "historyHealthStatus": 200,
+        "readyContractProtocol": "LIQUIDITY_ARENA_V7",
+        "readyLegacyV6Readable": true,
+        "readyLegacyV6PlayerLiabilityAtto": "0"
+      },
+      "scopeNote": "This code/CI/deployment evidence predates the evidence-only documentation refresh that records it."
+    }
   },
   "verification": {
     "genvmLint": "PASS",
@@ -291,6 +381,12 @@
     "seededEpochCount": 25,
     "dedicatedKeeperCreatedEpochCount": 2,
     "dedicatedKeeperLimitedExecution": "PASS_TWO_FINALIZED_OPEN_EPOCHS",
+    "defaultBranchKeeperWorkflow": "PASS_PROFILE_SIGNER_AND_NO_ACTION_RECONCILE",
+    "legacyV6ScheduledDrainWorkflowRunId": "32297047031",
+    "legacyV6ScheduledDrainWorkflow": "PASS",
+    "preDocumentationRefreshCiRunId": "32299866117",
+    "preDocumentationRefreshCi": "PASS_BOTH_JOBS",
+    "preDocumentationRefreshVercelDeployment": "PASS_READY_AND_PUBLIC_READINESS_200",
     "claimDeliveryMonitorDeploymentModes": ["v6", "v7"],
     "dedicatedKeeperRotation": "PASS_FINALIZED_AND_EXACT_CONFIG_READBACK",
     "fundedCanary": "PASS_SETTLED_DELIVERED_AND_FEE_WITHDRAWN"

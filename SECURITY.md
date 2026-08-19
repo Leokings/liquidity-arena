@@ -6,9 +6,10 @@ The active review target is `LIQUIDITY_ARENA_V7` at
 `0xb2ae59aE641f571726Ae81E30080f8c2192b15EF` on GenLayer StudioNet. The immutable evidence policy is
 `CRYPTO_SPOT_1M_MEDIAN_V1`. Contract lint and direct tests have passed, and the complete V7 canary
 proved finalized resolution, refund/payout delivery, loser rejection, liability conservation, and
-fee withdrawal. Dedicated keeper rotation is complete; public browser cutover, default-branch
-scheduler proof, initial history ingestion, and an independent security review are still release
-gates. The payment path must not be described as production-ready.
+fee withdrawal. Dedicated keeper rotation, default-branch scheduler preflight, and initial durable
+history ingestion, repeated projection, and public browser cutover are complete; long-run monitoring,
+transaction-proof backfill/outage recovery, and an independent security review remain release gates. The payment path must not be
+described as production-ready.
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is a legacy liability surface only. It remains readable
 and claimable for existing positions; supported public app and automation paths must not use it for
@@ -50,10 +51,11 @@ limits, results, balances, or claims. The dedicated keeper
 `0x12ba664a1ec9ca78b070d103c6a69e20673f4b51` replaced the bootstrap wallet through finalized
 transaction `0xbca440cc838e6d5dcb595e18124e363e0fa1780a498e3ce49703f9d822aa2fdc`;
 `get_config` and repository variable `V7_KEEPER_ADDRESS` match that address. The environment stores
-the encrypted keeper material under the dedicated keeper secret names; runtime signer proof still
-requires an activated workflow run. Local use of the dedicated signer successfully created only
-fixed-term epochs `1787256000` and `1787259600`; both transactions finalized and both post-states
-were verified OPEN.
+the encrypted keeper material under the dedicated keeper secret names. Reconcile job `96218469576`
+in successful workflow run `32299468899` imported the exact dedicated signer, passed the complete
+profile/signer preflight, and correctly submitted no actions because coverage was complete. Local use
+of the same signer created only fixed-term epochs `1787256000` and `1787259600`; both transactions
+finalized and both post-states were verified OPEN.
 
 Secrets must not appear in source, browser bundles, workflow artifacts, or logs. GenLayer CLI 0.39.2
 offers only `--password`/`--source-password` for the noninteractive create, export, import, and unlock
@@ -123,35 +125,35 @@ with normalized marked-DDL SHA-256 `dd95ed3a5c55bf55d02090605a46557377778afb2201
 (raw migration-file SHA-256 `8a6cb36aed985575fa797ab446481c89a1495c8d6d99a8024931cbda67674af5`), and the expected six
 tables/four indexes were read back without exposing connection or ingestion secrets. Database rows
 must retain chain, contract, epoch, and finalized transaction identity, be idempotently ingested, and
-remain replaceable from authoritative chain reads. Until initial and repeated ingestion checks pass,
-the application must not claim populated durable history is live. Database availability can affect
-discovery, never settlement or claim eligibility.
+remain replaceable from authoritative chain reads. Initial production sync/read-back populated full
+resolved, determined V7 and V6 snapshots for epoch `1787166000`; a later sync added V7 E20 and
+re-synced V6 E19 without duplication. Outage recovery remains pending. Public `verifiedProofs` arrays are empty, so transaction-proof
+backfill must not be claimed. Database availability can affect discovery, never settlement or claim
+eligibility.
 
-## Release gates
+## Remaining security gates
 
-Before the V7 public cutover:
+After the V7 public cutover:
 
 1. rerun GenVM lint, V7 direct tests, full JavaScript tests, build, and dependency audit;
 2. complete an independent focused review of contract, evidence adapters, keeper, deployment
    registry, server boundary, and database ingestion;
-3. activate the workflow, prove its runtime signer is the recorded dedicated keeper, and prove no
-   owner material exists in automation;
+3. monitor repeated keeper/drain schedules and prove no owner material exists in automation;
 4. independently review the recorded funded V7 canary, including its shared resolution, fee/refund
    math, loser rejection, conserved balances, and finalized parent/child deliveries;
 5. verify V6 legacy reads, resolve/timeout, and claims while proving public app/automation V6 writes
    remain disabled and the retained owner creation capability is monitored and unused;
-6. complete initial/idempotent Neon ingestion validation and a rollback rehearsal; the production
-   schema migration and schema read-back are complete;
+6. backfill transaction proofs separately from recurring projection and complete a rollback/outage
+   rehearsal;
 7. test outage, delayed finality, restart, rate limit, and the independent 24-hour timeout path;
 8. finish provider data-use and applicable legal review.
 
 The earlier V6 funded round is valuable regression evidence, not a substitute for the V7 canary.
-The current Vercel production site remains on the V6 compatibility release until these gates pass.
-Deployment `dpl_DQEvnGup417wvTxuxzeNfJvySiM5` verifies that both the default V6 route and an explicit
-`?deployment=v7` route disable new wagers while V6 is active. V7 becomes write-capable only after
-the active deployment is deliberately switched to V7. Its current `/readyz` response is expected to
-be `503` because the active legacy V6 compatibility artifact lacks future keeper coverage; this is
-not a chain, feed, or market-data configuration failure.
+The current Vercel production site targets V7. Pre-documentation-refresh code artifact
+`dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3` is READY from source
+`45be825084cce9e97579ca42266e318e2e97fe17`; its public `/readyz` returned `200` with the exact V7
+roles/policy, future coverage, five feeds, and readable zero-liability V6 recovery. The earlier V6
+compatibility deployment remains a rollback artifact, but rollback must never re-enable V6 writes.
 
 ## Reporting
 

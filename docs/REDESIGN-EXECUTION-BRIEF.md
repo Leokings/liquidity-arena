@@ -1,8 +1,8 @@
 # Liquidity Arena StudioNet V7 execution brief
 
 This brief turns [the V7 product specification](REDESIGN-SPEC.md) into a release sequence. It records
-what is deployed, what is verified, and what must still pass before the public V7 cutover. A checked
-box must be backed by reproducible local output or immutable StudioNet/public evidence.
+what is deployed, what is verified, and what must still pass before any public-value readiness claim.
+A checked box must be backed by reproducible local output or immutable StudioNet/public evidence.
 
 ## 1. Frozen design
 
@@ -23,7 +23,7 @@ box must be backed by reproducible local output or immutable StudioNet/public ev
 | Resolve / timeout | Permissionless at `E+120s` / `E+24h` |
 | Scheduled privilege | Fixed-terms epoch creation only |
 | Public host | Vercel |
-| Durable history | Neon schema migrated; initial settled-state ingestion pending |
+| Durable history | Neon repeated V7/V6 projection live; transaction-proof backfill pending |
 
 V6 remains only for old reads, permissionless resolve/timeouts, and claims.
 This is an application/automation policy: the deployed V6 owner creation capability still exists and
@@ -95,8 +95,8 @@ The 16:00 epoch begins on schedule even if the 15:00 resolver is still finalizin
 - [x] Install environment-scoped keystore secrets and exact role variables.
 - [x] Use the owner only once to call `set_keeper(dedicated_keeper)`.
 - [x] Verify the on-chain keeper and public repository variable match.
-- [ ] Capture one activated workflow run proving the imported runtime signer matches.
-- [ ] Activate from the default branch and capture one successful scheduled run.
+- [x] Capture one activated workflow run proving the imported runtime signer matches.
+- [x] Activate from the default branch and capture one successful scheduled reconcile.
 - [ ] Connect coverage, role drift, source quorum, finality, and failure alerts.
 
 The owner key must never enter CI. Dedicated keeper
@@ -107,7 +107,9 @@ The owner key must never enter CI. Dedicated keeper
 `V7_KEEPER_KEYSTORE_PASSWORD` are present in environment `studionet-keeper`. Local use of that
 keeper created `1787256000` via finalized transaction `0xe10ce0bf…a9c4` and `1787259600` via
 finalized transaction `0x00398a3c…9058`; both exact post-states were verified OPEN. This proves the
-limited role, while default-branch runtime proof remains open.
+limited role. Scheduled run `32298454771` then passed reconciliation, and later run `32299468899`
+passed exact signer/profile reconciliation with no actions required. Long-run monitoring remains
+open.
 
 ## 5. Phase C — funded V7 canary
 
@@ -162,9 +164,9 @@ V6 may be removed from the browser only after liabilities and user recovery obli
 
 ## 7. Phase E — durable history
 
-Neon is a durable projection of finalized settled epochs. Its production schema migration is
-applied, but initial finalized-epoch ingestion is pending. It is not an oracle and must not become
-required for wager, resolve, timeout, or claim correctness.
+Neon is a durable projection of finalized settled epochs. Its production schema migration and
+initial finalized-epoch ingestion are complete. It is not an oracle and must not become required for
+wager, resolve, timeout, or claim correctness.
 
 Required completion:
 
@@ -181,11 +183,14 @@ Required completion:
 
 Live production completion remains:
 
-- [ ] run the initial finalized-epoch sync against the migrated schema;
-- [ ] repeat the same sync and prove production idempotency;
-- [ ] verify populated read/health behavior and a database-outage recovery rehearsal.
+- [x] run the initial finalized-epoch sync against the migrated schema;
+- [x] repeat the same sync and prove production idempotency;
+- [x] verify populated public reads for V7 and V6 E19;
+- [ ] verify database-outage recovery behavior;
+- [ ] backfill and verify transaction proofs separately from recurring state projection.
 
-Until these checks pass, documentation and UI must describe durable database history as pending.
+Until the remaining checks pass, documentation and UI must distinguish live repeated settled-state
+projection from pending outage and proof-backfill evidence. Current `verifiedProofs` arrays are empty.
 
 Applied migration ID: `aa7617fa-bfa7-4d48-9b30-f60afeda43a1`. Normalized marked-DDL SHA-256:
 `dd95ed3a5c55bf55d02090605a46557377778afb220126451bb4e750dbc280b2`. Raw migration-file SHA-256:
@@ -208,37 +213,36 @@ Required release behavior:
 
 Cutover procedure:
 
-1. [ ] configure a V7 preview with the recorded address and expected roles;
+1. [x] configure and promote V7 with the recorded address and expected roles;
 2. [ ] verify health, readiness, chain `0xf22f`, all five feeds, kline history, CSP, and console;
 3. [ ] test V7 wallet entry/claim UX and V6 legacy history/claim UX;
 4. [ ] verify mobile, refresh, delayed finality, stale feed, and database outage behavior;
-5. [ ] preserve the last verified production artifact and environment for rollback;
-6. [ ] promote only after the remaining cutover checks;
-7. [ ] rerun the same checks against the production alias.
+5. [x] preserve the last verified production artifact and environment for rollback;
+6. [x] promote V7 while retaining V6 recovery;
+7. [x] verify production health/readiness/history-health and exact deployment identity;
 
-Vercel production currently remains V6. Do not claim V7 public completion before promotion and
-post-promotion verification.
-
-The safe compatibility artifact is deployment `dpl_DQEvnGup417wvTxuxzeNfJvySiM5`, immutable URL
-`https://liquidity-arena-2qlh5a5kn-leokings588-5902s-projects.vercel.app`, source commit
-`dbc2288a6adc745261128a55b555e8a34574db1e`, and bundle `market-Co0HBgo2.js` with SHA-256
-`484b3c8ba3e40cb249a694ecd30bbe97df6685e1c858ea54639e8039eec43cd9`. New wagers are disabled on
-both the default and explicit V7 route. `/readyz` is expected `503` because the active V6
-compatibility artifact lacks future keeper coverage. Six older deployments were retired/deleted.
+Vercel production now targets V7. The verified code artifact immediately before this evidence-only
+documentation refresh is source `45be825084cce9e97579ca42266e318e2e97fe17`, successful CI run
+`32299866117`, and READY deployment `dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3` at
+`https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app`. Bundle
+`market-DECrh0Dy.js` has SHA-256
+`d82c6975f0275add1e355a3d298a0170aae483f26788d4e9431a2a259cfe85ac`; health/readiness/history
+health returned `200`, and V6 remained readable with zero known liability. Deployment
+`dpl_DQEvnGup417wvTxuxzeNfJvySiM5` remains the prior V6 rollback artifact.
 
 ## 9. Phase G — submission package
 
 Required artifacts:
 
-- [ ] clean public repository with reproducible setup;
+- [x] clean public repository with reproducible setup;
 - [x] V7 architecture, contract, keeper, history, and security documentation;
 - [x] V7 deployment record and funded canary evidence;
 - [x] V6 drain/legacy-liability and retained-owner-capability explanation;
-- [ ] current test/build/dependency outputs;
+- [x] current test/build/dependency outputs;
 - [ ] independent review and remediation record;
 - [ ] screenshots and short end-to-end demonstration video;
-- [ ] StudioNet/faucet-GEN limitations and provider/legal disclosures;
-- [ ] public Vercel URL and rollback record.
+- [x] StudioNet/faucet-GEN limitations and provider/legal disclosures;
+- [x] public Vercel URL and rollback record.
 
 ## 10. Operational constraints
 
@@ -252,15 +256,15 @@ Required artifacts:
 
 ## 11. Current truthful status
 
-The V7 contract, initial full-day schedule, funded canary, dedicated keeper rotation, and Neon schema
-migration are complete. The release is not finished because default-branch scheduler proof, initial
-durable-history ingestion, public V7 promotion, timeout evidence, monitoring, and independent reviews
-remain.
+The V7 contract, initial full-day schedule, funded canary, dedicated keeper rotation, default-branch
+scheduler preflight, repeated Neon state projection, and public V7 promotion are complete. The
+release still needs proof backfill/outage evidence, timeout evidence, monitoring, and independent
+reviews.
 
 The next safe sequence is:
 
-1. activate and verify the default-branch keeper runtime signer and coverage;
-2. run initial and repeated Neon ingestion proof;
-3. deploy and verify the V7 preview;
-4. promote with V6 legacy compatibility and a tested rollback;
+1. separately backfill transaction proofs and rehearse database outage recovery;
+2. continue scheduled keeper/drain monitoring and alerting;
+3. continue public browser/wallet soak with V6 legacy recovery;
+4. rehearse rollback without re-enabling V6 writes;
 5. finish operational/external review and submission media.

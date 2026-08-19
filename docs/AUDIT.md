@@ -9,10 +9,10 @@ are permissionless.
 
 This is a release audit ledger, not an independent external audit and not a production-safety
 certificate. The funded V7 canary and Neon production schema migration are complete, but
-default-branch keeper activation/monitoring, public browser cutover, initial durable-history
-ingestion, the 24-hour live timeout path, and claim-child failure recovery remain incomplete gates.
-The dedicated keeper rotation itself is complete. The public Vercel site remains on a verified V6
-legacy-recovery compatibility release; V7 public cutover is still pending.
+long-run keeper/drain monitoring, durable-history proof backfill/outage recovery, the 24-hour live
+timeout path, and claim-child failure recovery remain incomplete gates. Dedicated keeper rotation,
+default-branch signer/profile preflight, repeated history projection, and public V7 cutover are
+complete.
 
 ## V7 deployment identity
 
@@ -58,6 +58,17 @@ The machine-readable evidence is in
   `0xe10ce0bfc24320998e12cea148734124cb8b0f0ee2fb728ef2961191ee3aa9c4` and epoch `1787259600` through
   finalized transaction `0x00398a3c1acf443220848fabecdc4dd0e2cb4232a0b10588ac6ebbbfdf4c9058`;
   both exact post-states were verified OPEN, proving the limited on-chain role independently of CI;
+- scheduled V7 run `32298454771` passed reconciliation; its separate history job failed on the
+  StudioNet provider quota and was superseded by successful workflow-dispatch run `32299468899`,
+  whose reconcile job `96218469576` passed exact profile/runtime-signer checks and correctly planned
+  no actions;
+- history job `96218806119` in run `32299468899` synchronized two deployments, two epochs, and two
+  full snapshots from state read at `2026-08-19T20:38:39.397Z`; public V7 and V6 E19 records are
+  resolved/determined, while both `verifiedProofs` arrays remain empty;
+- final observed run `32300282482` on main commit `45be825084cce9e97579ca42266e318e2e97fe17`
+  passed reconcile job `96221017562` and history job `96221327115`; public history then contained V7
+  E20/E19 and V6 E19 without duplicating overlapping V6 E19, with `proofsVerified=0`;
+- scheduled legacy V6 drain run `32297047031` completed successfully without any creation action;
 - the dual-deployment browser registry is designed to allow only V7 new writes and V6 legacy
   reads/resolves/timeouts/claims, with explicit deployment aliases rather than arbitrary addresses;
 - the read-only claim-delivery monitor requires an explicit V6 or V7 deployment profile and tests
@@ -66,6 +77,9 @@ The machine-readable evidence is in
   `dd95ed3a5c55bf55d02090605a46557377778afb220126451bb4e750dbc280b2`
   (raw migration-file SHA-256 `8a6cb36aed985575fa797ab446481c89a1495c8d6d99a8024931cbda67674af5`)
   was applied, and six expected tables plus four expected indexes were read back;
+- pre-documentation-refresh CI run `32299866117` passed browser/operator job `96219707620` and
+  intelligent-contracts job `96219707869`; READY deployment `dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3`
+  served that exact code artifact with public health/readiness/history-health `200`;
 - the funded V7 canary for epoch `1787166000` completed with finalized resolution
   `0xc2c86fdb37da9569e67eae00a15b6864ddab05364e92f4d6c0c4c75d6a4aab66`, expected settlement modes,
   three exact participant claim deliveries, loser rejection, balance conservation, and exact fee
@@ -96,9 +110,9 @@ ownership transfer is propose/accept, and owner/treasury can withdraw only accru
 keeper therefore cannot select winners or block every other caller from settlement. The production
 workflow must use a dedicated encrypted keeper, never the owner. Rotation away from the temporary
 bootstrap wallet is complete and exact live/repository identity matches; a successful activated
-workflow run is still needed to prove the CI runtime signer and schedule coverage. Two finalized
-local keeper creates already prove that the dedicated account can exercise the intended limited
-`create_epoch` authority.
+workflow run now proves the CI runtime signer/profile preflight. Two finalized local keeper creates
+prove that the dedicated account can exercise the intended limited `create_epoch` authority. A
+no-action reconcile proves configuration and coverage at that observation, not continuous uptime.
 
 ## Evidence and accounting review
 
@@ -137,13 +151,12 @@ is fully retired.
 
 ## Open findings and release gates
 
-### P1 — production scheduler activation and monitoring are pending
+### P1 — production scheduler long-run monitoring remains pending
 
-The dedicated encrypted keeper is installed, its on-chain role was finalized/read back, and the
-GitHub environment secret names plus public repository variable are configured. Run the
-default-branch workflow, prove that its imported signer is the exact recorded keeper and that no
-owner key or owner-capable keystore is available to automation, then add alerts for coverage, source
-quorum, finality, and role drift.
+The dedicated encrypted keeper is installed, its on-chain role was finalized/read back, the GitHub
+configuration matches, and default-branch signer/profile preflight passed. Continue scheduled-run
+soak, prove no owner key or owner-capable keystore is available to automation, and add alerts for
+coverage, source quorum, finality, history quota failures, and role drift.
 
 ### P1 — asynchronous child failure has no safe retry
 
@@ -152,25 +165,22 @@ would still need a protocol delivery guarantee or a recoverable transfer design 
 failed/delayed child that cannot double-pay. The read-only monitor is correct but is detection, not
 recovery.
 
-### P1 — public cutover is pending
+### P1 — public cutover completed; soak and rollback discipline remain
 
-The Vercel production site still targets V6. With keeper rotation complete, deploy the exact V7
-configuration, verify new V7 writes and old V6 claims, exercise health/readiness/API/browser flows,
-and retain the last verified artifact for rollback. Rollback must not reactivate V6 round creation.
+The verified code artifact before this evidence-only documentation refresh is source
+`45be825084cce9e97579ca42266e318e2e97fe17`, CI run `32299866117`, and READY Vercel deployment
+`dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3` at
+`https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app`. The public alias targets V7;
+health/readiness/history-health returned `200`, V6 remained readable with zero known liability, and
+the previous V6 compatibility deployment remains a rollback artifact. Continue browser/wallet soak
+and ensure rollback never reactivates V6 round creation.
 
-Current compatibility evidence is deployment `dpl_DQEvnGup417wvTxuxzeNfJvySiM5`, immutable URL
-`https://liquidity-arena-2qlh5a5kn-leokings588-5902s-projects.vercel.app`, source commit
-`dbc2288a6adc745261128a55b555e8a34574db1e`, and bundle `market-Co0HBgo2.js` with SHA-256
-`484b3c8ba3e40cb249a694ecd30bbe97df6685e1c858ea54639e8039eec43cd9`. Both default and explicit V7
-routes disable new wagers. `/readyz` is expected `503` because the active legacy V6 compatibility
-artifact lacks future keeper coverage. Six older deployments were retired/deleted.
+### P2 — durable history proof backfill and outage recovery are pending
 
-### P2 — durable history ingestion is pending
-
-The Neon production migration is applied and its schema read-back passed. Initial and repeated
-idempotent ingestion, access-control behavior, health behavior, and authoritative-chain
-reconciliation still require verification. It must not be described as populated live history or as
-an oracle until those checks complete.
+The Neon migration/schema read-back and two bounded production syncs passed. Public history now
+contains full V7 E20/E19 and V6 E19 determined snapshots with no duplicate overlapping V6 E19 row.
+Access-control/outage recovery and transaction-proof backfill still require verification. Empty
+`verifiedProofs` arrays must not be described as backfilled transaction proof or as an oracle.
 
 ### P2 — operational and external reviews remain
 
@@ -187,7 +197,7 @@ Before submission, record fresh results for:
 - preservation/review of the funded V7 canary and claim-child evidence;
 - V6 legacy liability/read/resolve/timeout/claim verification, public-write gating, and owner
   abstention monitoring;
-- Neon initial and repeated ingestion idempotency against the already migrated schema;
+- Neon explicit proof backfill and outage recovery against the migrated, repeatedly populated schema;
 - public Vercel health, readiness, same-origin RPC, exchange stream, CSP, console, wallet, history,
   and rollback checks;
 - an independent security report and closure of all critical/high findings.

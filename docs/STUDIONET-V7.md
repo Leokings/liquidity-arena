@@ -51,7 +51,8 @@ keeper and reached `FINALIZED`, `MAJORITY_AGREE`, with successful leader executi
 `get_config` read-back confirms the dedicated address. GitHub environment `studionet-keeper` now has
 secret names `V7_KEEPER_KEYSTORE_B64` and `V7_KEEPER_KEYSTORE_PASSWORD`, and repository variable
 `V7_KEEPER_ADDRESS` holds the same public address. The owner key must never enter workflow or Vercel
-secrets; default-branch runtime-signer proof remains pending.
+secrets. Reconcile job `96218469576` in run `32299468899` passed the exact default-branch
+profile/runtime-signer preflight.
 
 ## Schedule state
 
@@ -61,7 +62,7 @@ Twenty-five exact-hour epochs were created and verified. Canary epoch `178716600
 `0x7b94b2d0dc4d0970482e60a2cec1fc4d3c3bcf0592816e992b3acbc9474b7726` and
 `0x443afcf771f1c5751bdc0e525b75b8d04e7378ef37bb7f817799f98f36c7677f`. This proves full-day
 derivation and creation, but it does not prove continuous scheduled operation. The default-branch
-workflow still needs activation and monitoring; the dedicated keeper rotation is complete.
+workflow is activated; long-run monitoring remains. The dedicated keeper rotation is complete.
 
 The dedicated keeper then created two additional exact-hour epochs locally. Epoch `1787256000` used
 transaction `0xe10ce0bfc24320998e12cea148734124cb8b0f0ee2fb728ef2961191ee3aa9c4`; epoch `1787259600` used
@@ -90,14 +91,18 @@ Completed:
 - completed funded V7 canary settlement, claim delivery, rejection, conservation, and fee withdrawal;
 - finalized dedicated-keeper rotation, exact `get_config` role read-back, and matching GitHub
   environment secret names/repository address variable;
-- Neon production migration application and six-table/four-index schema read-back.
+- scheduled V7 reconciliation run `32298454771`, later successful no-action reconcile/history run
+  `32299468899`, final observed reconcile/history run `32300282482`, and successful scheduled V6
+  drain run `32297047031`;
+- Neon production migration application, six-table/four-index schema read-back, and initial bounded
+  V7/V6 E19 snapshot synchronization/read-back.
 
 Pending:
 
-- default-branch dedicated-keeper scheduled-run and monitoring evidence;
+- long-run dedicated-keeper/drain monitoring and alert evidence;
 - live 24-hour timeout-refund proof;
-- initial/idempotent Neon settled-epoch ingestion verification after the applied migration;
-- V7 Vercel preview, promotion, post-promotion checks, and rollback rehearsal;
+- transaction-proof backfill and outage-recovery verification;
+- continued public browser/wallet soak and rollback rehearsal without re-enabling V6 writes;
 - independent security and provider/legal review.
 
 The deploy finalized in about 36 seconds. Earlier successful StudioNet operations were also observed
@@ -153,9 +158,9 @@ unbacked-winner refund paths only.
 
 ## Legacy V6
 
-V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` remains the current public compatibility target and a
-legacy claim surface. Production deployment `dpl_DQEvnGup417wvTxuxzeNfJvySiM5` verifies that both
-V6 and an explicit V7 query route disable new wagers while V6 is active. Its due epochs `1787155200` and
+V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` remains a public legacy recovery surface while V7 is
+active. The app disables V6 new wagers and creation while retaining old reads, resolves/timeouts, and
+claims. Its due epochs `1787155200` and
 `1787158800` were resolved on 2026-08-19 by
 `0xae0ce45340fdeaf1c40c41cf12f10bc2dc42319a03aed0c5a706cd5a3ade1480` and
 `0x09f01c2afb065a5ae27df1b791215a421fb2592d1eb65c85988c20072cc0e735`. A later permissionless drain
@@ -178,34 +183,35 @@ At V7 cutover:
 The Neon production migration was applied through the approved temporary-branch workflow with
 normalized marked-DDL SHA-256 `dd95ed3a5c55bf55d02090605a46557377778afb220126451bb4e750dbc280b2`
 (raw migration-file SHA-256 `8a6cb36aed985575fa797ab446481c89a1495c8d6d99a8024931cbda67674af5`); six expected tables and
-four expected indexes were read back. Initial and repeated idempotent ingestion remain pending, so
-populated durable history is not yet a live release claim. Once enabled, it remains an off-chain
-cache keyed to the allowlisted chain/contract/epoch and must reconcile to authoritative finalized
-contract state. Database availability cannot choose winners or make claims eligible.
+four expected indexes were read back. Workflow run `32299468899`, history job `96218806119`, then
+synchronized two deployments, two epochs, and two snapshots from state read at
+`2026-08-19T20:38:39.397Z`. Public history returns full resolved/determined V7 and V6 snapshots for
+E19 (`1787166000`). Both `verifiedProofs` arrays are empty: state projection is live, but transaction-
+proof backfill is not. Later run `32300282482`, reconcile job `96221017562` and history job
+`96221327115`, also succeeded from state read at `2026-08-19T20:47:19.912Z`. Public history now has
+resolved/determined V7 E20 and E19 plus V6 E19 without duplicating the overlapping V6 row;
+`proofsVerified` remained zero. Outage recovery remains pending. This off-chain cache is keyed to
+allowlisted chain/contract/epoch state and cannot choose winners or make claims eligible.
 
-## Public cutover gate
+## Public cutover record
 
-The production alias [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app) remains on a
-verified V6 legacy-recovery compatibility release (public new wagers disabled, contract recovery
-paths retained):
+The production alias [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app) now targets V7
+while retaining V6 legacy recovery. The verified code artifact immediately before this evidence-only
+documentation refresh is:
 
-- deployment: `dpl_DQEvnGup417wvTxuxzeNfJvySiM5`;
+- source commit: `45be825084cce9e97579ca42266e318e2e97fe17`;
+- CI run: `32299866117`, with browser/operator job `96219707620` and intelligent-contracts job
+  `96219707869` both successful;
+- deployment: `dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3`, status READY;
 - immutable URL:
-  [liquidity-arena-2qlh5a5kn-leokings588-5902s-projects.vercel.app](https://liquidity-arena-2qlh5a5kn-leokings588-5902s-projects.vercel.app);
-- source commit: `dbc2288a6adc745261128a55b555e8a34574db1e`;
-- browser bundle: `market-Co0HBgo2.js`, SHA-256
-  `484b3c8ba3e40cb249a694ecd30bbe97df6685e1c858ea54639e8039eec43cd9`;
-- new wagers disabled on both the default route and explicit `?deployment=v7` route;
-- `/readyz` expected `503` because the active V6 compatibility artifact lacks future keeper coverage;
-- six older deployments retired/deleted; the recorded older immutable release returns `404`.
+  [liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app](https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app);
+- browser bundle: `market-DECrh0Dy.js`, SHA-256
+  `d82c6975f0275add1e355a3d298a0170aae483f26788d4e9431a2a259cfe85ac`;
+- `/healthz`, `/readyz`, and `/api/history-health`: `200`;
+- readiness: exact V7 contract/roles/policy, two covered future epochs, five feeds, and readable V6
+  with zero known player liability.
 
-Promote V7 only after:
-
-1. default-branch keeper runtime-signer/coverage verification;
-2. initial/idempotent history ingestion verification against the applied production migration;
-3. V7 preview health, readiness, chain, five-feed, candle, CSP, console, wallet, and legacy-V6 tests;
-4. immutable rollback artifact verification.
-
-After promotion, rerun the same checks against the production alias and record the exact Vercel
-deployment ID, source commit, bundle hash, environment identity, and screenshots. Until that record
-exists, V7 is a deployed release candidate rather than the public production target.
+The previous V6 artifact `dpl_DQEvnGup417wvTxuxzeNfJvySiM5` remains a READY rollback reference. Any
+rollback must preserve V6 new-write disabling. Continue browser/wallet soak, outage tests, external
+review, and proof backfill. The later evidence-only documentation commit is intentionally not claimed
+as the source of the code artifact above.

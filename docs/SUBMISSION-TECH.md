@@ -19,7 +19,7 @@ pari-mutuel objectives: highest return (`HIGH`) and lowest return (`LOW`).
 | Stake limits | 0.1–10 GEN per wallet/objective |
 | Evidence | Binance, OKX, Bybit, Gate, KuCoin; at least 3 complete baskets |
 | Operator | Limited epoch-creation keeper; permissionless resolve/timeout |
-| Public host | [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app), verified V6 legacy-recovery compatibility; V7 cutover pending |
+| Public host | [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app), V7 active/READY with V6 legacy recovery |
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is retained for historical reads, eligible
 resolves/timeouts, and claims. Its due epochs `1787155200` and `1787158800` were resolved on
@@ -74,25 +74,33 @@ historical context and do not reset with the hourly wager round.
 - V7 direct tests passed 22/22; combined V6/V7 direct tests passed 37/37 at deployment review;
 - 25 epochs were seeded and verified: one canary plus a full 24-hour exact-epoch schedule, whose
   first/final creation hashes are `0x7b94b2d0…7726` and `0x443afcf7…7677f`;
-- V7 keeper safeguards and the dual-deployment registry are implemented; production deployment
-  `dpl_DQEvnGup417wvTxuxzeNfJvySiM5` verifies public new-wager gating on both V6 and explicit V7 routes;
-  its immutable URL is
-  `https://liquidity-arena-2qlh5a5kn-leokings588-5902s-projects.vercel.app`, source commit is
-  `dbc2288a6adc745261128a55b555e8a34574db1e`, and `market-Co0HBgo2.js` has SHA-256
-  `484b3c8ba3e40cb249a694ecd30bbe97df6685e1c858ea54639e8039eec43cd9`;
+- V7 keeper safeguards and the dual-deployment registry are implemented; READY production deployment
+  `dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3` serves V7 while preserving V6 legacy recovery. Its immutable URL
+  is `https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app`, source commit is
+  `45be825084cce9e97579ca42266e318e2e97fe17`, and `market-DECrh0Dy.js` has SHA-256
+  `d82c6975f0275add1e355a3d298a0170aae483f26788d4e9431a2a259cfe85ac`;
 - dedicated keeper `0x12ba664a1ec9ca78b070d103c6a69e20673f4b51` was installed by owner transaction
   `0xbca440cc838e6d5dcb595e18124e363e0fa1780a498e3ce49703f9d822aa2fdc`, which finalized with majority
   agreement and successful leader execution; exact config read-back and GitHub repository variable
   match, and the encrypted keeper secret names are present in environment `studionet-keeper`;
 - local execution as the dedicated keeper created `1787256000` through finalized transaction
   `0xe10ce0bf…a9c4` and `1787259600` through finalized transaction `0x00398a3c…9058`; both exact
-  post-states were verified OPEN, proving the limited role without claiming workflow activation;
+  post-states were verified OPEN, proving the limited role;
+- scheduled V7 run `32298454771` passed reconciliation while its independent history job hit a
+  superseded provider-quota failure; later run `32299468899` passed no-action signer/profile
+  reconciliation in job `96218469576` and bounded history sync in job `96218806119`; final observed
+  run `32300282482` also passed reconcile job `96221017562` and history job `96221327115`;
+- scheduled V6 drain run `32297047031` completed successfully without creating any epoch;
 - V6 funded evidence remains recorded as regression proof, including exact payout, fee, refund,
   loser rejection, and parent/child delivery;
 - the Neon production migration was applied with normalized marked-DDL SHA-256
   `dd95ed3a5c55bf55d02090605a46557377778afb220126451bb4e750dbc280b2`
   (raw migration-file SHA-256 `8a6cb36aed985575fa797ab446481c89a1495c8d6d99a8024931cbda67674af5`), followed by successful
-  six-table/four-index read-back;
+  six-table/four-index read-back and an initial two-deployment/two-epoch/two-snapshot production
+  sync from `2026-08-19T20:38:39.397Z`;
+- public history returns full resolved/determined V7 and V6 E19 snapshots; both `verifiedProofs`
+  arrays are empty, so transaction-proof backfill is not claimed; the later run added resolved V7
+  E20 and re-synced V6 E19 without a duplicate row;
 - four V7 canary wagers of 0.1 GEN each were finalized and post-state verified: account A HIGH BTC
   `0x58f69072…c4fa`, account A LOW XRP `0xa6284710…5831`, account B HIGH ETH `0xc0d5401c…2a19`, and
   account B LOW BNB `0x80c1d306…7e9c`;
@@ -110,12 +118,15 @@ See [`AUDIT.md`](AUDIT.md), [`STUDIONET-V7.md`](STUDIONET-V7.md), and
 
 ## Truthful current status
 
-The V7 contract is deployed and its dedicated keeper rotation is complete, but the public app is not
-yet a fully verified V7 release:
+The V7 contract, dedicated keeper, workflow preflight, repeated state projection, and public V7
+cutover are complete, but this remains a StudioNet test-token release rather than a real-value
+production-safety claim:
 
-- Vercel production still points to V6;
-- Neon schema migration is complete, but initial/idempotent finalized-epoch ingestion is pending;
-- production scheduler activation/monitoring, live timeout evidence, and rollback rehearsal remain;
+- Vercel production targets V7 and retains readable, zero-known-liability V6 recovery;
+- Neon migration and repeated finalized-epoch projection are complete; transaction-proof backfill
+  and outage recovery remain;
+- production scheduler activation is proven; long-run monitoring, live timeout evidence, and
+  rollback rehearsal remain;
 - independent security and provider data-use/legal review remain.
 
 Observed StudioNet finalization has commonly been under one minute, but this is not an SLA. Reviewers
@@ -123,16 +134,21 @@ must be told that StudioNet is temporary test infrastructure and faucet GEN has 
 
 ## Submission completion checklist
 
-1. Verify initial and repeated idempotent finalized-epoch ingestion into the already migrated Neon
-   production schema.
-2. Deploy a V7 release candidate, verify all public routes and browser/wallet flows, and prove that
-   V6 recovery stays accessible while the app routes no new V6 writes; separately verify that the
-   retained owner creation capability remains unused.
-3. Activate the default-branch keeper workflow, verify its runtime signer, and monitor schedule
-   coverage and failures.
+1. Separately backfill and verify transaction proofs and rehearse database outage recovery.
+2. Continue public browser/wallet soak and prove that V6 recovery stays accessible while the app
+   routes no new V6 writes; monitor that the retained owner creation capability remains unused.
+3. Continue monitoring default-branch keeper/drain coverage and failures.
 4. Record a 24-hour timeout proof or clearly retain it as a known demo limitation.
 5. Complete independent security and provider/legal review, screenshots, demo video, repository
    cleanup, and rollback evidence.
 
-Until those gates pass, the correct claim is “deployed V7 StudioNet release candidate with V6 public
+Until those gates pass, the correct claim is “public V7 StudioNet test-token release with V6 recovery
 compatibility,” not “fully production-ready wagering application.”
+
+The verified code artifact before this evidence-only documentation refresh is commit
+`45be825084cce9e97579ca42266e318e2e97fe17`, successful CI run `32299866117`, and READY production
+deployment `dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3` at
+`https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app`. Bundle
+`market-DECrh0Dy.js` has SHA-256
+`d82c6975f0275add1e355a3d298a0170aae483f26788d4e9431a2a259cfe85ac`; health, readiness, and history
+health returned `200`. This evidence does not pretend the later docs-only commit was the tested source.

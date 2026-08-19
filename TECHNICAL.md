@@ -1,8 +1,8 @@
 # Liquidity Arena V7 technical architecture
 
 This document describes the deployed StudioNet V7 release target. V7 is finalized at
-`0xb2ae59aE641f571726Ae81E30080f8c2192b15EF`, but the public Vercel browser remains on V6 until the
-remaining controlled-cutover gates pass. The dedicated keeper rotation and funded V7 canary are
+`0xb2ae59aE641f571726Ae81E30080f8c2192b15EF`, and the public Vercel browser now targets V7 with V6
+legacy recovery retained. The dedicated keeper rotation and funded V7 canary are
 complete. The public app and automation do not create V6 epochs or route new V6 wagers; the deployed
 V6 owner capability
 still exists and must not be used. V6 remains available for legacy reads, claims, and eligible
@@ -16,7 +16,7 @@ permissionless resolve/timeouts.
 | Web/API service | Live exchange fan-out, bounded historical candles, same-origin StudioNet RPC adapter, health, readiness, caching, and rate limiting |
 | StudioNet V7 contract | Exact-hour schedule, test-GEN escrow, shared result, HIGH/LOW accounting, fees, refunds, claims, and authoritative history |
 | Limited keeper | Creates missing future epochs; may also invoke permissionless resolve/timeout methods, but has no owner or treasury powers |
-| Durable history projection | Neon-backed copy of settled public state for browsing and operations; production schema migration is applied, initial ingestion is pending, and it is never settlement authority |
+| Durable history projection | Neon-backed copy of settled public state for browsing and operations; migration plus repeated V7/V6 projection passed, proof backfill remains pending, and it is never settlement authority |
 
 GenLayer validators and the V7 contract are the settlement authority. The live stream, API cache,
 browser animation, keeper plan, and database projection cannot choose or alter a winner.
@@ -147,9 +147,11 @@ both exact post-states were verified OPEN. This proves the limited on-chain role
 workflow operation.
 
 The checked-in GitHub Actions workflow is configured for minutes 3 and 13 as a best-effort scheduler/
-watchdog; default-branch activation and runtime-signer evidence remain pending. Contract time, not
-cron, defines every gate. `resolve_epoch` and `activate_timeout_refund` remain permissionless, so
-scheduler loss cannot create an exclusive operator deadlock.
+watchdog. Scheduled run `32298454771` passed reconciliation but its independent history job hit the
+provider quota. Later workflow-dispatch run `32299468899` passed exact-profile/runtime-signer
+reconciliation with no actions and completed bounded history sync. Contract time, not cron, defines
+every gate. `resolve_epoch` and `activate_timeout_refund` remain permissionless, so scheduler loss
+cannot create an exclusive operator deadlock.
 
 Readiness shares the same deployment configuration as the server. For V7 it checks chain, contract
 identity, roles, stake and fee policy, exact-hour coverage, and all five live feeds. A V6 legacy
@@ -164,8 +166,12 @@ values replace the provisional display for that epoch.
 
 The 1H, 4H, 1D, and 1W views are rolling context and never reset with the wager epoch. The contract's
 paged epoch and wallet views are authoritative. The Neon production migration has been applied and
-its expected six tables and four indexes read back. Initial and repeated ingestion checks are still
-pending, so no document should yet claim populated durable database history is live.
+its expected six tables and four indexes read back. History job `96218806119` then synchronized two
+deployments, two E19 epochs, and two full snapshots from state read at
+`2026-08-19T20:38:39.397Z`. Public V7 and V6 records are resolved/determined; their `verifiedProofs`
+arrays are empty. A second successful run, `32300282482`, synchronized V7 E20 and overlapping V6
+E19 without duplication; public history now contains V7 E20/E19 and V6 E19. Projection repetition is
+proven, while proof backfill and outage recovery remain separate pending evidence.
 
 ## V6 compatibility boundary
 
@@ -206,6 +212,16 @@ remaining 0.002 GEN to treasury. Balances moved from 0.700/0.648/0.400 GEN befor
 0.800/0.946/0.002 after claims, to 0.802/0.946/0 after fee withdrawal; 1.748 GEN was conserved at
 each checkpoint.
 
+The verified code artifact immediately before this evidence-only documentation refresh is source
+commit `45be825084cce9e97579ca42266e318e2e97fe17`. CI run `32299866117` passed browser/operator job
+`96219707620` and intelligent-contracts job `96219707869`. Vercel deployment
+`dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3` is READY at
+`https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app` and serves the production
+alias. Bundle `market-DECrh0Dy.js` has SHA-256
+`d82c6975f0275add1e355a3d298a0170aae483f26788d4e9431a2a259cfe85ac`; health, readiness, and history
+health returned `200`. Readiness identified V7, two covered epochs, five feeds, and readable V6 with
+zero known player liability. The subsequent evidence-only docs commit is outside that code artifact.
+
 Observed StudioNet finality has been in the tens-of-seconds range, and an earlier V6 funded resolver
 was observed at 53.38 seconds record-to-finalized. These are samples for UX design only, not a bound
 or SLA. The application requires `FINALIZED`; it never treats `ACCEPTED` as settlement or payment
@@ -213,10 +229,9 @@ delivery.
 
 ## Current release gaps
 
-- default-branch V7 keeper workflow activation, runtime-signer proof, and monitoring;
-- initial and repeated settled-epoch ingestion verification after the applied Neon production
-  migration;
-- controlled Vercel V7 cutover with public browser/API checks and rollback rehearsal;
+- long-run V7 keeper and V6 drain workflow monitoring/alerting;
+- transaction-proof backfill and database-outage recovery after successful repeated Neon projection;
+- continued public browser/wallet soak plus a rollback rehearsal that never re-enables V6 writes;
 - live 24-hour timeout evidence and a documented safe boundary for asynchronous child failure;
 - independent contract/web/operations review and provider data-use/legal review.
 

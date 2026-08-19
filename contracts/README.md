@@ -118,8 +118,10 @@ per-epoch and per-asset results, objective pools, participant entries and claim 
 wallet-position pages, fee state, and total player liability. Page size is capped at 50.
 
 These views support fail-closed keeper/readiness checks and reconstruction without trusting emitted
-logs. The Neon schema migration is applied, but initial finalized-state ingestion remains pending.
-Any populated Neon history is a cache/projection rather than a replacement for these views.
+logs. The Neon schema migration and initial finalized-state ingestion passed for full V7 and V6 E19
+snapshots. A second production sync added V7 E20 and re-synced V6 E19 without duplication. All public
+`verifiedProofs` arrays remain empty. Neon history is a cache/projection rather than a replacement
+for these views.
 
 ## Verification requirements
 
@@ -150,7 +152,11 @@ resolution, three finalized claim-parent/EOA-child deliveries, expected loser re
 `0xbca440cc838e6d5dcb595e18124e363e0fa1780a498e3ce49703f9d822aa2fdc` and confirmed by exact
 `get_config` read-back. It then created epochs `1787256000` and `1787259600` through finalized
 transactions `0xe10ce0bf…a9c4` and `0x00398a3c…9058`; both post-states were verified OPEN.
-Default-branch scheduler activation and the public Vercel V7 cutover remain pending.
+Default-branch run `32299468899` then passed exact keeper/profile reconciliation with no actions and
+completed the initial bounded history sync; final observed run `32300282482` repeated both jobs
+successfully. The public Vercel alias now targets V7 through READY deployment
+`dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3`, verified from pre-documentation-refresh code commit
+`45be825084cce9e97579ca42266e318e2e97fe17`. Long-run monitoring and external review remain pending.
 
 See [`../docs/STUDIONET-V7.md`](../docs/STUDIONET-V7.md) and
 [`../deployments/studionet-v7.json`](../deployments/studionet-v7.json).

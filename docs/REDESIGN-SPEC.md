@@ -33,7 +33,7 @@ The release protocol is `LIQUIDITY_ARENA_V7` and the settlement policy is
 | Keeper privilege | Create fixed-terms epochs only |
 | Resolution/timeout | Permissionless |
 | Public hosting | Vercel browser and bounded API |
-| Durable history | Neon schema migrated; initial settled-state ingestion pending |
+| Durable history | Neon repeated V7/V6 projection live; transaction-proof backfill pending |
 
 ## 3. Canonical hourly model
 
@@ -155,7 +155,8 @@ recovery design remains required before real value.
 
 The owner key is never an automation credential. Dedicated encrypted keeper
 `0x12ba664a1ec9ca78b070d103c6a69e20673f4b51` is installed on-chain and configured for the scheduled
-workflow; default-branch runtime-signer proof and monitoring remain mandatory.
+workflow. Default-branch runtime-signer/profile preflight passed; long-run monitoring remains
+mandatory.
 
 ## 9. Visualization
 
@@ -186,9 +187,9 @@ V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is operationally drained: due ep
 automation paths expose no new V6 writes. The deployed owner-only creation capability remains and
 must not be used; legacy resolve/timeout/claim discoverability remains until liabilities are closed.
 
-The public Vercel site remains V6 until the remaining controlled-cutover gates pass. The dedicated
-keeper rotation and funded canary are complete. Cutover requires a verified V7 preview, public
-health/readiness/RPC/API/browser checks, and a tested immutable rollback.
+The public Vercel site now targets V7 and retains V6 legacy recovery. The dedicated keeper rotation,
+funded canary, exact public readiness, and code-artifact CI are complete. Browser/wallet soak and
+rollback discipline remain ongoing obligations.
 
 ## 11. Keeper and readiness
 
@@ -212,7 +213,7 @@ zero.
 
 Contract pages are authoritative for epochs, open work, wallet positions, claims, fees, and
 liability. The Neon production schema migration has been applied for a durable settled-epoch
-projection; initial ingestion remains pending. The projection must be:
+projection; initial production ingestion now contains V7 and V6 E19. The projection must be:
 
 - populated only from allowlisted deployments and finalized authoritative reads;
 - idempotent across repeated ingestion;
@@ -224,8 +225,9 @@ projection; initial ingestion remains pending. The projection must be:
 The applied migration has normalized marked-DDL SHA-256
 `dd95ed3a5c55bf55d02090605a46557377778afb220126451bb4e750dbc280b2` and raw migration-file SHA-256
 `8a6cb36aed985575fa797ab446481c89a1495c8d6d99a8024931cbda67674af5`; six tables and four indexes
-were read back. Until initial and repeated ingestion verification passes, populated durable history
-must be described as pending.
+were read back. Repeated production projection is live: public history contains V7 E20/E19 and V6
+E19 without duplicating overlapping V6 E19. Outage recovery and transaction-proof backfill remain
+pending; all current `verifiedProofs` arrays are empty.
 
 Monitor public health/readiness, exact-hour coverage, exchange source status, finality lag, keeper
 failures, role/config drift, parent/child delivery, V6 legacy liability, and history ingestion lag.
@@ -256,13 +258,15 @@ Tests and review must cover:
 - dedicated keeper rotation: complete—keeper `0x12ba664a1ec9ca78b070d103c6a69e20673f4b51`, finalized
   transaction `0xbca440cc838e6d5dcb595e18124e363e0fa1780a498e3ce49703f9d822aa2fdc`, exact config/repository
   address match, and encrypted environment secret names installed; two local keeper creates
-  `0xe10ce0bf…a9c4` and `0x00398a3c…9058` finalized with verified OPEN post-state, while default-branch
-  scheduled-run evidence remains pending;
+  `0xe10ce0bf…a9c4` and `0x00398a3c…9058` finalized with verified OPEN post-state, and default-branch
+  signer/profile evidence passed in reconcile job `96218469576`; long-run monitoring remains pending;
 - funded V7 canary: complete—resolution `0xc2c86fdb…ab66`, three exact claim deliveries, expected
   loser rejection, 1.748 GEN conserved, and exact 0.002 GEN fee withdrawal delivered;
 - Neon production migration: applied and six-table/four-index schema read-back passed; initial
-  ingestion pending;
-- public V7 cutover: pending.
+  and repeated two-deployment/two-epoch/two-snapshot sync plus public V7 E20/E19 and V6 E19 read-back
+  passed, while proof backfill remains pending;
+- public V7 cutover: complete—READY deployment `dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3` from verified code
+  commit `45be825084cce9e97579ca42266e318e2e97fe17`, with public readiness and legacy V6 read-back `200`.
 
 Observed StudioNet finality is not an SLA. The recorded deploy finalized in about 36 seconds, but the
 system always waits for actual finality rather than a timer.

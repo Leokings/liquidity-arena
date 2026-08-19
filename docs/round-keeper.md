@@ -182,9 +182,14 @@ history configuration skips only that projection job; a configured sync failure 
 history failure after reconciliation has already completed. Database availability or an ingest
 credential can therefore never prevent epoch creation, resolution, or timeout recovery.
 
-The scheduled workflow is not yet an active release guarantee: default-branch activation,
-runtime-signer proof, and monitoring remain pending even though dedicated keeper rotation is
-complete.
+Scheduled V7 run `32298454771` proved default-branch activation and reconciliation; its separate
+history job failed on the StudioNet provider quota. That projection incident did not invalidate the
+successful reconcile and was superseded by workflow-dispatch run `32299468899`: reconcile job
+`96218469576` passed exact profile/runtime-signer preflight with no actions required, and history job
+`96218806119` completed the bounded sync. Activation is proven; long-run scheduling/alert monitoring
+remains a release obligation. Final observed workflow-dispatch run `32300282482` on code commit
+`45be825084cce9e97579ca42266e318e2e97fe17` also passed reconcile job `96221017562` and history job
+`96221327115`.
 
 ## Monitoring and recovery
 
@@ -223,6 +228,9 @@ keeper signer cannot race its nonce across workflows. Retire the V6 workflow onl
 epoch is terminal, player liability is zero, and all legacy claims/timeouts remain independently
 discoverable and callable.
 
+Scheduled V6 drain run `32297047031` completed successfully. It used the limited signer and the
+drain-only path; it did not create a V6 epoch.
+
 Due V6 epochs `1787155200` and `1787158800` were resolved on 2026-08-19 by transactions
 `0xae0ce453…e1480` and `0x09f01c2a…e735`. An earlier pre-resolution observation left epochs
 `1787162400` and `1787166000` OPEN (RESOLVABLE and SCHEDULED respectively). Later drains resolved
@@ -238,5 +246,7 @@ discoverable.
 - The hosted RPC budget may change; reads are paged/paced and writes serialized.
 - Workflow concurrency is repository-scoped, not a distributed cross-provider lease.
 - External alert delivery and long-run soak evidence remain release work.
-- The Neon production schema is migrated, but initial/idempotent ingestion is pending. Once populated,
-  the projection improves discovery but does not replace on-chain reconciliation.
+- The Neon production schema and repeated V7/V6 snapshot ingestion are complete. Public rows cover
+  V7 E20/E19 and V6 E19 without a duplicate overlapping V6 row. Outage evidence remains pending,
+  and empty public `verifiedProofs` arrays mean transaction-proof backfill is not yet established.
+  The projection improves discovery but does not replace on-chain reconciliation.
