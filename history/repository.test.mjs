@@ -97,8 +97,13 @@ test('deployment and determined epoch writes are parameterized and snapshot is a
   await repository.upsertEpoch(epoch);
   assert.equal(calls.length, 2);
   assert.match(calls[0].text, /ON CONFLICT \(deployment_id\)/);
+  assert.equal(calls[0].params[0], deployment.deploymentId);
+  assert.equal(calls[0].params[4], deployment.addressKey);
+  assert.notEqual(calls[0].params[4], deployment.address);
   assert.match(calls[1].text, /WITH epoch_upsert AS/);
   assert.match(calls[1].text, /snapshot_upsert/);
   assert.doesNotMatch(calls[1].text, /198000000000000000/);
+  assert.equal(calls[1].params[0], deployment.deploymentId);
+  assert.equal(calls[1].params[3], deployment.addressKey);
   assert.equal(JSON.parse(calls[1].params[28]).length, 5);
 });

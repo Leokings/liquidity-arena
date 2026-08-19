@@ -54,6 +54,9 @@ test('StudioNet chain reader verifies 0xf22f and reads only allowlisted deployme
     },
   });
   const result = await chain.readDeployment(`studionet:${deployment.address}`, { maxEpochs: 1, startOffset: null });
+  assert.equal(result.deployment.address, deployment.address);
+  assert.equal(result.deployment.addressKey, deployment.address.toLowerCase());
+  assert.equal(result.deployment.deploymentId, `studionet:${deployment.address.toLowerCase()}`);
   assert.equal(result.epochCount, 1);
   assert.equal(result.epochs.length, 1);
   assert.equal(calls.some((call) => call.functionName === 'get_epoch_asset'), false);

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { loadHistoryChainConfiguration } from './config.mjs';
+import { deploymentManifest } from './deployment-manifest.mjs';
 
 const V6 = '0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1';
 const V7 = '0xb2Ae59aE641f571726Ae81E30080f8c2192b15EF';
@@ -34,6 +35,8 @@ test('history preserves StudioNet RPC address casing while freezing lowercase pe
   assert.equal(v7.address, V7);
   assert.equal(v7.addressKey, V7.toLowerCase());
   assert.equal(v7.deploymentId, `studionet:${V7.toLowerCase()}`);
+  assert.equal(deploymentManifest(v6).sourceMetadata.artifactMatched, true);
+  assert.equal(deploymentManifest(v7).sourceMetadata.artifactMatched, true);
   assert.equal(Object.isFrozen(v6), true);
   assert.equal(Object.isFrozen(v7), true);
 });
