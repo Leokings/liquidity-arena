@@ -1,8 +1,10 @@
 import {
+  assertFinalizedExecution,
   parseRawGenLayerTransactionResponse,
   verifyRawClaimChildTransaction,
   verifyRawClaimParentTransaction,
 } from '../market/genlayer-client.js';
+import { decodeGenLayerReceiptCall } from '../market/genlayer-receipt-call.js';
 import { HistoryError } from './errors.mjs';
 import { HISTORY_ASSETS, transactionHash } from './schema.mjs';
 
@@ -82,7 +84,10 @@ function rawFinalized(transaction, label) {
 }
 
 function receiptFinalized(receipt, label) {
-  const status = matchingAlias(receipt, ['statusName', 'status_name', 'status'], `${label} receipt status`, (value) => String(value).toUpperCase());
+  // StudioNet receipts expose `status` as a numeric lifecycle code and
+  // `status_name` as its canonical label. They are complementary fields, not
+  // aliases, so only compare the name variants here.
+  const status = matchingAlias(receipt, ['statusName', 'status_name'], `${label} receipt status`, (value) => String(value).toUpperCase());
   if (status !== FINALIZED) fail('HISTORY_PROOF', `${label} receipt is not FINALIZED.`);
   const execution = matchingAlias(
     receipt,
@@ -95,15 +100,30 @@ function receiptFinalized(receipt, label) {
   return execution || null;
 }
 
+function successfulExecutionReceipt(receipt, label) {
+  try {
+    assertFinalizedExecution(receipt);
+    return SUCCESS;
+  } catch (error) {
+    fail(
+      'HISTORY_PROOF',
+      `${label} receipt did not prove successful FINALIZED execution.`,
+      502,
+      error,
+    );
+  }
+}
+
 function receiptCall(receipt) {
-  const decoded = receipt?.txDataDecoded ?? receipt?.tx_data_decoded;
-  if (!decoded || decoded.type !== 'call' || !decoded.callData || typeof decoded.callData.method !== 'string'
-    || !Array.isArray(decoded.callData.args)) {
-    fail('HISTORY_PROOF', 'Finalized StudioNet transaction has no exact decoded contract call.');
+  let decoded;
+  try {
+    decoded = decodeGenLayerReceiptCall(receipt);
+  } catch (error) {
+    fail('HISTORY_PROOF', 'Finalized StudioNet transaction has no exact decoded contract call.', 502, error);
   }
   return Object.freeze({
-    method: decoded.callData.method,
-    args: Object.freeze(decoded.callData.args.map((value) => String(value))),
+    method: decoded.method,
+    args: Object.freeze(decoded.args.map((value) => String(value))),
   });
 }
 
@@ -479,7 +499,7 @@ export function createStudioNetHistoryChain({
       finalizedReceipt(hash, until),
     ]);
     rawFinalized(raw, 'transaction');
-    const executionResult = receiptFinalized(receipt, 'transaction');
+    const executionResult = successfulExecutionReceipt(receipt, 'transaction');
     if (request.assertedKind === 'DEPLOYMENT') {
       if (hash !== request.expectedDeploymentHash) {
         fail('HISTORY_PROOF', 'Deployment proof hash does not match the bundled deployment manifest.', 400);
