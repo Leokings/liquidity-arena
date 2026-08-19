@@ -107,3 +107,59 @@ test('deployment and determined epoch writes are parameterized and snapshot is a
   assert.equal(calls[1].params[3], deployment.addressKey);
   assert.equal(JSON.parse(calls[1].params[28]).length, 5);
 });
+
+test('public proof query keysets by hash and exposes the live fee parent without claiming treasury credit', async () => {
+  const calls = [];
+  const feeParent = '0x3df8d942bd9c5d699ee0d7816761ec5fd6264108d3a3e8bf3486c2c4f4fbb01f';
+  const treasuryChild = '0x566082ceef10482356f7aeac310098b7ece8f9c0a7e054eb1db718623602470e';
+  const cursorHash = `0x${'f'.repeat(64)}`;
+  const deployment = testDeployment();
+  const repository = createNeonHistoryRepository({
+    environment: { DATABASE_URL: 'postgresql://ignored.invalid/database' },
+    importDriver: async () => ({
+      neon: () => ({
+        async query(text, params) {
+          calls.push({ text, params });
+          return [{
+            transaction_hash: feeParent,
+            deployment_id: deployment.deploymentId,
+            deployment_alias: 'v7',
+            epoch_end_timestamp: null,
+            proof_kind: 'FEE_WITHDRAWAL',
+            method: 'withdraw_accrued_fees',
+            status: 'FINALIZED',
+            value_atto: '0',
+            value_credited: null,
+            parent_transaction_hash: null,
+            child_transaction_hashes: [],
+            verified_at: '2026-08-19T22:42:37.000Z',
+          }];
+        },
+      }),
+    }),
+  });
+
+  const proofs = await repository.listProofs({
+    deployment: 'v7',
+    cursor: { transactionHash: cursorHash },
+    limit: 1,
+  });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].text, /WHERE deployment_alias = \$1::text/);
+  assert.match(calls[0].text, /transaction_hash < \$2::text/);
+  assert.match(calls[0].text, /ORDER BY transaction_hash DESC/);
+  assert.doesNotMatch(calls[0].text, /\barguments\b|sender_address|recipient_address|proof_metadata|execution_result/);
+  assert.deepEqual(calls[0].params, ['v7', cursorHash, 2]);
+  assert.equal(proofs.length, 1);
+  assert.equal(proofs[0].transactionHash, feeParent);
+  assert.equal(proofs[0].epochEndTimestamp, null);
+  assert.equal(proofs[0].kind, 'FEE_WITHDRAWAL');
+  assert.equal(proofs[0].status, 'FINALIZED');
+  assert.equal(proofs[0].valueAtto, '0');
+  assert.equal(proofs[0].valueCredited, null);
+  assert.deepEqual(proofs[0].childTransactionHashes, []);
+  assert.equal(proofs[0].childTransactionHashes.includes(treasuryChild), false);
+  assert.equal(Object.hasOwn(proofs[0], 'proofMetadata'), false);
+  assert.equal(Object.hasOwn(proofs[0], 'senderAddress'), false);
+  assert.equal(Object.hasOwn(proofs[0], 'recipientAddress'), false);
+});

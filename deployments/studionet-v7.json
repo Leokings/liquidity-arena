@@ -85,7 +85,83 @@
       "latestReconcileStatus": "SUCCESS",
       "latestHistoryJobId": "96221327115",
       "latestHistoryStatus": "SUCCESS",
-      "longRunMonitoring": "PENDING"
+      "longRunMonitoring": "PENDING",
+      "receiptPropagationGrace": {
+        "mainCommit": "958e51743a821606ca78881e6bcc8fb0a34a8e8f",
+        "pullRequest": 5,
+        "finalityWaitAttempts": 7,
+        "outerBackoffSeconds": [5, 10, 20, 40, 80, 160],
+        "maximumOuterPropagationGraceSeconds": 315,
+        "sameRecordedHashOnly": true,
+        "writeResubmissionAllowed": false,
+        "ciRunId": "32310160397",
+        "browserAndOperatorJobId": "96251325751",
+        "intelligentContractsJobId": "96251325923",
+        "ciStatus": "SUCCESS",
+        "preGraceDelayedIndexingRuns": [
+          {
+            "workflowRunId": "32296977689",
+            "reconcileJobId": "96210458799",
+            "event": "workflow_dispatch",
+            "headCommit": "2adfdf4fbe9f61153440fecbf3b8c577248ec6b0",
+            "finalityWaitAttempts": 3,
+            "workflowConclusion": "FAILURE_RECEIPT_LOOKUP_EXHAUSTED",
+            "create": {
+              "epochEndTimestamp": 1787263200,
+              "transactionHash": "0xf364d4f20882bde3eb631807f3b8a2faa2a4c63cf073c1ed855285f99689d820",
+              "receiptStatusAfterRun": "FINALIZED",
+              "postState": "OPEN"
+            },
+            "resolve": {
+              "epochEndTimestamp": 1787169600,
+              "transactionHash": "0xfe55dd3f6a9790278f3f3b085fa37e1987f8d0620102a17fcc267a0158713e58",
+              "receiptStatusAfterRun": "FINALIZED",
+              "postState": "RESOLVED_DETERMINED"
+            }
+          },
+          {
+            "workflowRunId": "32303623792",
+            "reconcileJobId": "96231514481",
+            "event": "schedule",
+            "headCommit": "7b20566d4d6bcbbc5d5907a7bc492fd2fd34e4c3",
+            "finalityWaitAttempts": 3,
+            "workflowConclusion": "FAILURE_RECEIPT_LOOKUP_EXHAUSTED",
+            "create": {
+              "epochEndTimestamp": 1787266800,
+              "transactionHash": "0xec42622ac8b687ca1aae4b4de5e32340e9c8276a9c59a687bb16cb6fb4d340d6",
+              "receiptStatusAfterRun": "FINALIZED",
+              "postState": "OPEN"
+            },
+            "resolve": {
+              "epochEndTimestamp": 1787173200,
+              "transactionHash": "0x116d90cf18284604ad97068c71a32d23a3c40bb0d385cad92b6ca1fc5f5f07e8",
+              "receiptStatusAfterRun": "FINALIZED",
+              "postState": "RESOLVED_DETERMINED"
+            }
+          },
+          {
+            "workflowRunId": "32308534232",
+            "reconcileJobId": "96246468955",
+            "event": "schedule",
+            "headCommit": "7556d986542ceb07876aff5393957a414fcd2f98",
+            "finalityWaitAttempts": 6,
+            "workflowConclusion": "FAILURE_RECEIPT_LOOKUP_EXHAUSTED",
+            "create": {
+              "epochEndTimestamp": 1787270400,
+              "transactionHash": "0x9b754da2d9b85a847a25fa6a1d70b86ca1825045b06bde569b7d31c1fa08adc5",
+              "receiptStatusAfterRun": "FINALIZED",
+              "postState": "OPEN"
+            },
+            "resolve": {
+              "epochEndTimestamp": 1787176800,
+              "transactionHash": "0x520ff9af1b6b4e397617202f5715182c0b1cacf44cb66d6cca0a0d98f9c66be5",
+              "receiptStatusAfterRun": "FINALIZED",
+              "postState": "RESOLVED_DETERMINED"
+            }
+          }
+        ],
+        "firstLiveActionBearingScheduledRunEvidence": "PENDING"
+      }
     }
   },
   "configuration": {
@@ -106,6 +182,8 @@
     "fullDayLastEpochEndTimestamp": 1787252400,
     "fullDayFirstCreateTransactionHash": "0x7b94b2d0dc4d0970482e60a2cec1fc4d3c3bcf0592816e992b3acbc9474b7726",
     "fullDayFinalCreateTransactionHash": "0x443afcf771f1c5751bdc0e525b75b8d04e7378ef37bb7f817799f98f36c7677f",
+    "minimumRecordedEpochCount": 30,
+    "recordedWorkflowCreatedEpochCount": 3,
     "continuousAutomationActivation": "PASS_FIRST_SCHEDULED_RECONCILE_OBSERVED",
     "longRunAutomationSoak": "PENDING"
   },
@@ -289,7 +367,7 @@
       "deploymentAliases": ["v7", "v6"],
       "publicReadback": "PASS_FULL_RESOLVED_DETERMINED_SNAPSHOTS"
     },
-    "latestSuccessfulSyncEvidence": {
+    "preBackfillRepeatProjectionEvidence": {
       "workflowRunId": "32300282482",
       "sourceCommit": "45be825084cce9e97579ca42266e318e2e97fe17",
       "reconcileJobId": "96221017562",
@@ -316,10 +394,58 @@
       "supersededBySuccessfulRunId": "32299468899"
     },
     "repeatProjectionVerification": "PASS_NO_DUPLICATE_OVERLAPPING_V6_E19",
-    "verifiedProofBackfill": "NOT_RUN",
+    "verifiedProofBackfill": {
+      "status": "PASS",
+      "receiptVerifierFix": {
+        "mainCommit": "e5627ebd270a7c6d5291151795b0af6442eba0a6",
+        "pullRequest": 4,
+        "ciRunId": "32308815377",
+        "browserAndOperatorJobId": "96247333491",
+        "intelligentContractsJobId": "96247333299",
+        "ciStatus": "SUCCESS",
+        "acceptedReceiptShape": "STUDIONET_CONSENSUS_LEADER_RECEIPT",
+        "verificationMode": "FAIL_CLOSED_FINALIZED_SUCCESS"
+      },
+      "workflowRunId": "32309637237",
+      "jobId": "96249796253",
+      "workflowStatus": "SUCCESS",
+      "batchAProofsVerified": 6,
+      "batchBProofsVerified": 3,
+      "batchCProofsVerified": 2,
+      "proofsVerifiedTotal": 11,
+      "requestedProofsRejected": 0,
+      "publicReadback": {
+        "deploymentTransactionHash": "0x85ca7da5018aeac4955a9f10e035fe5013d520e5ea86ded43c89861ba96bc579",
+        "deploymentFinalityStatus": "FINALIZED",
+        "deploymentVerifiedAt": "2026-08-19T22:39:24.822Z",
+        "v7Epoch1787166000VerifiedProofCount": 9,
+        "v7Epoch1787166000ProofKinds": {
+          "CREATE_EPOCH": 1,
+          "WAGER": 4,
+          "RESOLVE_EPOCH": 1,
+          "CLAIM": 3
+        },
+        "v7Epoch1787166000AllStatuses": "FINALIZED",
+        "v7Epoch1787166000ClaimValueCredited": "PASS_ALL_THREE_WITH_ONE_CHILD_EACH",
+        "v7Epoch1787169600VerifiedProofCount": 0,
+        "v6Epoch1787166000VerifiedProofCount": 0
+      },
+      "feeWithdrawalParent": {
+        "transactionHash": "0x3df8d942bd9c5d699ee0d7816761ec5fd6264108d3a3e8bf3486c2c4f4fbb01f",
+        "status": "FINALIZED_PROOF_VERIFIED",
+        "epochEndTimestamp": null,
+        "publicEpochArrayMembership": false,
+        "reason": "withdraw_accrued_fees has no epoch argument; child delivery is separate monitor evidence"
+      }
+    },
     "publicSnapshotVerifiedProofCounts": {
-      "v7": 0,
-      "v6": 0
+      "v7": {
+        "1787169600": 0,
+        "1787166000": 9
+      },
+      "v6": {
+        "1787166000": 0
+      }
     }
   },
   "publicRelease": {
@@ -344,32 +470,35 @@
     "retiredOlderDeploymentCount": 6,
     "retiredOlderDeploymentsStatus": "DELETED",
     "v7Cutover": "PASS",
-    "verifiedCodeArtifactBeforeEvidenceOnlyDocumentationRefresh": {
-      "sourceCommit": "45be825084cce9e97579ca42266e318e2e97fe17",
+    "currentVerifiedProductionArtifact": {
+      "sourceAnchorCommit": "e5627ebd270a7c6d5291151795b0af6442eba0a6",
+      "sourceAnchorGitDirty": true,
+      "sourceAnchorScope": "Vercel CLI metadata records this merged commit and gitDirty=1; the bundle hash identifies the exact deployed browser artifact.",
       "ci": {
-        "runId": "32299866117",
+        "runId": "32308815377",
         "event": "push",
         "status": "SUCCESS",
-        "browserAndOperatorJobId": "96219707620",
+        "browserAndOperatorJobId": "96247333491",
         "browserAndOperatorStatus": "SUCCESS",
-        "intelligentContractsJobId": "96219707869",
+        "intelligentContractsJobId": "96247333299",
         "intelligentContractsStatus": "SUCCESS"
       },
       "vercel": {
-        "deploymentId": "dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3",
-        "deploymentUrl": "https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app",
+        "deploymentId": "dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi",
+        "deploymentUrl": "https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app",
         "productionAlias": "https://liquidity-arena.vercel.app",
+        "createdAt": "2026-08-19T22:36:29.189Z",
+        "readyAt": "2026-08-19T22:36:41.105Z",
         "status": "READY",
-        "bundleFile": "market-DECrh0Dy.js",
-        "bundleSha256": "d82c6975f0275add1e355a3d298a0170aae483f26788d4e9431a2a259cfe85ac",
+        "bundleFile": "market-BHlwjm1W.js",
+        "bundleSha256": "c0be752a9a1407e76a1f417256f220f068969fdcf80f88872683e33f2c96e79e",
         "healthzStatus": 200,
         "readyzStatus": 200,
         "historyHealthStatus": 200,
         "readyContractProtocol": "LIQUIDITY_ARENA_V7",
         "readyLegacyV6Readable": true,
         "readyLegacyV6PlayerLiabilityAtto": "0"
-      },
-      "scopeNote": "This code/CI/deployment evidence predates the evidence-only documentation refresh that records it."
+      }
     }
   },
   "verification": {
@@ -381,12 +510,15 @@
     "seededEpochCount": 25,
     "dedicatedKeeperCreatedEpochCount": 2,
     "dedicatedKeeperLimitedExecution": "PASS_TWO_FINALIZED_OPEN_EPOCHS",
-    "defaultBranchKeeperWorkflow": "PASS_PROFILE_SIGNER_AND_NO_ACTION_RECONCILE",
+    "defaultBranchKeeperWorkflow": "PASS_PROFILE_SIGNER_NO_ACTION_RECONCILE_AND_315_SECOND_GRACE_MERGED_LIVE_ACTION_PENDING",
     "legacyV6ScheduledDrainWorkflowRunId": "32297047031",
     "legacyV6ScheduledDrainWorkflow": "PASS",
-    "preDocumentationRefreshCiRunId": "32299866117",
-    "preDocumentationRefreshCi": "PASS_BOTH_JOBS",
-    "preDocumentationRefreshVercelDeployment": "PASS_READY_AND_PUBLIC_READINESS_200",
+    "currentReceiptVerifierCiRunId": "32308815377",
+    "currentReceiptVerifierCi": "PASS_BOTH_JOBS",
+    "currentVercelDeployment": "PASS_READY_AND_PUBLIC_READINESS_200",
+    "keeperReceiptGraceMainCommit": "958e51743a821606ca78881e6bcc8fb0a34a8e8f",
+    "keeperReceiptGraceCiRunId": "32310160397",
+    "keeperReceiptGraceCi": "PASS_BOTH_JOBS_LIVE_ACTION_BEARING_SCHEDULED_RUN_PENDING",
     "claimDeliveryMonitorDeploymentModes": ["v6", "v7"],
     "dedicatedKeeperRotation": "PASS_FINALIZED_AND_EXACT_CONFIG_READBACK",
     "fundedCanary": "PASS_SETTLED_DELIVERED_AND_FEE_WITHDRAWN"

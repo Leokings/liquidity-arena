@@ -9,10 +9,11 @@ are permissionless.
 
 This is a release audit ledger, not an independent external audit and not a production-safety
 certificate. The funded V7 canary and Neon production schema migration are complete, but
-long-run keeper/drain monitoring, durable-history proof backfill/outage recovery, the 24-hour live
-timeout path, and claim-child failure recovery remain incomplete gates. Dedicated keeper rotation,
-default-branch signer/profile preflight, repeated history projection, and public V7 cutover are
-complete.
+long-run keeper/drain monitoring, the first live action-bearing run under the merged receipt grace,
+durable-history outage recovery/broader proof coverage, the 24-hour live timeout path, and
+claim-child failure recovery remain incomplete gates. Dedicated keeper rotation, default-branch
+signer/profile preflight, repeated history projection, selected proof backfill, and public V7 cutover
+are complete.
 
 ## V7 deployment identity
 
@@ -64,10 +65,20 @@ The machine-readable evidence is in
   no actions;
 - history job `96218806119` in run `32299468899` synchronized two deployments, two epochs, and two
   full snapshots from state read at `2026-08-19T20:38:39.397Z`; public V7 and V6 E19 records are
-  resolved/determined, while both `verifiedProofs` arrays remain empty;
-- final observed run `32300282482` on main commit `45be825084cce9e97579ca42266e318e2e97fe17`
+  resolved/determined;
+- later successful workflow-dispatch run `32300282482` on main commit
+  `45be825084cce9e97579ca42266e318e2e97fe17`
   passed reconcile job `96221017562` and history job `96221327115`; public history then contained V7
   E20/E19 and V6 E19 without duplicating overlapping V6 E19, with `proofsVerified=0`;
+- StudioNet history receipt fix `e5627ebd270a7c6d5291151795b0af6442eba0a6` passed CI run
+  `32308815377` and reuses the fail-closed finalized consensus/leader receipt validator;
+- protected backfill run `32309637237`, job `96249796253`, passed all quota-spaced batches with 11
+  accepted and zero rejected proof requests: one deployment proof, nine V7 E19 epoch proofs, and one
+  epochless fee-withdrawal parent; public E19 read-back contains exactly one creation, four wagers,
+  one resolution, and three credited claim proofs;
+- keeper receipt-grace commit `958e51743a821606ca78881e6bcc8fb0a34a8e8f` passed CI run
+  `32310160397` and performs seven same-hash attempts with 315 seconds of outer backoff and no write
+  resubmission; its first live action-bearing scheduled-run evidence remains pending;
 - scheduled legacy V6 drain run `32297047031` completed successfully without any creation action;
 - the dual-deployment browser registry is designed to allow only V7 new writes and V6 legacy
   reads/resolves/timeouts/claims, with explicit deployment aliases rather than arbitrary addresses;
@@ -77,9 +88,12 @@ The machine-readable evidence is in
   `dd95ed3a5c55bf55d02090605a46557377778afb220126451bb4e750dbc280b2`
   (raw migration-file SHA-256 `8a6cb36aed985575fa797ab446481c89a1495c8d6d99a8024931cbda67674af5`)
   was applied, and six expected tables plus four expected indexes were read back;
-- pre-documentation-refresh CI run `32299866117` passed browser/operator job `96219707620` and
-  intelligent-contracts job `96219707869`; READY deployment `dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3`
-  served that exact code artifact with public health/readiness/history-health `200`;
+- CI run `32308815377` passed browser/operator job `96247333491` and intelligent-contracts job
+  `96247333299`; READY deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` serves the production alias
+  with public health/readiness/history-health `200`; Vercel metadata anchors it to
+  `e5627ebd270a7c6d5291151795b0af6442eba0a6` and records `gitDirty=1`, while exact browser artifact
+  identity is bundle `market-BHlwjm1W.js` SHA-256
+  `c0be752a9a1407e76a1f417256f220f068969fdcf80f88872683e33f2c96e79e`;
 - the funded V7 canary for epoch `1787166000` completed with finalized resolution
   `0xc2c86fdb37da9569e67eae00a15b6864ddab05364e92f4d6c0c4c75d6a4aab66`, expected settlement modes,
   three exact participant claim deliveries, loser rejection, balance conservation, and exact fee
@@ -156,7 +170,9 @@ is fully retired.
 The dedicated encrypted keeper is installed, its on-chain role was finalized/read back, the GitHub
 configuration matches, and default-branch signer/profile preflight passed. Continue scheduled-run
 soak, prove no owner key or owner-capable keystore is available to automation, and add alerts for
-coverage, source quorum, finality, history quota failures, and role drift.
+coverage, source quorum, finality, history quota failures, and role drift. Seven-attempt/315-second
+same-hash receipt polling is merged and CI-tested, but the first live action-bearing scheduled run
+under it is explicitly pending.
 
 ### P1 — asynchronous child failure has no safe retry
 
@@ -167,20 +183,20 @@ recovery.
 
 ### P1 — public cutover completed; soak and rollback discipline remain
 
-The verified code artifact before this evidence-only documentation refresh is source
-`45be825084cce9e97579ca42266e318e2e97fe17`, CI run `32299866117`, and READY Vercel deployment
-`dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3` at
-`https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app`. The public alias targets V7;
-health/readiness/history-health returned `200`, V6 remained readable with zero known liability, and
-the previous V6 compatibility deployment remains a rollback artifact. Continue browser/wallet soak
-and ensure rollback never reactivates V6 round creation.
+Current READY Vercel deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` is live at
+`https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app`. Its metadata source anchor
+is `e5627ebd270a7c6d5291151795b0af6442eba0a6` with `gitDirty=1`; the exact browser bundle/hash is
+recorded above. The public alias targets V7, health/readiness/history-health returned `200`, V6
+remained readable with zero known liability, and the previous V6 compatibility deployment remains a
+rollback artifact. Continue browser/wallet soak and ensure rollback never reactivates V6 creation.
 
-### P2 — durable history proof backfill and outage recovery are pending
+### P2 — durable history outage recovery and broader proof coverage are pending
 
 The Neon migration/schema read-back and two bounded production syncs passed. Public history now
 contains full V7 E20/E19 and V6 E19 determined snapshots with no duplicate overlapping V6 E19 row.
-Access-control/outage recovery and transaction-proof backfill still require verification. Empty
-`verifiedProofs` arrays must not be described as backfilled transaction proof or as an oracle.
+Selected proof backfill passed: V7 E19 contains nine finalized proofs, while its deployment proof and
+epochless fee parent are stored separately. Access-control/outage recovery and proof coverage beyond
+that selected set still require verification. No projection record may be described as an oracle.
 
 ### P2 — operational and external reviews remain
 
@@ -197,7 +213,7 @@ Before submission, record fresh results for:
 - preservation/review of the funded V7 canary and claim-child evidence;
 - V6 legacy liability/read/resolve/timeout/claim verification, public-write gating, and owner
   abstention monitoring;
-- Neon explicit proof backfill and outage recovery against the migrated, repeatedly populated schema;
+- Neon outage recovery and extended proof coverage against the migrated, repeatedly populated schema;
 - public Vercel health, readiness, same-origin RPC, exchange stream, CSP, console, wallet, history,
   and rollback checks;
 - an independent security report and closure of all critical/high findings.

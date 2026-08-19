@@ -26,9 +26,12 @@ confirmed the new role. Acting as that keeper locally then created epochs `17872
 `1787259600`; transactions `0xe10ce0bf…a9c4` and `0x00398a3c…9058` finalized and both exact
 post-states were verified OPEN. The default-branch keeper is active: scheduled run `32298454771`
 passed reconciliation, and later run `32299468899` passed both no-action reconciliation and bounded
-history synchronization. Final observed run `32300282482` also passed reconciliation and history
-sync on source commit `45be825084cce9e97579ca42266e318e2e97fe17`. Long-run monitoring remains
-pending.
+history synchronization. Later verified no-action run `32300282482` also passed reconciliation and history
+sync. Later action-bearing scheduled attempts exposed delayed StudioNet receipt indexing. Main
+commit `958e51743a821606ca78881e6bcc8fb0a34a8e8f` now polls the same recorded transaction hash seven
+times with 5/10/20/40/80/160-second outer delays (315 seconds total) and never resubmits the write;
+CI run `32310160397` passed. The first live action-bearing scheduled run exercising this exact grace
+remains explicitly pending, as does long-run monitoring.
 
 The public site at [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app) now targets V7.
 V6 at
@@ -43,24 +46,25 @@ epochs `1787162400` and `1787166000` with transactions `0x03f2ac80…0399` and `
 | Surface | Current state |
 | --- | --- |
 | V7 contract | Deployed and finalized on StudioNet |
-| V7 hourly coverage | 27 exact-hour epochs evidenced: initial canary plus 24 full-day targets and 2 dedicated-keeper creates |
+| V7 hourly coverage | At least 30 exact-hour epochs evidenced: 25 seeded targets, 2 local dedicated-keeper creates, and 3 workflow-created epochs; automation continues beyond this snapshot |
 | V7 funded canary | Complete: settlement, three claim deliveries, loser rejection, conservation, and fee withdrawal verified |
 | Dedicated V7 keeper rotation | Complete: finalized on-chain and exact config/repository address verified |
-| V7 keeper workflow | Active: scheduled reconcile observed and later full workflow run passed; long-run soak pending |
+| V7 keeper workflow | Active; seven-attempt/315-second same-hash receipt grace is merged and tested, while its first live action-bearing scheduled run and long-run soak remain pending |
 | Public Vercel browser | V7 active and READY; V6 legacy recovery remains readable with zero known liability |
 | V6 | Public app/automation new writes disabled; owner creation capability remains and must not be used |
-| Durable settled-epoch history | Initial and repeated production sync/read-back passed; V7 E20/E19 and V6 E19 are live, proof backfill pending |
+| Durable settled-epoch history | Repeated production projection and selected proof backfill passed; V7 E19 exposes 9 finalized proofs, while outage recovery and broader proof coverage remain pending |
 
-The verified V7 code artifact immediately before this evidence-only documentation refresh is Vercel
-deployment `dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3`
-([immutable URL](https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app)), built from
-commit `45be825084cce9e97579ca42266e318e2e97fe17`. Bundle `market-DECrh0Dy.js` has SHA-256
-`d82c6975f0275add1e355a3d298a0170aae483f26788d4e9431a2a259cfe85ac`. Vercel reports READY; both
+The current production artifact is Vercel deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi`
+([immutable URL](https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app)). Vercel
+metadata anchors the CLI deployment to merged StudioNet receipt-proof fix
+`e5627ebd270a7c6d5291151795b0af6442eba0a6` but also records `gitDirty=1`, so that commit is an
+anchor rather than a byte-identical source claim. The exact served browser bundle
+`market-BHlwjm1W.js` has SHA-256
+`c0be752a9a1407e76a1f417256f220f068969fdcf80f88872683e33f2c96e79e`. Vercel reports READY; both
 immutable URL and public alias returned `200` readiness for V7, five feeds, keeper coverage, and
 readable zero-liability V6 compatibility. `/healthz` and `/api/history-health` also returned `200`.
-CI run `32299866117` passed browser/operator job `96219707620` and intelligent-contracts job
-`96219707869` for that exact source. The later documentation commit is not falsely treated as the
-source of this tested code artifact. V6 compatibility deployment `dpl_DQEvnGup417wvTxuxzeNfJvySiM5`
+CI run `32308815377` passed browser/operator job `96247333491` and intelligent-contracts job
+`96247333299` for the source anchor. V6 compatibility deployment `dpl_DQEvnGup417wvTxuxzeNfJvySiM5`
 remains a READY rollback artifact.
 
 The 24-target full-day seed covers epoch IDs `1787169600` through `1787252400`. Its first and final
@@ -191,9 +195,10 @@ Do not use the owner key for routine scheduling. See [the V7 keeper runbook](doc
 After public V7 cutover:
 
 1. keep V6 legacy reads/claims available and retain a tested rollback without re-enabling V6 writes;
-2. separately backfill and verify transaction proofs; recurring state projection intentionally
-   reports zero verified proofs today;
-3. monitor repeated scheduled keeper/drain runs, history quota behavior, and alerting;
+2. rehearse database outage/recovery and extend transaction-proof coverage beyond the selected V7
+   deployment/canary/fee evidence;
+3. capture the first live action-bearing scheduled run under the seven-attempt receipt grace, then
+   continue keeper/drain, history-quota, and alerting soak;
 4. complete timeout evidence, independent security review, browser/wallet soak, and provider
    data-use/legal review.
 
@@ -203,9 +208,18 @@ two full E19 snapshots. Later run `32300282482`, reconcile job `96221017562` and
 `2026-08-19T20:47:19.912Z` synchronized two deployments, two epochs, and two snapshots with
 `proofsVerified=0`. Public history now has V7 E20 (`1787169600`) plus V7 E19 and V6 E19; all three
 are resolved/determined with no duplicate V6 E19 row. This proves repeated projection behavior but
-not transaction-proof backfill. Earlier scheduled run `32298454771` had successful reconciliation
-while its history job hit the StudioNet provider quota; later bounded syncs supersede that incident.
-Scheduled V6 drain run `32297047031` also passed.
+was not itself transaction-proof backfill. Merged fix
+`e5627ebd270a7c6d5291151795b0af6442eba0a6` taught the fail-closed verifier to accept StudioNet's
+finalized consensus/leader receipt shape. Manual protected run `32309637237`, job `96249796253`,
+then completed all quota-spaced batches with 6, 3, and 2 verified proofs and zero rejected requests.
+The 11 accepted records comprise one deployment proof, nine V7 E19 epoch proofs (one creation, four
+wagers, one resolution, and three credited claims), and the epochless fee-withdrawal parent. Public
+history exposes exactly those nine E19 proofs; V7 E20 and V6 E19 remain at zero because they were not
+part of this selected backfill. The fee parent is correctly absent from an epoch array because
+`withdraw_accrued_fees` has no epoch argument; its child-delivery monitor remains the stronger
+delivery evidence. Database outage recovery is still pending. Earlier scheduled run `32298454771`
+had successful reconciliation while its history job hit the StudioNet provider quota; later bounded
+syncs supersede that incident. Scheduled V6 drain run `32297047031` also passed.
 
 StudioNet finality has been observed in tens of seconds, including finalized transactions in under a
 minute, but these samples are not a bound or service-level promise. Claims never unlock at
@@ -217,6 +231,7 @@ minute, but these samples are not a bound or service-level promise. Claims never
 - [Technical architecture](TECHNICAL.md)
 - [Contract requirements](contracts/README.md)
 - [Keeper runbook](docs/round-keeper.md)
+- [Public durable-history API](docs/HISTORY-API.md)
 - [Security model](SECURITY.md)
 - [Audit status](docs/AUDIT.md)
 - [Submission status](docs/SUBMISSION-TECH.md)

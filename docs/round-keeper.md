@@ -187,14 +187,23 @@ history job failed on the StudioNet provider quota. That projection incident did
 successful reconcile and was superseded by workflow-dispatch run `32299468899`: reconcile job
 `96218469576` passed exact profile/runtime-signer preflight with no actions required, and history job
 `96218806119` completed the bounded sync. Activation is proven; long-run scheduling/alert monitoring
-remains a release obligation. Final observed workflow-dispatch run `32300282482` on code commit
+remains a release obligation. Later verified workflow-dispatch run `32300282482` on code commit
 `45be825084cce9e97579ca42266e318e2e97fe17` also passed reconcile job `96221017562` and history job
 `96221327115`.
+
+Scheduled action-bearing runs later exposed a StudioNet gateway interval in which a submitted hash
+was authoritative but its receipt was not yet indexed. Main commit
+`958e51743a821606ca78881e6bcc8fb0a34a8e8f` (PR #5) now performs seven finality lookups against that
+same recorded hash, with 5/10/20/40/80/160-second outer delays (315 seconds total), and never
+resubmits the write. CI run `32310160397` passed both jobs. This is code/test evidence only: the first
+live action-bearing scheduled run exercising this seven-attempt policy remains explicitly pending.
 
 ## Monitoring and recovery
 
 - A known transaction hash is the recovery key. Inspect that exact hash and post-state before
   considering another action.
+- Receipt-index propagation retries must use the same recorded hash; they must never submit a second
+  write merely because StudioNet temporarily returns `transaction not found`.
 - Never treat `ACCEPTED` as complete; wait for `FINALIZED` and successful execution.
 - Epoch creation is idempotently rejected if already present. Resolve/timeout are rejected once the
   epoch is terminal.
@@ -247,6 +256,8 @@ discoverable.
 - Workflow concurrency is repository-scoped, not a distributed cross-provider lease.
 - External alert delivery and long-run soak evidence remain release work.
 - The Neon production schema and repeated V7/V6 snapshot ingestion are complete. Public rows cover
-  V7 E20/E19 and V6 E19 without a duplicate overlapping V6 row. Outage evidence remains pending,
-  and empty public `verifiedProofs` arrays mean transaction-proof backfill is not yet established.
-  The projection improves discovery but does not replace on-chain reconciliation.
+  V7 E20/E19 and V6 E19 without a duplicate overlapping V6 row. Protected run `32309637237` verified
+  one deployment proof, nine V7 E19 epoch proofs, and the epochless fee-withdrawal parent with zero
+  rejected requests. V7 E20 and V6 E19 remain at zero selected epoch proofs. Outage evidence and
+  broader proof coverage remain pending; the projection improves discovery but does not replace
+  on-chain reconciliation.

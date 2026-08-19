@@ -176,6 +176,16 @@ function decodeCursor(value, view) {
     if (!/^studionet:0x[0-9a-f]{40}$/.test(deploymentId)) fail('HISTORY_CURSOR', 'Deployment cursor is invalid.');
     return Object.freeze({ deploymentId });
   }
+  if (view === 'proofs') {
+    exactKeys(parsed, ['version', 'view', 'deploymentFilter', 'transactionHash'], 'proof cursor');
+    const deploymentFilter = String(parsed.deploymentFilter || '').toLowerCase();
+    if (parsed.version !== 1 || parsed.view !== 'proofs' || !DEPLOYMENT_SET.has(deploymentFilter)) {
+      fail('HISTORY_CURSOR', 'Proof cursor context is invalid.');
+    }
+    const hash = String(parsed.transactionHash || '').toLowerCase();
+    if (!HASH.test(hash)) fail('HISTORY_CURSOR', 'Proof cursor transaction hash is invalid.');
+    return Object.freeze({ transactionHash: hash, deploymentFilter });
+  }
   exactKeys(parsed, ['version', 'view', 'deploymentFilter', 'epochEndTimestamp', 'deploymentId'], 'epoch cursor');
   if (parsed.version !== 1 || parsed.view !== 'epochs') fail('HISTORY_CURSOR', 'Epoch cursor context is invalid.');
   const epochEndTimestamp = decimalInteger(parsed.epochEndTimestamp, 'cursor epoch', { positive: true });
@@ -190,6 +200,9 @@ export function encodeHistoryCursor(value, view = 'epochs', deploymentFilter = n
   if (!value) return null;
   if (view === 'deployments') {
     return base64Cursor({ view, deploymentFilter: null, deploymentId: value.deploymentId });
+  }
+  if (view === 'proofs') {
+    return base64Cursor({ view, deploymentFilter, transactionHash: value.transactionHash });
   }
   return base64Cursor({
     epochEndTimestamp: String(value.epochEndTimestamp),
@@ -208,17 +221,20 @@ export function parsePublicHistoryQuery(requestUrl) {
     }
   }
   const view = String(url.searchParams.get('view') || 'epochs').toLowerCase();
-  if (!['epochs', 'deployments'].includes(view)) fail('HISTORY_QUERY', 'History view must be epochs or deployments.');
+  if (!['epochs', 'deployments', 'proofs'].includes(view)) {
+    fail('HISTORY_QUERY', 'History view must be epochs, deployments, or proofs.');
+  }
   const rawDeployment = String(url.searchParams.get('deployment') || '').toLowerCase();
   const deployment = rawDeployment || null;
   if (deployment && !DEPLOYMENT_SET.has(deployment)) fail('HISTORY_QUERY', 'History deployment must be v6 or v7.');
   if (view === 'deployments' && deployment) fail('HISTORY_QUERY', 'Deployment history does not accept a deployment filter.');
+  if (view === 'proofs' && !deployment) fail('HISTORY_QUERY', 'Proof history requires a deployment filter.');
   const rawLimit = url.searchParams.get('limit');
   const limit = rawLimit === null
     ? 20
     : boundedInteger(rawLimit, 'history limit', { minimum: 1, maximum: HISTORY_MAX_PUBLIC_PAGE });
   const cursor = decodeCursor(url.searchParams.get('cursor'), view);
-  if (cursor && view === 'epochs' && cursor.deploymentFilter !== deployment) {
+  if (cursor && view !== 'deployments' && cursor.deploymentFilter !== deployment) {
     fail('HISTORY_CURSOR', 'History cursor does not match the deployment filter.');
   }
   return Object.freeze({ view, deployment, limit, cursor });

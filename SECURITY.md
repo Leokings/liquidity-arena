@@ -7,9 +7,10 @@ The active review target is `LIQUIDITY_ARENA_V7` at
 `CRYPTO_SPOT_1M_MEDIAN_V1`. Contract lint and direct tests have passed, and the complete V7 canary
 proved finalized resolution, refund/payout delivery, loser rejection, liability conservation, and
 fee withdrawal. Dedicated keeper rotation, default-branch scheduler preflight, and initial durable
-history ingestion, repeated projection, and public browser cutover are complete; long-run monitoring,
-transaction-proof backfill/outage recovery, and an independent security review remain release gates. The payment path must not be
-described as production-ready.
+history ingestion, repeated projection, selected V7 proof backfill, and public browser cutover are
+complete. Long-run monitoring, the first live action-bearing scheduled run under the merged receipt
+grace, database-outage recovery, broader proof coverage, and an independent security review remain
+release gates. The payment path must not be described as production-ready.
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is a legacy liability surface only. It remains readable
 and claimable for existing positions; supported public app and automation paths must not use it for
@@ -101,6 +102,11 @@ Every keeper invocation must fail closed unless chain, protocol, policy, source 
 fee, stake limits, owner, keeper, treasury, and signer all match. The signer is rechecked immediately
 before each submission. Writes are serialized and bounded, hashes captured immediately, and success
 requires exact receipt identity, `FINALIZED`, successful execution, and matching post-state.
+StudioNet receipt indexing may lag broadcast. Main commit
+`958e51743a821606ca78881e6bcc8fb0a34a8e8f` therefore retries finality lookup seven times against the
+same recorded hash with 5/10/20/40/80/160-second outer delays (315 seconds total); it never
+resubmits a write. CI passed, but the first live action-bearing scheduled run using that exact policy
+is still pending.
 
 GitHub cron is best-effort. It does not define epoch time and is not an availability guarantee.
 Permissionless resolution and timeout reduce operator lock-in, but monitoring must still alert on
@@ -127,9 +133,13 @@ tables/four indexes were read back without exposing connection or ingestion secr
 must retain chain, contract, epoch, and finalized transaction identity, be idempotently ingested, and
 remain replaceable from authoritative chain reads. Initial production sync/read-back populated full
 resolved, determined V7 and V6 snapshots for epoch `1787166000`; a later sync added V7 E20 and
-re-synced V6 E19 without duplication. Outage recovery remains pending. Public `verifiedProofs` arrays are empty, so transaction-proof
-backfill must not be claimed. Database availability can affect discovery, never settlement or claim
-eligibility.
+re-synced V6 E19 without duplication. Merged fail-closed receipt fix
+`e5627ebd270a7c6d5291151795b0af6442eba0a6` and protected workflow `32309637237` then verified 11
+selected records with zero rejections. Public V7 E19 exposes nine finalized proofs—one creation,
+four wagers, one resolution, and three credited claims—while the deployment proof and epochless fee
+parent are stored outside that epoch array. V7 E20 and V6 E19 remain at zero because they were not
+part of the selected backfill. Database outage recovery and broader proof coverage remain pending.
+Database availability can affect discovery, never settlement or claim eligibility.
 
 ## Remaining security gates
 
@@ -143,17 +153,21 @@ After the V7 public cutover:
    math, loser rejection, conserved balances, and finalized parent/child deliveries;
 5. verify V6 legacy reads, resolve/timeout, and claims while proving public app/automation V6 writes
    remain disabled and the retained owner creation capability is monitored and unused;
-6. backfill transaction proofs separately from recurring projection and complete a rollback/outage
+6. extend transaction-proof coverage beyond the selected V7 evidence and complete a rollback/outage
    rehearsal;
 7. test outage, delayed finality, restart, rate limit, and the independent 24-hour timeout path;
 8. finish provider data-use and applicable legal review.
 
 The earlier V6 funded round is valuable regression evidence, not a substitute for the V7 canary.
-The current Vercel production site targets V7. Pre-documentation-refresh code artifact
-`dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3` is READY from source
-`45be825084cce9e97579ca42266e318e2e97fe17`; its public `/readyz` returned `200` with the exact V7
-roles/policy, future coverage, five feeds, and readable zero-liability V6 recovery. The earlier V6
-compatibility deployment remains a rollback artifact, but rollback must never re-enable V6 writes.
+The current Vercel production site targets V7. Deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` is
+READY at `https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app`; its public
+`/readyz` returned `200` with the exact V7 roles/policy, future coverage, five feeds, and readable
+zero-liability V6 recovery. Vercel metadata anchors it to merged receipt-proof commit
+`e5627ebd270a7c6d5291151795b0af6442eba0a6` and records `gitDirty=1`; bundle
+`market-BHlwjm1W.js` with SHA-256
+`c0be752a9a1407e76a1f417256f220f068969fdcf80f88872683e33f2c96e79e` is the exact browser artifact
+identity. The earlier V6 compatibility deployment remains a rollback artifact, but rollback must
+never re-enable V6 writes.
 
 ## Reporting
 

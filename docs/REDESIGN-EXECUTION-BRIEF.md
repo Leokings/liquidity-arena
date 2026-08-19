@@ -23,7 +23,7 @@ A checked box must be backed by reproducible local output or immutable StudioNet
 | Resolve / timeout | Permissionless at `E+120s` / `E+24h` |
 | Scheduled privilege | Fixed-terms epoch creation only |
 | Public host | Vercel |
-| Durable history | Neon repeated V7/V6 projection live; transaction-proof backfill pending |
+| Durable history | Neon repeated V7/V6 projection and selected V7 proof backfill live; outage recovery and broader proof coverage pending |
 
 V6 remains only for old reads, permissionless resolve/timeouts, and claims.
 This is an application/automation policy: the deployed V6 owner creation capability still exists and
@@ -187,10 +187,14 @@ Live production completion remains:
 - [x] repeat the same sync and prove production idempotency;
 - [x] verify populated public reads for V7 and V6 E19;
 - [ ] verify database-outage recovery behavior;
-- [ ] backfill and verify transaction proofs separately from recurring state projection.
+- [x] backfill and verify the selected V7 deployment/canary/fee transaction proofs separately from
+      recurring state projection;
+- [ ] extend proof coverage beyond the selected evidence set.
 
 Until the remaining checks pass, documentation and UI must distinguish live repeated settled-state
-projection from pending outage and proof-backfill evidence. Current `verifiedProofs` arrays are empty.
+projection from pending outage/broader-proof evidence. Protected run `32309637237` accepted 11
+selected records with zero rejections; public V7 E19 contains nine finalized epoch proofs, while its
+deployment proof and epochless fee parent are stored separately.
 
 Applied migration ID: `aa7617fa-bfa7-4d48-9b30-f60afeda43a1`. Normalized marked-DDL SHA-256:
 `dd95ed3a5c55bf55d02090605a46557377778afb220126451bb4e750dbc280b2`. Raw migration-file SHA-256:
@@ -221,12 +225,12 @@ Cutover procedure:
 6. [x] promote V7 while retaining V6 recovery;
 7. [x] verify production health/readiness/history-health and exact deployment identity;
 
-Vercel production now targets V7. The verified code artifact immediately before this evidence-only
-documentation refresh is source `45be825084cce9e97579ca42266e318e2e97fe17`, successful CI run
-`32299866117`, and READY deployment `dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3` at
-`https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app`. Bundle
-`market-DECrh0Dy.js` has SHA-256
-`d82c6975f0275add1e355a3d298a0170aae483f26788d4e9431a2a259cfe85ac`; health/readiness/history
+Vercel production now targets V7 through READY deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` at
+`https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app`. Vercel metadata anchors it
+to merged receipt-proof commit `e5627ebd270a7c6d5291151795b0af6442eba0a6` and records
+`gitDirty=1`; exact browser artifact `market-BHlwjm1W.js` has SHA-256
+`c0be752a9a1407e76a1f417256f220f068969fdcf80f88872683e33f2c96e79e`. CI run `32308815377` passed
+both jobs; health/readiness/history
 health returned `200`, and V6 remained readable with zero known liability. Deployment
 `dpl_DQEvnGup417wvTxuxzeNfJvySiM5` remains the prior V6 rollback artifact.
 
@@ -258,13 +262,15 @@ Required artifacts:
 
 The V7 contract, initial full-day schedule, funded canary, dedicated keeper rotation, default-branch
 scheduler preflight, repeated Neon state projection, and public V7 promotion are complete. The
-release still needs proof backfill/outage evidence, timeout evidence, monitoring, and independent
-reviews.
+selected proof backfill is also complete. The release still needs outage/broader-proof evidence,
+the first live action-bearing scheduled run under merged seven-attempt/315-second receipt grace,
+timeout evidence, monitoring, and independent reviews.
 
 The next safe sequence is:
 
-1. separately backfill transaction proofs and rehearse database outage recovery;
-2. continue scheduled keeper/drain monitoring and alerting;
+1. extend transaction-proof coverage and rehearse database outage recovery;
+2. capture the first live action-bearing scheduled run under the merged receipt grace, then continue
+   keeper/drain monitoring and alerting;
 3. continue public browser/wallet soak with V6 legacy recovery;
 4. rehearse rollback without re-enabling V6 writes;
 5. finish operational/external review and submission media.

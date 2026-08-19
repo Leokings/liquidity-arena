@@ -16,7 +16,7 @@ permissionless resolve/timeouts.
 | Web/API service | Live exchange fan-out, bounded historical candles, same-origin StudioNet RPC adapter, health, readiness, caching, and rate limiting |
 | StudioNet V7 contract | Exact-hour schedule, test-GEN escrow, shared result, HIGH/LOW accounting, fees, refunds, claims, and authoritative history |
 | Limited keeper | Creates missing future epochs; may also invoke permissionless resolve/timeout methods, but has no owner or treasury powers |
-| Durable history projection | Neon-backed copy of settled public state for browsing and operations; migration plus repeated V7/V6 projection passed, proof backfill remains pending, and it is never settlement authority |
+| Durable history projection | Neon-backed copy of settled public state for browsing and operations; migration, repeated V7/V6 projection, and selected V7 proof backfill passed, outage recovery and broader proof coverage remain pending, and it is never settlement authority |
 
 GenLayer validators and the V7 contract are the settlement authority. The live stream, API cache,
 browser animation, keeper plan, and database projection cannot choose or alter a winner.
@@ -168,10 +168,14 @@ The 1H, 4H, 1D, and 1W views are rolling context and never reset with the wager 
 paged epoch and wallet views are authoritative. The Neon production migration has been applied and
 its expected six tables and four indexes read back. History job `96218806119` then synchronized two
 deployments, two E19 epochs, and two full snapshots from state read at
-`2026-08-19T20:38:39.397Z`. Public V7 and V6 records are resolved/determined; their `verifiedProofs`
-arrays are empty. A second successful run, `32300282482`, synchronized V7 E20 and overlapping V6
-E19 without duplication; public history now contains V7 E20/E19 and V6 E19. Projection repetition is
-proven, while proof backfill and outage recovery remain separate pending evidence.
+`2026-08-19T20:38:39.397Z`. A second successful run, `32300282482`, synchronized V7 E20 and
+overlapping V6 E19 without duplication; public history now contains V7 E20/E19 and V6 E19.
+Projection repetition is proven. Merged StudioNet receipt verifier fix
+`e5627ebd270a7c6d5291151795b0af6442eba0a6` then enabled protected proof-backfill run
+`32309637237` to accept 11 records with zero rejections. One deployment proof and one epochless fee
+parent sit outside epoch arrays; V7 E19 exposes the other nine finalized proofs (creation 1, wagers
+4, resolution 1, credited claims 3). V7 E20 and V6 E19 remain at zero because they were outside this
+selected proof set. Outage recovery and broader proof coverage remain pending.
 
 ## V6 compatibility boundary
 
@@ -212,15 +216,21 @@ remaining 0.002 GEN to treasury. Balances moved from 0.700/0.648/0.400 GEN befor
 0.800/0.946/0.002 after claims, to 0.802/0.946/0 after fee withdrawal; 1.748 GEN was conserved at
 each checkpoint.
 
-The verified code artifact immediately before this evidence-only documentation refresh is source
-commit `45be825084cce9e97579ca42266e318e2e97fe17`. CI run `32299866117` passed browser/operator job
-`96219707620` and intelligent-contracts job `96219707869`. Vercel deployment
-`dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3` is READY at
-`https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app` and serves the production
-alias. Bundle `market-DECrh0Dy.js` has SHA-256
-`d82c6975f0275add1e355a3d298a0170aae483f26788d4e9431a2a259cfe85ac`; health, readiness, and history
+The current production artifact is Vercel deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi`, READY at
+`https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app` and serving the production
+alias. Vercel metadata anchors it to receipt-proof commit
+`e5627ebd270a7c6d5291151795b0af6442eba0a6` while recording `gitDirty=1`; exact browser artifact
+identity is bundle `market-BHlwjm1W.js` with SHA-256
+`c0be752a9a1407e76a1f417256f220f068969fdcf80f88872683e33f2c96e79e`. CI run `32308815377`
+passed browser/operator job `96247333491` and intelligent-contracts job `96247333299`. Health,
+readiness, and history
 health returned `200`. Readiness identified V7, two covered epochs, five feeds, and readable V6 with
-zero known player liability. The subsequent evidence-only docs commit is outside that code artifact.
+zero known player liability.
+
+Main commit `958e51743a821606ca78881e6bcc8fb0a34a8e8f` separately extends keeper receipt propagation to
+seven attempts on the same hash, using 315 seconds of outer backoff and no write resubmission; CI run
+`32310160397` passed. The first live action-bearing scheduled run under this exact policy remains
+pending.
 
 Observed StudioNet finality has been in the tens-of-seconds range, and an earlier V6 funded resolver
 was observed at 53.38 seconds record-to-finalized. These are samples for UX design only, not a bound
@@ -230,7 +240,8 @@ delivery.
 ## Current release gaps
 
 - long-run V7 keeper and V6 drain workflow monitoring/alerting;
-- transaction-proof backfill and database-outage recovery after successful repeated Neon projection;
+- first live action-bearing scheduled run under the seven-attempt receipt policy;
+- database-outage recovery and proof coverage beyond the selected V7 deployment/canary/fee set;
 - continued public browser/wallet soak plus a rollback rehearsal that never re-enables V6 writes;
 - live 24-hour timeout evidence and a documented safe boundary for asynchronous child failure;
 - independent contract/web/operations review and provider data-use/legal review.

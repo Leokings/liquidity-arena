@@ -33,7 +33,7 @@ The release protocol is `LIQUIDITY_ARENA_V7` and the settlement policy is
 | Keeper privilege | Create fixed-terms epochs only |
 | Resolution/timeout | Permissionless |
 | Public hosting | Vercel browser and bounded API |
-| Durable history | Neon repeated V7/V6 projection live; transaction-proof backfill pending |
+| Durable history | Neon repeated V7/V6 projection and selected V7 proof backfill live; outage recovery and broader proof coverage pending |
 
 ## 3. Canonical hourly model
 
@@ -156,7 +156,9 @@ recovery design remains required before real value.
 The owner key is never an automation credential. Dedicated encrypted keeper
 `0x12ba664a1ec9ca78b070d103c6a69e20673f4b51` is installed on-chain and configured for the scheduled
 workflow. Default-branch runtime-signer/profile preflight passed; long-run monitoring remains
-mandatory.
+mandatory. Seven-attempt/315-second receipt propagation grace is merged on main
+`958e51743a821606ca78881e6bcc8fb0a34a8e8f`, but its first live action-bearing scheduled run remains
+pending.
 
 ## 9. Visualization
 
@@ -226,8 +228,10 @@ The applied migration has normalized marked-DDL SHA-256
 `dd95ed3a5c55bf55d02090605a46557377778afb220126451bb4e750dbc280b2` and raw migration-file SHA-256
 `8a6cb36aed985575fa797ab446481c89a1495c8d6d99a8024931cbda67674af5`; six tables and four indexes
 were read back. Repeated production projection is live: public history contains V7 E20/E19 and V6
-E19 without duplicating overlapping V6 E19. Outage recovery and transaction-proof backfill remain
-pending; all current `verifiedProofs` arrays are empty.
+E19 without duplicating overlapping V6 E19. Protected run `32309637237` verified 11 selected records
+with zero rejections; public V7 E19 contains exactly nine finalized proofs (one creation, four
+wagers, one resolution, three credited claims), with the deployment proof and epochless fee parent
+stored outside the epoch array. Outage recovery and broader proof coverage remain pending.
 
 Monitor public health/readiness, exact-hour coverage, exchange source status, finality lag, keeper
 failures, role/config drift, parent/child delivery, V6 legacy liability, and history ingestion lag.
@@ -259,14 +263,19 @@ Tests and review must cover:
   transaction `0xbca440cc838e6d5dcb595e18124e363e0fa1780a498e3ce49703f9d822aa2fdc`, exact config/repository
   address match, and encrypted environment secret names installed; two local keeper creates
   `0xe10ce0bf…a9c4` and `0x00398a3c…9058` finalized with verified OPEN post-state, and default-branch
-  signer/profile evidence passed in reconcile job `96218469576`; long-run monitoring remains pending;
+  signer/profile evidence passed in reconcile job `96218469576`; seven-attempt same-hash receipt
+  grace is merged/CI-tested, while its first live action-bearing scheduled run and long-run
+  monitoring remain pending;
 - funded V7 canary: complete—resolution `0xc2c86fdb…ab66`, three exact claim deliveries, expected
   loser rejection, 1.748 GEN conserved, and exact 0.002 GEN fee withdrawal delivered;
 - Neon production migration: applied and six-table/four-index schema read-back passed; initial
   and repeated two-deployment/two-epoch/two-snapshot sync plus public V7 E20/E19 and V6 E19 read-back
-  passed, while proof backfill remains pending;
-- public V7 cutover: complete—READY deployment `dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3` from verified code
-  commit `45be825084cce9e97579ca42266e318e2e97fe17`, with public readiness and legacy V6 read-back `200`.
+  passed; selected proof backfill also passed through run `32309637237`;
+- public V7 cutover: complete—READY deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` at
+  `https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app`, with public readiness and
+  legacy V6 read-back `200`. Vercel metadata anchors it to
+  `e5627ebd270a7c6d5291151795b0af6442eba0a6` and records `gitDirty=1`; browser bundle/hash is recorded
+  in the deployment evidence JSON.
 
 Observed StudioNet finality is not an SLA. The recorded deploy finalized in about 36 seconds, but the
 system always waits for actual finality rather than a timer.

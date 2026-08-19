@@ -119,9 +119,12 @@ wallet-position pages, fee state, and total player liability. Page size is cappe
 
 These views support fail-closed keeper/readiness checks and reconstruction without trusting emitted
 logs. The Neon schema migration and initial finalized-state ingestion passed for full V7 and V6 E19
-snapshots. A second production sync added V7 E20 and re-synced V6 E19 without duplication. All public
-`verifiedProofs` arrays remain empty. Neon history is a cache/projection rather than a replacement
-for these views.
+snapshots. A second production sync added V7 E20 and re-synced V6 E19 without duplication. Protected
+backfill run `32309637237` subsequently verified 11 selected records with zero rejections: one V7
+deployment proof, nine V7 E19 epoch proofs, and the epochless fee-withdrawal parent. Public V7 E19
+now exposes exactly one creation, four wagers, one resolution, and three credited claim proofs; V7
+E20 and V6 E19 remain at zero because they were outside that selected backfill. Neon history is a
+cache/projection rather than a replacement for these views, and outage recovery remains pending.
 
 ## Verification requirements
 
@@ -153,10 +156,17 @@ resolution, three finalized claim-parent/EOA-child deliveries, expected loser re
 `get_config` read-back. It then created epochs `1787256000` and `1787259600` through finalized
 transactions `0xe10ce0bf…a9c4` and `0x00398a3c…9058`; both post-states were verified OPEN.
 Default-branch run `32299468899` then passed exact keeper/profile reconciliation with no actions and
-completed the initial bounded history sync; final observed run `32300282482` repeated both jobs
-successfully. The public Vercel alias now targets V7 through READY deployment
-`dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3`, verified from pre-documentation-refresh code commit
-`45be825084cce9e97579ca42266e318e2e97fe17`. Long-run monitoring and external review remain pending.
+completed the initial bounded history sync; later verified no-action run `32300282482` repeated both jobs
+successfully. StudioNet receipt-proof fix `e5627ebd270a7c6d5291151795b0af6442eba0a6` and protected
+backfill run `32309637237` now prove the selected deployment/canary/fee records. The public Vercel
+alias targets V7 through READY deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` at
+`https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app`; browser bundle
+`market-BHlwjm1W.js` has SHA-256
+`c0be752a9a1407e76a1f417256f220f068969fdcf80f88872683e33f2c96e79e`. Vercel metadata anchors it
+to `e5627ebd270a7c6d5291151795b0af6442eba0a6` and records `gitDirty=1`. Keeper receipt grace is
+merged on main `958e51743a821606ca78881e6bcc8fb0a34a8e8f`: seven same-hash attempts with 315 seconds of
+outer backoff and no resubmission. The first live action-bearing scheduled run under that policy,
+long-run monitoring, outage recovery, and external review remain pending.
 
 See [`../docs/STUDIONET-V7.md`](../docs/STUDIONET-V7.md) and
 [`../deployments/studionet-v7.json`](../deployments/studionet-v7.json).
