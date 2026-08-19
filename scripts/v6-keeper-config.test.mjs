@@ -60,6 +60,7 @@ test('normalizes the StudioNet-only defaults and exact GEN atto amounts', () => 
   assert.equal(config.epochs.futureHours, 3);
   assert.equal(config.epochs.minimumCreationLeadSeconds, 7_200);
   assert.equal(config.operator.pageSize, 50);
+  assert.equal(config.operator.finalityWaitAttempts, 6);
   assert.equal(config.operator.scanIntervalMs, 25);
   assert.equal(config.epochs.minStakeAtto, '100000000000000000');
   assert.equal(config.epochs.maxStakePerWalletAtto, '10000000000000000000');

@@ -26,7 +26,7 @@
     "retryBaseMs": 500,
     "finalityRetries": 180,
     "finalityIntervalMs": 5000,
-    "finalityWaitAttempts": 3,
+    "finalityWaitAttempts": 6,
     "postStateAttempts": 5,
     "postStateIntervalMs": 2000
   }

@@ -369,14 +369,17 @@ test('FINALIZED execution errors are rejected and the same action is left for th
 });
 
 test('FINALIZED polling retries the same recorded hash without resubmitting the write', async () => {
-  const keeperConfig = config({ epochs: { futureHours: 1 } });
+  const keeperConfig = config({
+    epochs: { futureHours: 1 },
+    operator: { finalityWaitAttempts: 6 },
+  });
   const fake = fakeOperator({ keeperConfig });
   const originalWait = fake.operator.waitFinalized;
   let waitAttempts = 0;
   const retryDelays = [];
   fake.operator.waitFinalized = async (hash, policy) => {
     waitAttempts += 1;
-    if (waitAttempts === 1) throw new Error('temporary receipt transport error');
+    if (waitAttempts <= 3) throw new Error('transaction not found');
     return originalWait(hash, policy);
   };
 
@@ -389,8 +392,11 @@ test('FINALIZED polling retries the same recorded hash without resubmitting the 
     sleep: async (delayMs) => retryDelays.push(delayMs),
   });
   assert.equal(result.completed.length, 1);
-  assert.equal(waitAttempts, 2);
-  assert.equal(retryDelays.filter((delayMs) => delayMs === 100).length, 1);
+  assert.equal(waitAttempts, 4);
+  assert.deepEqual(
+    retryDelays.filter((delayMs) => delayMs < keeperConfig.operator.readIntervalMs),
+    [100, 200, 400],
+  );
   assert.equal(fake.calls.submits.length, 1);
   assert.equal(fake.calls.submits[0].hash, result.completed[0].transactionHash);
 });
