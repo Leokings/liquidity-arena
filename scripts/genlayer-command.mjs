@@ -826,6 +826,17 @@ export function runGenlayerStreamingCommand({
   });
 }
 
+export function createPasswordWritingSpawn(password, { spawnImpl = nodeSpawn } = {}) {
+  const value = String(password || '');
+  if (!value) throw new Error('A non-empty GenLayer keystore password is required.');
+  if (typeof spawnImpl !== 'function') throw new Error('A spawn implementation is required.');
+  return (command, args, options) => {
+    const child = spawnImpl(command, args, options);
+    child.once('spawn', () => child.stdin?.end(`${value}\n`));
+    return child;
+  };
+}
+
 export async function submitGenlayerWrite({
   invocation,
   args,

@@ -35,6 +35,8 @@ jobs:
       - name: Create unfunded ephemeral read account
         run: |
           probe_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$probe_password"
+          echo "PROBE_PASSWORD=$probe_password" >> "$GITHUB_ENV"
           ./node_modules/.bin/genlayer account create \
             --name receipt-probe \
             --password "$probe_password" \
@@ -43,7 +45,8 @@ jobs:
         env:
           TRANSACTION_HASH: ${{ inputs.transaction_hash }}
         run: |
-          receipt_output="$(./node_modules/.bin/genlayer receipt "$TRANSACTION_HASH" \
+          receipt_output="$(printf '%s\n' "$PROBE_PASSWORD" | \
+            ./node_modules/.bin/genlayer receipt "$TRANSACTION_HASH" \
             --status FINALIZED \
             --retries 1 \
             --interval 5000 2>&1)"

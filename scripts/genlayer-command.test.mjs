@@ -6,6 +6,7 @@ import test from 'node:test';
 import {
   assertFinalizedGenlayerExecution,
   categorizeGenlayerFailure,
+  createPasswordWritingSpawn,
   getGenlayerTransactionStatus,
   parseGenlayerCallOutput,
   parseGenlayerReceiptOutput,
@@ -328,6 +329,32 @@ test('asynchronous hash binding rejection wins a close race and fails closed', a
     assert.equal(error.transactionHash, TRANSACTION_HASH);
     return true;
   });
+});
+
+test('password-writing spawn supplies a locked keystore password through stdin only', async () => {
+  const child = new EventEmitter();
+  child.stdin = new PassThrough();
+  let received = '';
+  child.stdin.on('data', (chunk) => { received += chunk.toString('utf8'); });
+  let invocation;
+  const spawn = createPasswordWritingSpawn('correct horse battery staple', {
+    spawnImpl: (command, args, options) => {
+      invocation = { command, args, options };
+      return child;
+    },
+  });
+
+  assert.equal(spawn('genlayer', ['receipt', TRANSACTION_HASH], { stdio: ['pipe', 'pipe', 'pipe'] }), child);
+  child.emit('spawn');
+  await new Promise((resolve) => child.stdin.once('finish', resolve));
+
+  assert.equal(received, 'correct horse battery staple\n');
+  assert.deepEqual(invocation, {
+    command: 'genlayer',
+    args: ['receipt', TRANSACTION_HASH],
+    options: { stdio: ['pipe', 'pipe', 'pipe'] },
+  });
+  assert.throws(() => createPasswordWritingSpawn(''), /non-empty/);
 });
 
 test('call parser safely handles the util.inspect object subset emitted by CLI 0.39.2', () => {
