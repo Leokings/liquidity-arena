@@ -1,8 +1,8 @@
 name: StudioNet V7 Keeper
 
 on:
-  # Re-enable the schedule only after the Neon journal migration, secret, and
-  # one action-bearing recovery run have been proven end to end.
+  schedule:
+    - cron: '3,13 * * * *'
   workflow_dispatch:
 
 permissions:
