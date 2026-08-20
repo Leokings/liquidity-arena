@@ -11,6 +11,7 @@ const STUDIO_SUCCESS_CONSENSUS_RESULT = 'MAJORITY_AGREE';
 const STUDIO_SUCCESS_CONSENSUS_RESULT_CODE = 6;
 const STUDIO_SUCCESS_EXECUTION_RESULT = 'SUCCESS';
 const STUDIO_SUCCESS_RETURN_STATUS = 'RETURN';
+const STUDIO_FINALIZED_STATUS_CODE = 7;
 const GENLAYER_TRANSACTION_STATUSES = new Set([
   'UNKNOWN', 'PENDING', 'PROPOSING', 'COMMITTING', 'REVEALING',
   'ACCEPTED', 'FINALIZED',
@@ -482,6 +483,24 @@ function studioExecutionResult(direct) {
   return GENLAYER_SUCCESS_RESULT;
 }
 
+function studioNumericStatusName(direct, hasStudioReceipt, textualStatusName) {
+  if (!hasStudioReceipt || direct.status === undefined) return '';
+  if (typeof direct.status !== 'number' || !Number.isSafeInteger(direct.status)) {
+    throw new Error('GenLayer Studio receipt reported a malformed numeric status.');
+  }
+  if (direct.status === STUDIO_FINALIZED_STATUS_CODE) return GENLAYER_FINALIZED_STATUS;
+  // This wrapper waits for FINALIZED receipts, so only Studio's exact finalized
+  // code is safe to infer. Preserve a separately reported non-final lifecycle
+  // name without inventing mappings for the other numeric states.
+  if (!textualStatusName || textualStatusName === GENLAYER_FINALIZED_STATUS) {
+    throw new Error(
+      `GenLayer Studio receipt numeric status is ${direct.status}, not `
+      + `${STUDIO_FINALIZED_STATUS_CODE} (FINALIZED).`,
+    );
+  }
+  return '';
+}
+
 export function parseGenlayerReceiptOutput(output, {
   transactionHash,
   requireExecution = true,
@@ -508,19 +527,28 @@ export function parseGenlayerReceiptOutput(output, {
   };
   const statusLine = directLine('(?:status_name|statusName)', 'status_name');
   const executionLine = directLine('txExecutionResultName', 'txExecutionResultName');
-  const statusName = uniqueUppercase(
+  const hasStudioConsensus = direct.consensus_data !== undefined
+    || direct.consensusData !== undefined;
+  const hasStudioResult = direct.result_name !== undefined
+    || direct.resultName !== undefined
+    || direct.result !== undefined;
+  const textualStatusName = uniqueUppercase(
     [direct.status_name, direct.statusName, statusLine],
+    'status_name',
+  );
+  const studioStatusName = studioNumericStatusName(
+    direct,
+    hasStudioConsensus || hasStudioResult,
+    textualStatusName,
+  );
+  const statusName = uniqueUppercase(
+    [textualStatusName, studioStatusName],
     'status_name',
   );
   const nativeExecution = uniqueUppercase(
     [direct.tx_execution_result_name, direct.txExecutionResultName, executionLine],
     'txExecutionResultName',
   );
-  const hasStudioConsensus = direct.consensus_data !== undefined
-    || direct.consensusData !== undefined;
-  const hasStudioResult = direct.result_name !== undefined
-    || direct.resultName !== undefined
-    || direct.result !== undefined;
   let studioExecution = '';
   if (hasStudioConsensus || (!nativeExecution && hasStudioResult)) {
     studioExecution = studioExecutionResult(direct);

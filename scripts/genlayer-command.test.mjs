@@ -367,6 +367,44 @@ test('receipt parser accepts finalized StudioNet leader-return evidence', () => 
   assert.equal(assertFinalizedGenlayerExecution(receipt), receipt);
 });
 
+test('StudioNet receipt parser accepts only exact numeric FINALIZED lifecycle evidence', () => {
+  const numericFinalized = studioWriteOutput().replace(
+    "  status_name: 'FINALIZED',",
+    '  status: 7,',
+  );
+  const receipt = parseGenlayerReceiptOutput(numericFinalized, {
+    transactionHash: TRANSACTION_HASH,
+  });
+  assert.equal(receipt.statusName, 'FINALIZED');
+  assert.equal(assertFinalizedGenlayerExecution(receipt), receipt);
+
+  const contradictory = studioWriteOutput({ statusName: 'ACCEPTED' }).replace(
+    "  status_name: 'ACCEPTED',",
+    "  status_name: 'ACCEPTED',\n  status: 7,",
+  );
+  assert.throws(
+    () => parseGenlayerReceiptOutput(contradictory),
+    /conflicting status_name values/,
+  );
+  assert.throws(
+    () => parseGenlayerReceiptOutput(numericFinalized.replace('  status: 7,', '  status: 6,')),
+    /numeric status is 6, not 7 \(FINALIZED\)/,
+  );
+  assert.throws(
+    () => parseGenlayerReceiptOutput(numericFinalized.replace('  status: 7,', "  status: '7',")),
+    /malformed numeric status/,
+  );
+
+  const namedAccepted = studioWriteOutput({ statusName: 'ACCEPTED' }).replace(
+    "  status_name: 'ACCEPTED',",
+    "  status_name: 'ACCEPTED',\n  status: 5,",
+  );
+  assert.equal(
+    parseGenlayerReceiptOutput(namedAccepted, { requireExecution: false }).statusName,
+    'ACCEPTED',
+  );
+});
+
 test('StudioNet receipt parser ignores a quorum-cancelled validator after the authoritative leader', () => {
   const receipt = parseGenlayerReceiptOutput(studioWriteOutput({
     leaders: [
@@ -528,7 +566,7 @@ test('FINALIZED receipt command uses explicit bounded retry policy', async () =>
     spawnImpl: (_executable, args) => {
       invocationArgs = args;
       return streamingChild({
-        stdout: ["Result:\n{ status_name: 'FINALIZED', txExecutionResultName: 'FINISHED_WITH_RETURN' }"],
+        stdout: [studioWriteOutput().replace("  status_name: 'FINALIZED',", '  status: 7,')],
       });
     },
     writeStdout: () => {},
