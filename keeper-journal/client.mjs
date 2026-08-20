@@ -416,7 +416,6 @@ export function createKeeperJournalClient({
   async function post(body, idempotencyKey = null) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    timer.unref?.();
     const headers = {
       authorization: `Bearer ${bearerSecret}`,
       'content-type': 'application/json; charset=utf-8',
