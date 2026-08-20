@@ -9,11 +9,16 @@ import { createActivityStore } from './activity-store.js';
 import { createDeploymentRegistry } from './deployment-registry.js';
 import { GenLayerGateway, assertFinalizedExecution } from './genlayer-client.js';
 import { formatAttoToGen, parseGenToAtto } from './gen-units.js';
-import { LiveMarketDriver, WINDOW_QUERIES } from './live-driver.js';
+import {
+  LiveMarketDriver,
+  WINDOW_QUERIES,
+  createSharedEventSourceConstructor,
+} from './live-driver.js';
 import { EPOCH_PHASE, arenaEpochState, createEpoch } from './epoch-schedule.js';
 import {
-  isTerminalRound,
+  canReuseFinalizedDisplayRound,
   canReuseFinalizedRoundVector,
+  isTerminalRound,
   reconcileFinalizedRoundFrame,
   roundMatchesDisplayTarget,
   selectRoundTargets,
@@ -401,6 +406,7 @@ class LiquidityArenaApp {
     this.driver = null;
     this.roundDriver = null;
     this.roundFrame = null;
+    this.sharedEventSourceImpl = createSharedEventSourceConstructor();
     this.toastTimer = null;
     this.liveReadyNotified = false;
     const requestedEpoch = String(pageParams.get('epoch') || '').trim();
@@ -670,6 +676,17 @@ class LiquidityArenaApp {
       const reuseVerifiedConfig = background && this.contractConfig !== null;
       const knownEpochs = this.knownEpochEndTimestampsByDeployment.get(this.deployment.alias) || null;
       const sameTarget = targets.actionEpochEndTimestamp === targets.displayEpochEndTimestamp;
+      const reuseTerminalDisplay = !sameTarget && canReuseFinalizedDisplayRound(
+        this.displayRound,
+        this.displayRoundAssets,
+        {
+          epochEndTimestamp: targets.displayEpochEndTimestamp,
+          objective: this.objectiveSelector,
+          deploymentAlias: this.deployment.alias,
+          protocolVersion: this.deployment.protocolVersion,
+          contractAddress: this.deployment.address,
+        },
+      );
       const [configResult, roundResult, recentEpochsResult] = await Promise.allSettled([
         reuseVerifiedConfig ? Promise.resolve(null) : this.gateway.readConfig(),
         this.gateway.readEpoch(targets.actionEpochEndTimestamp),
@@ -699,7 +716,7 @@ class LiquidityArenaApp {
         .get(this.deployment.alias)?.add(targets.actionEpochEndTimestamp);
 
       let displayResult = { status: 'fulfilled', value: null };
-      const shouldReadDisplay = !sameTarget && (
+      const shouldReadDisplay = !sameTarget && !reuseTerminalDisplay && (
         this.explicitEpochEndTimestamp !== null
         || this.knownEpochEndTimestampsByDeployment
           .get(this.deployment.alias)?.has(targets.displayEpochEndTimestamp)
@@ -710,12 +727,17 @@ class LiquidityArenaApp {
         ]);
       }
 
-      let nextDisplayRound = null;
-      let nextDisplayAssets = Object.freeze([]);
+      let nextDisplayRound = reuseTerminalDisplay ? this.displayRound : null;
+      let nextDisplayAssets = reuseTerminalDisplay
+        ? this.displayRoundAssets
+        : Object.freeze([]);
       const displayRaw = sameTarget
         ? roundResult.value
         : (displayResult.status === 'fulfilled' ? displayResult.value : null);
-      if (displayRaw) {
+      if (reuseTerminalDisplay) {
+        // The action epoch above remains live-polled. Only this distinct,
+        // already-verified terminal scoreboard is immutable and reused.
+      } else if (displayRaw) {
         try {
           nextDisplayRound = v6RoundView(
             normalizeV6Epoch(displayRaw),
@@ -723,12 +745,9 @@ class LiquidityArenaApp {
             this.deployment,
           );
           if (isTerminalRound(nextDisplayRound) && nextDisplayRound.epoch.resultStatus === 'DETERMINED') {
-            // A terminal DETERMINED vector is immutable. Keep reading its
-            // compact epoch record every cycle, but do not spend five more
-            // StudioNet calls when the complete cached vector still agrees
-            // with that freshly read record. This takes a terminal display
-            // refresh from six reads to one without trusting an incomplete or
-            // mismatched cache.
+            // When this is also the action epoch, its compact record was read
+            // above. Reuse a complete agreeing vector instead of spending five
+            // additional StudioNet calls.
             if (canReuseFinalizedRoundVector(
               this.displayRound,
               this.displayRoundAssets,
@@ -763,11 +782,16 @@ class LiquidityArenaApp {
       this.displayRound = nextDisplayRound;
       this.displayRoundAssets = nextDisplayAssets;
       this._refreshDisplayedFrame();
-      try {
-        await this._loadPositionState({ requestId });
-      } catch {
-        // Wallet-specific balance/position reads must not invalidate a round
-        // whose configuration was already verified independently.
+      // Pool, wallet and claim details are visible only inside this modal.
+      // Avoid an otherwise permanent extra StudioNet read every 15 seconds
+      // while the public market view is idle.
+      if (!$('#prediction-modal').hidden) {
+        try {
+          await this._loadPositionState({ requestId });
+        } catch {
+          // Wallet-specific balance/position reads must not invalidate a round
+          // whose configuration was already verified independently.
+        }
       }
       return round;
     } catch (error) {
@@ -1599,6 +1623,7 @@ class LiquidityArenaApp {
     if (!this.roundDriver) {
       this.roundDriver = new LiveMarketDriver({
         window: 'ROUND',
+        EventSourceImpl: this.sharedEventSourceImpl,
         onFrame: (frame) => {
           this.roundFrame = frame;
           if (this.feedMode !== 'live') return;
@@ -1630,6 +1655,7 @@ class LiquidityArenaApp {
     }
     this.driver = new LiveMarketDriver({
       window: windowName,
+      EventSourceImpl: this.sharedEventSourceImpl,
       onFrame: handleReadyFrame,
       onEvent: (event) => this.onEvent(event),
       onError: (error) => {
