@@ -68,7 +68,7 @@
         }
       ]
     },
-    "defaultBranchWorkflowActivation": "PASS_MANUAL_JOURNAL_CANARY_AND_FIRST_RESTORED_SCHEDULED_RUN",
+    "defaultBranchWorkflowActivation": "PASS_MANUAL_JOURNAL_CANARY_AND_TWO_ACTION_BEARING_RESTORED_SCHEDULED_RUNS",
     "defaultBranchWorkflowEvidence": {
       "firstScheduledRunId": "32298454771",
       "firstScheduledReconcileStatus": "SUCCESS",
@@ -80,17 +80,17 @@
       "actionsSubmitted": 0,
       "historyJobId": "96218806119",
       "historyStatus": "SUCCESS",
-      "latestSuccessfulRunId": "32329108358",
+      "latestSuccessfulRunId": "32332196428",
       "latestRunEvent": "schedule",
-      "latestRunHeadCommit": "81850e3c814cd541d392fdeecf4dacca753d25e6",
-      "latestRunCreatedAt": "2026-08-20T03:41:01Z",
-      "latestReconcileJobId": "96306191739",
+      "latestRunHeadCommit": "2664e739c11ee3f223626a20663bc2564d64ec7a",
+      "latestRunCreatedAt": "2026-08-20T04:31:28Z",
+      "latestReconcileJobId": "96314848434",
       "latestReconcileStatus": "SUCCESS",
-      "latestHistoryJobId": "96306791996",
+      "latestHistoryJobId": "96315355338",
       "latestHistoryStatus": "SUCCESS",
       "latestRunVerifiedJournalOperationCount": 2,
-      "postRunTotalJournalOperationCount": 8,
-      "postRunVerifiedJournalOperationCount": 8,
+      "postRunTotalJournalOperationCount": 10,
+      "postRunVerifiedJournalOperationCount": 10,
       "postRunUnresolvedJournalOperationCount": 0,
       "longRunMonitoring": "PENDING_EXTENDED_SOAK_AND_EXTERNAL_ALERT_DELIVERY",
       "liveWorkflowId": 338089019,
@@ -101,6 +101,8 @@
       "remoteMainSourceTriggerMode": "CRON_MINUTE_3_AND_13_PLUS_WORKFLOW_DISPATCH",
       "firstQualifyingRestoredScheduleRunId": "32329108358",
       "firstQualifyingRestoredScheduleRunStatus": "SUCCESS",
+      "secondActionBearingRestoredScheduleRunId": "32332196428",
+      "secondActionBearingRestoredScheduleRunStatus": "SUCCESS",
       "receiptPropagationGrace": {
         "mainCommit": "958e51743a821606ca78881e6bcc8fb0a34a8e8f",
         "pullRequest": 5,
@@ -222,9 +224,9 @@
     "fullDayLastEpochEndTimestamp": 1787252400,
     "fullDayFirstCreateTransactionHash": "0x7b94b2d0dc4d0970482e60a2cec1fc4d3c3bcf0592816e992b3acbc9474b7726",
     "fullDayFinalCreateTransactionHash": "0x443afcf771f1c5751bdc0e525b75b8d04e7378ef37bb7f817799f98f36c7677f",
-    "minimumRecordedEpochCount": 35,
-    "recordedWorkflowCreatedEpochCount": 8,
-    "continuousAutomationActivation": "PASS_FIRST_RESTORED_SCHEDULED_RECONCILE_AND_HISTORY_SYNC",
+    "minimumRecordedEpochCount": 36,
+    "recordedWorkflowCreatedEpochCount": 9,
+    "continuousAutomationActivation": "PASS_TWO_ACTION_BEARING_RESTORED_SCHEDULED_RECONCILE_AND_HISTORY_SYNC_CYCLES",
     "longRunAutomationSoak": "PENDING_EXTENDED_MONITORING_AND_EXTERNAL_ALERT_DELIVERY"
   },
   "fundedCanary": {
@@ -456,6 +458,26 @@
       "snapshotsSynced": 2,
       "proofsVerified": 0,
       "proofsAlreadyVerified": 0,
+      "requestedProofsRejected": 0,
+      "replayed": false
+    },
+    "secondRestoredScheduledProjectionEvidence": {
+      "workflowRunId": "32332196428",
+      "event": "schedule",
+      "sourceCommit": "2664e739c11ee3f223626a20663bc2564d64ec7a",
+      "reconcileJobId": "96314848434",
+      "historyJobId": "96315355338",
+      "status": "SUCCESS",
+      "resultObservedAt": "2026-08-20T04:35:08.8151122Z",
+      "stateReadAt": "2026-08-20T04:34:56.951Z",
+      "dataScope": "HOURLY_CONTRACT_EPOCHS",
+      "continuousVisualizationTicksStored": false,
+      "deploymentsSynced": 2,
+      "epochsSynced": 2,
+      "snapshotsSynced": 2,
+      "proofsVerified": 0,
+      "proofsAlreadyVerified": 0,
+      "manifestProofsSkipped": 0,
       "requestedProofsRejected": 0,
       "replayed": false
     },
@@ -793,12 +815,166 @@
         "replayed": false
       }
     },
+    "successfulSecondActionBearingScheduledRun": {
+      "workflowRunId": "32332196428",
+      "workflowUrl": "https://github.com/Leokings/liquidity-arena/actions/runs/32332196428",
+      "event": "schedule",
+      "headCommit": "2664e739c11ee3f223626a20663bc2564d64ec7a",
+      "createdAt": "2026-08-20T04:31:28Z",
+      "status": "SUCCESS",
+      "reconcileJobId": "96314848434",
+      "reconcileStatus": "SUCCESS",
+      "historyJobId": "96315355338",
+      "historyStatus": "SUCCESS",
+      "plan": {
+        "plannedAt": "2026-08-20T04:32:31.6853794Z",
+        "nowEpochSeconds": 1787200317,
+        "deferredEpochReadCount": 0,
+        "deferredActionCount": 0,
+        "actions": [
+          {
+            "type": "RESOLVE",
+            "epochEndTimestamp": 1787198400
+          },
+          {
+            "type": "CREATE",
+            "epochEndTimestamp": 1787292000
+          }
+        ]
+      },
+      "verifiedOperationCount": 2,
+      "operations": [
+        {
+          "operationId": "77ea4dec2b4f3e8a5302771eb6a5c0a60736a48e8175201df1956215b2bc964e",
+          "logicalOperationId": "77ea4dec2b4f3e8a5302771eb6a5c0a60736a48e8175201df1956215b2bc964e",
+          "attemptNumber": 1,
+          "retryOfOperationId": null,
+          "method": "resolve_epoch",
+          "epochEndTimestamp": 1787198400,
+          "transactionHash": "0xebc4478607bbc6ca17d670dafa05d4aca99d8282959db50072fa881af47199dd",
+          "runnerHashCapturedAt": "2026-08-20T04:32:42.0483426Z",
+          "runnerSubmittedAt": "2026-08-20T04:32:42.1836146Z",
+          "runnerVerifiedAt": "2026-08-20T04:33:41.0282824Z",
+          "journalLifecycle": {
+            "preparedAt": "2026-08-20T04:32:40.467Z",
+            "submittedAt": "2026-08-20T04:32:42.161Z",
+            "finalizedAt": "2026-08-20T04:33:36.206Z",
+            "verifiedAt": "2026-08-20T04:33:41.005Z",
+            "state": "VERIFIED",
+            "transactionLifecycle": "FINALIZED",
+            "postStateStatus": "RESOLVED"
+          },
+          "finalState": "VERIFIED",
+          "receipt": {
+            "status": "FINALIZED",
+            "statusCode": 7,
+            "consensusResult": "MAJORITY_AGREE",
+            "consensusResultCode": 6,
+            "leaderExecution": "SUCCESS",
+            "recipient": "0xb2ae59aE641f571726Ae81E30080f8c2192b15EF",
+            "signer": "0x12ba664a1ec9ca78b070d103c6a69e20673f4b51",
+            "method": "resolve_epoch",
+            "argument": 1787198400,
+            "createdAt": "2026-08-20T04:32:41.878393Z"
+          },
+          "postState": {
+            "status": "RESOLVED",
+            "phase": "RESOLVED",
+            "resultStatus": "DETERMINED",
+            "resolvedAt": 1787200361,
+            "resultDigest": "b851d5c3973f192a939c350a924ab3b9d40bbfa5a82af027485917f4b42ed3ad",
+            "qualifiedVenues": ["BINANCE", "OKX", "GATE", "KUCOIN"],
+            "highAsset": "BNB",
+            "highReturnPpb": 3195374,
+            "highSettlementMode": "REFUND_UNBACKED_WINNER",
+            "lowAsset": "XRP",
+            "lowReturnPpb": 530561,
+            "lowSettlementMode": "REFUND_UNBACKED_WINNER"
+          }
+        },
+        {
+          "operationId": "8e86c84b1a85eabb6768decf1fc755f3ff0207c6098c667c6bc08070c9ca48f2",
+          "logicalOperationId": "8e86c84b1a85eabb6768decf1fc755f3ff0207c6098c667c6bc08070c9ca48f2",
+          "attemptNumber": 1,
+          "retryOfOperationId": null,
+          "method": "create_epoch",
+          "epochEndTimestamp": 1787292000,
+          "transactionHash": "0x3d4b235c91dbefaeffc1f790ed5a4f3466cefb7b452d190aac12eb4c099b8a88",
+          "runnerHashCapturedAt": "2026-08-20T04:33:46.6956097Z",
+          "runnerSubmittedAt": "2026-08-20T04:33:46.7884918Z",
+          "runnerVerifiedAt": "2026-08-20T04:34:29.9425536Z",
+          "journalLifecycle": {
+            "preparedAt": "2026-08-20T04:33:44.882Z",
+            "submittedAt": "2026-08-20T04:33:46.767Z",
+            "finalizedAt": "2026-08-20T04:34:24.947Z",
+            "verifiedAt": "2026-08-20T04:34:29.922Z",
+            "state": "VERIFIED",
+            "transactionLifecycle": "FINALIZED",
+            "postStateStatus": "OPEN"
+          },
+          "finalState": "VERIFIED",
+          "receipt": {
+            "status": "FINALIZED",
+            "statusCode": 7,
+            "consensusResult": "MAJORITY_AGREE",
+            "consensusResultCode": 6,
+            "leaderExecution": "SUCCESS",
+            "recipient": "0xb2ae59aE641f571726Ae81E30080f8c2192b15EF",
+            "signer": "0x12ba664a1ec9ca78b070d103c6a69e20673f4b51",
+            "method": "create_epoch",
+            "argument": 1787292000,
+            "createdAt": "2026-08-20T04:33:46.515344Z"
+          },
+          "postState": {
+            "status": "OPEN",
+            "phase": "SCHEDULED",
+            "resultStatus": "PENDING",
+            "creator": "0x12ba664a1ec9ca78b070d103c6a69e20673f4b51",
+            "createdAt": 1787200426,
+            "wagerOpens": 1787289600,
+            "wagerCloses": 1787290800,
+            "battleStarts": 1787290800,
+            "resolutionAvailable": 1787292120
+          }
+        }
+      ],
+      "postRunJournalReadback": {
+        "readAt": "2026-08-20T04:40:05.109Z",
+        "operationCount": 10,
+        "verifiedOperationCount": 10,
+        "unresolvedOperationCount": 0,
+        "allOperationStates": "VERIFIED"
+      },
+      "historyProjection": {
+        "status": "ok",
+        "resultObservedAt": "2026-08-20T04:35:08.8151122Z",
+        "syncedAt": "2026-08-20T04:34:56.951Z",
+        "dataScope": "HOURLY_CONTRACT_EPOCHS",
+        "continuousVisualizationTicksStored": false,
+        "network": "studionet",
+        "chainId": 61999,
+        "deploymentsSynced": 2,
+        "epochsSynced": 2,
+        "snapshotsSynced": 2,
+        "proofsVerified": 0,
+        "proofsAlreadyVerified": 0,
+        "manifestProofsSkipped": 0,
+        "requestedProofsRejected": 0,
+        "replayed": false
+      },
+      "minimumRecordedEpochCountAfterRun": 36,
+      "recordedWorkflowCreatedEpochCountAfterRun": 9,
+      "evidenceMeaning": "PASS_SECOND_ACTION_BEARING_SCHEDULED_CYCLE_EXTENDED_SOAK_AND_EXTERNAL_ALERT_DELIVERY_REMAIN_PENDING"
+    },
     "liveOperationCountAtCanaryCompletion": 6,
     "liveVerifiedOperationCountAtCanaryCompletion": 6,
     "liveOperationCountAfterFirstRestoredScheduledRun": 8,
     "liveVerifiedOperationCountAfterFirstRestoredScheduledRun": 8,
     "liveUnresolvedOperationCountAfterFirstRestoredScheduledRun": 0,
-    "rolloutStatus": "PASS_ACTION_BEARING_CANARY_AND_FIRST_RESTORED_SCHEDULED_RUN_V7_ACTIVE_V6_DISABLED_EXTENDED_SOAK_PENDING",
+    "liveOperationCountAfterSecondActionBearingScheduledRun": 10,
+    "liveVerifiedOperationCountAfterSecondActionBearingScheduledRun": 10,
+    "liveUnresolvedOperationCountAfterSecondActionBearingScheduledRun": 0,
+    "rolloutStatus": "PASS_ACTION_BEARING_CANARY_AND_TWO_RESTORED_ACTION_BEARING_SCHEDULED_CYCLES_V7_ACTIVE_V6_DISABLED_EXTENDED_SOAK_AND_EXTERNAL_ALERT_DELIVERY_PENDING",
     "invariants": {
       "fencedGlobalSignerLeaseRequired": true,
       "prepareMustCommitBeforeBroadcast": true,
@@ -869,7 +1045,7 @@
         "readyLegacyV6PlayerLiabilityAtto": "0"
       }
     },
-    "currentScheduleRestorationProductionArtifact": {
+    "historicalFirstRestoredScheduleExecutionArtifact": {
       "sourceCommit": "81850e3c814cd541d392fdeecf4dacca753d25e6",
       "githubDeploymentId": "5994871034",
       "githubDeploymentStatus": "success",
@@ -880,8 +1056,66 @@
       "bundleFile": "/assets/market-BQWvq82y.js",
       "bundleBytes": 188376,
       "bundleSha256": "37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba",
-      "evidenceScope": "CURRENT_PRODUCTION_ARTIFACT_THAT_EXECUTED_SUCCESSFUL_SCHEDULED_RUN_32329108358",
-      "postEvidenceArtifactPolicy": "VERIFY_AND_RECORD_THE_SUCCESSOR_AFTER_THIS_COMBINED_EVIDENCE_CHANGE_MERGES"
+      "evidenceScope": "HISTORICAL_PRODUCTION_ARTIFACT_THAT_EXECUTED_FIRST_RESTORED_SCHEDULED_RUN_32329108358",
+      "successorVerificationStatus": "SATISFIED_BY_CURRENT_HARDENED_PRODUCTION_RUNTIME_ARTIFACT"
+    },
+    "currentHardenedProductionRuntimeArtifact": {
+      "sourceCommit": "c32727f386f3e3f23d4a3d9a9d1e14a838655ff7",
+      "githubDeploymentId": "5995889896",
+      "githubDeploymentStatus": "success",
+      "githubDeploymentStatusCreatedAt": "2026-08-20T04:36:52Z",
+      "vercelDeploymentId": "dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj",
+      "vercelDeploymentUrl": "https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app",
+      "productionAlias": "https://liquidity-arena.vercel.app",
+      "vercelStatus": "READY",
+      "ci": {
+        "runId": "32332498286",
+        "status": "SUCCESS",
+        "browserAndOperatorJobId": "96315684498",
+        "browserAndOperatorStatus": "SUCCESS",
+        "intelligentContractsJobId": "96315684590",
+        "intelligentContractsStatus": "SUCCESS"
+      },
+      "bundleFile": "/assets/market-DTvIR-Xr.js",
+      "bundleBytes": 191538,
+      "bundleSha256": "7056bef680f18a8e98af1b21822f91f3630644b75a639c83398e1b31601f8e00",
+      "streamHardening": {
+        "sharedRefCountedEventSourcePerUrlPerTab": true,
+        "vercelSupportsCancellation": true,
+        "requestResponseDisconnectCleanup": "IDEMPOTENT_RELEASES_RESERVATIONS",
+        "steadyStudioCallsPerHourApproximate": 240,
+        "concurrentStreamsPerIpCap": 4,
+        "globalConcurrentStreamsCap": 100
+      },
+      "productionBrowserVerification": {
+        "roundTo4hStreamRequestCount": 1,
+        "roundTo4hStreamResponseCount": 1,
+        "roundTo4hStreamStatus": 200,
+        "roundTo4hAdditionalStreamCount": 0,
+        "rapidReloadCount": 2,
+        "rapidReloadStreamRequestCount": 2,
+        "rapidReloadStreamResponseCount": 2,
+        "allRapidReloadStreamStatuses": 200,
+        "marketDataState": "LIVE_FRESH",
+        "staleObserved": false,
+        "browserErrorCount": 0,
+        "immediateIndependentCurlStatus": 200,
+        "immediateIndependentCurlContentType": "text/event-stream",
+        "immediateIndependentCurlLiveAssets": ["BTC", "ETH", "BNB", "SOL", "XRP"]
+      },
+      "publicEndpointVerification": {
+        "healthzStatus": 200,
+        "readyzStatus": 200,
+        "historyHealthStatus": 200,
+        "proofViewStatus": 200,
+        "readyChainId": "0xf22f",
+        "readyContractAddress": "0xb2ae59aE641f571726Ae81E30080f8c2192b15EF",
+        "readyKeeperAddress": "0x12ba664a1ec9ca78b070d103c6a69e20673f4b51",
+        "readyEpochCoverage": "PASS",
+        "readyLegacyV6PlayerLiabilityAtto": "0"
+      },
+      "evidenceScope": "CURRENT_VERIFIED_HARDENED_PRODUCTION_RUNTIME_ARTIFACT",
+      "docsOnlySuccessorPolicy": "RECORD_RUNTIME_BUNDLE_IDENTITY_WITHOUT_RECURSIVE_PENDING_ARTIFACT_CLAIM"
     }
   },
   "verification": {
@@ -892,15 +1126,15 @@
     "liveOpenEpochCountAtDeployment": 0,
     "seededEpochCount": 25,
     "dedicatedKeeperCreatedEpochCount": 2,
-    "recordedWorkflowCreatedEpochCount": 8,
-    "minimumRecordedEpochCount": 35,
+    "recordedWorkflowCreatedEpochCount": 9,
+    "minimumRecordedEpochCount": 36,
     "dedicatedKeeperLimitedExecution": "PASS_TWO_FINALIZED_OPEN_EPOCHS",
-    "defaultBranchKeeperWorkflow": "PASS_MANUAL_SCHEMA_V3_JOURNAL_CANARY_AND_FIRST_RESTORED_SCHEDULED_RUN_WORKFLOW_338089019_ACTIVE",
+    "defaultBranchKeeperWorkflow": "PASS_MANUAL_SCHEMA_V3_JOURNAL_CANARY_AND_TWO_RESTORED_ACTION_BEARING_SCHEDULED_RUNS_WORKFLOW_338089019_ACTIVE_EXTENDED_SOAK_AND_EXTERNAL_ALERT_DELIVERY_PENDING",
     "legacyV6ScheduledDrainWorkflowRunId": "32297047031",
     "legacyV6ScheduledDrainWorkflow": "HISTORICAL_PASS_LIVE_WORKFLOW_338089016_DISABLED_MANUALLY_ZERO_PLAYER_LIABILITY_MAIN_SOURCE_WORKFLOW_DISPATCH_ONLY",
     "currentReceiptVerifierCiRunId": "32308815377",
     "currentReceiptVerifierCi": "PASS_BOTH_JOBS",
-    "currentVercelDeployment": "PASS_READY_SCHEDULE_RESTORATION_ARTIFACT_DPL_BDKVCX8E2QRAEJSUEN2B9LV2GWNJ_SOURCE_81850E3",
+    "currentVercelDeployment": "PASS_READY_HARDENED_RUNTIME_ARTIFACT_DPL_63B8HRPD8HYS7CTJITZEKGKGDRWJ_SOURCE_C32727F",
     "keeperReceiptGraceMainCommit": "958e51743a821606ca78881e6bcc8fb0a34a8e8f",
     "keeperReceiptGraceCiRunId": "32310160397",
     "keeperReceiptGraceCi": "PASS_BOTH_JOBS_FIRST_LIVE_SCHEDULED_RUN_FAILED_LOOKUP_BUT_BOTH_EXACT_WRITES_LATER_FINALIZED_AND_APPLIED",
@@ -909,6 +1143,10 @@
     "scheduleRestoreMainCommit": "81850e3c814cd541d392fdeecf4dacca753d25e6",
     "firstQualifyingRestoredScheduleRunId": "32329108358",
     "firstQualifyingRestoredScheduleRun": "PASS_TWO_VERIFIED_OPERATIONS_POST_RUN_JOURNAL_8_OF_8_VERIFIED_ZERO_UNRESOLVED_HISTORY_GREEN",
+    "secondActionBearingRestoredScheduleRunId": "32332196428",
+    "secondActionBearingRestoredScheduleRun": "PASS_TWO_VERIFIED_OPERATIONS_POST_RUN_JOURNAL_10_OF_10_VERIFIED_ZERO_UNRESOLVED_HISTORY_GREEN_EXTENDED_SOAK_AND_EXTERNAL_ALERT_DELIVERY_PENDING",
+    "currentHardenedRuntimeCiRunId": "32332498286",
+    "currentHardenedRuntimeVerification": "PASS_SHARED_SSE_CANCELLATION_CLEANUP_BROWSER_STRESS_PUBLIC_ENDPOINTS_AND_BUNDLE_IDENTITY",
     "claimDeliveryMonitorDeploymentModes": ["v6", "v7"],
     "dedicatedKeeperRotation": "PASS_FINALIZED_AND_EXACT_CONFIG_READBACK",
     "fundedCanary": "PASS_SETTLED_DELIVERED_AND_FEE_WITHDRAWN"

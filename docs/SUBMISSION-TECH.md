@@ -19,7 +19,7 @@ pari-mutuel objectives: highest return (`HIGH`) and lowest return (`LOW`).
 | Stake limits | 0.1–10 GEN per wallet/objective |
 | Evidence | Binance, OKX, Bybit, Gate, KuCoin; at least 3 complete baskets |
 | Operator | Limited epoch-creation keeper; permissionless resolve/timeout; V7 workflow `338089019` active after journal canary, V6 workflow `338089016` disabled |
-| Keeper write authority | Active authoritative Neon journal: manual canary plus restored scheduled run passed; 8/8 operations VERIFIED, 0 unresolved |
+| Keeper write authority | Active authoritative Neon journal: manual canary plus two restored scheduled cycles passed; 10/10 operations VERIFIED, 0 unresolved |
 | Public host | [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app), V7 active/READY with V6 legacy recovery |
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is retained for historical reads, eligible
@@ -80,7 +80,7 @@ historical context and do not reset with the hourly wager round.
 - V7 direct tests passed 22/22; combined V6/V7 direct tests passed 37/37 at deployment review;
 - 25 epochs were seeded and verified: one canary plus a full 24-hour exact-epoch schedule, whose
   first/final creation hashes are `0x7b94b2d0…7726` and `0x443afcf7…7677f`;
-- 35 epochs are now read back, including two local dedicated-keeper creates and eight
+- at least 36 epochs are now read back, including two local dedicated-keeper creates and nine
   workflow-created epochs beyond the 25 seeded epochs;
 - V7 keeper safeguards and the dual-deployment registry are implemented; the last fully enumerated
   pre-journal READY production deployment
@@ -114,10 +114,23 @@ historical context and do not reset with the hourly wager round.
 - restored scheduled run `32329108358` passed reconcile job `96306191739` and history job
   `96306791996`, verified RESOLVE `1787194800` and CREATE `1787288400`, and left Neon at eight
   operations, all VERIFIED, zero unresolved; live epoch count was 35, eight workflow-created;
-- current schedule-restoration production artifact is READY Vercel deployment
+- second scheduled run `32332196428` passed reconcile job `96314848434` and history job
+  `96315355338`, verified exact RESOLVE `1787198400` transaction `0xebc44786…99dd` and CREATE
+  `1787292000` transaction `0x3d4b235c…8a88`, and left Neon at 10/10 VERIFIED with zero unresolved;
+  evidenced coverage is at least 36 epochs, nine workflow-created, while extended soak/external
+  alert delivery remain pending;
+- historical first-restored-run artifact was READY Vercel deployment
   `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, GitHub deployment `5994871034`, source
   `81850e3c814cd541d392fdeecf4dacca753d25e6`, bundle `/assets/market-BQWvq82y.js` (188376 bytes),
   SHA-256 `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`;
+- current verified hardened runtime is READY Vercel deployment `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj`,
+  GitHub deployment `5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`; CI
+  `32332498286` passed jobs `96315684498` and `96315684590`; bundle `/assets/market-DTvIR-Xr.js`
+  is 191538 bytes, SHA-256 `7056bef680f18a8e98af1b21822f91f3630644b75a639c83398e1b31601f8e00`;
+- shared ref-counted SSE plus Vercel request cancellation passed production browser stress: one
+  HTTP-200 stream for ROUND→4H, one per rapid reload, LIVE/FRESH without STALE/errors, immediate
+  independent HTTP-200 five-asset events, about 240 steady Studio calls/hour under the cap of four
+  concurrent streams per IP;
 - historical scheduled V6 drain run `32297047031` completed successfully without creating any epoch;
   the later zero-liability audit retired recurring execution and live workflow `338089016` is now
   `disabled_manually`;
@@ -178,8 +191,9 @@ production-safety claim:
 - the authoritative journal API/schema-v3 health and six-operation action-bearing canary are proven;
   one previously submitted hash was recovered without resubmission. PR #11 restored the V7 schedule
   and workflow `338089019` is active, while V6 workflow `338089016` remains disabled. Restored
-  scheduled run `32329108358` passed with two VERIFIED operations and green history. Long-run monitoring, live
-  timeout evidence, and rollback rehearsal remain;
+  scheduled runs `32329108358` and `32332196428` each passed with two VERIFIED operations and green
+  history. Extended soak/external alert delivery, live timeout evidence, and rollback rehearsal
+  remain;
 - independent security and provider data-use/legal review remain.
 
 Observed StudioNet finalization has commonly been under one minute, but this is not an SLA. Reviewers
@@ -208,7 +222,11 @@ metadata records `gitDirty=1`, the bundle hash above—not the commit alone—is
 artifact identity. Health, readiness, and history health returned `200` for that checkpoint. The
 proof view from [PR #6](https://github.com/Leokings/liquidity-arena/pull/6) is now merged and deployed,
 and the alias has since received the journal API, receipt-recovery fixes, and schedule restoration.
-The current artifact that executed run `32329108358` is READY deployment
+The historical artifact that executed first restored run `32329108358` was READY deployment
 `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ` at
 `https://liquidity-arena-dz2a8196a-leokings588-5902s-projects.vercel.app`, with the source and bundle
-identity recorded above. Its successor will be verified after this combined evidence record merges.
+identity recorded above. The current verified hardened runtime is
+`dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
+`https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app`; health, readiness,
+history-health, and proof view returned HTTP 200, with readiness matching chain `0xf22f`, exact
+V7/keeper/coverage, and zero V6 liability.

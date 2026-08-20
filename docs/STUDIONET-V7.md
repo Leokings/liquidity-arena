@@ -68,7 +68,10 @@ restored its minute-3/minute-13 schedule on main commit
 `81850e3c814cd541d392fdeecf4dacca753d25e6` after the journal canary passed. Restored scheduled run
 [`32329108358`](https://github.com/Leokings/liquidity-arena/actions/runs/32329108358) passed reconcile
 job `96306191739` and history job `96306791996`. The dedicated keeper rotation is complete; later
-local and workflow creates raise the live read-back total to 35 epochs.
+local and workflow creates raised the live read-back total to 35 epochs. Second action-bearing
+scheduled run [`32332196428`](https://github.com/Leokings/liquidity-arena/actions/runs/32332196428)
+passed reconcile job `96314848434` and history job `96315355338`; evidenced coverage is now at least
+36 epochs, nine workflow-created.
 
 StudioNet may return `transaction not found` for a newly broadcast hash before its receipt index is
 visible. Main commit `958e51743a821606ca78881e6bcc8fb0a34a8e8f` (PR #5) therefore gives both V7
@@ -101,6 +104,16 @@ BTC HIGH `-1190077` ppb and XRP LOW `-5067874` ppb from Binance, OKX, Gate, and 
 objectives in `REFUND_UNBACKED_WINNER`; the new epoch read back OPEN. Live totals became 35 epochs
 and eight workflow-created epochs.
 
+The second scheduled run then verified exact attempt-1 RESOLVE `1787198400` through transaction
+`0xebc4478607bbc6ca17d670dafa05d4aca99d8282959db50072fa881af47199dd` (operation
+`77ea4dec2b4f3e8a5302771eb6a5c0a60736a48e8175201df1956215b2bc964e`) and CREATE `1787292000`
+through `0x3d4b235c91dbefaeffc1f790ed5a4f3466cefb7b452d190aac12eb4c099b8a88` (operation
+`8e86c84b1a85eabb6768decf1fc755f3ff0207c6098c667c6bc08070c9ca48f2`). Both finalized with
+majority agreement, successful exact keeper-to-V7 execution, and matching RESOLVED/OPEN post-state.
+Neon snapshot `2026-08-20T04:40:05.109Z` read back 10 operations, all VERIFIED, zero unresolved.
+This is meaningful incremental soak evidence; extended soak and external alert delivery remain
+pending.
+
 The dedicated keeper then created two additional exact-hour epochs locally. Epoch `1787256000` used
 transaction `0xe10ce0bfc24320998e12cea148734124cb8b0f0ee2fb728ef2961191ee3aa9c4`; epoch `1787259600` used
 `0x00398a3c1acf443220848fabecdc4dd0e2cb4232a0b10588ac6ebbbfdf4c9058`. Both transactions finalized
@@ -120,8 +133,8 @@ Completed:
 - GenVM lint with 29 schema methods;
 - V7 direct tests 22/22;
 - combined V6/V7 direct tests 37/37;
-- 35 created epochs read back: one canary, an initial 24-target full-day schedule, two
-  finalized local dedicated-keeper creates, and eight workflow-created epochs with verified OPEN
+- at least 36 created epochs read back: one canary, an initial 24-target full-day schedule, two
+  finalized local dedicated-keeper creates, and nine workflow-created epochs with verified OPEN
   post-state;
 - fail-closed V7 keeper profile checks and pre-write signer recheck;
 - V6 drain tooling and a read-only claim-delivery monitor with explicit V6/V7 profiles;
@@ -156,6 +169,9 @@ Completed:
   `81850e3c814cd541d392fdeecf4dacca753d25e6`; workflow `338089019` is active;
 - first restored scheduled run `32329108358` passed both jobs, verified one resolve and one create,
   and left the production journal at 8/8 VERIFIED with zero unresolved.
+- second action-bearing scheduled run `32332196428` passed both jobs, verified one resolve and one
+  create, and left the production journal at 10/10 VERIFIED with zero unresolved; extended soak and
+  external alert delivery remain pending.
 
 Pending:
 
@@ -259,6 +275,9 @@ Manual journal canary run `32325583494` later passed history job `96297112208`. 
 or rejected proof requests. Restored scheduled run `32329108358` then passed history job
 `96306791996`; at `2026-08-20T03:45:10.146Z` it synchronized two deployments, two epochs, and two
 snapshots with zero new or rejected proofs and `replayed=false`.
+Second scheduled run `32332196428` passed history job `96315355338`; at
+`2026-08-20T04:34:56.951Z` it again synchronized two deployments, two epochs, and two snapshots with
+zero proof failures/rejections and `replayed=false`.
 
 Merged fix `e5627ebd270a7c6d5291151795b0af6442eba0a6` reuses the audited fail-closed StudioNet
 consensus/leader receipt validator for history proof verification. Protected manual workflow
@@ -318,10 +337,22 @@ The previous V6 artifact `dpl_DQEvnGup417wvTxuxzeNfJvySiM5` remains a READY roll
 rollback must preserve V6 new-write disabling. Continue browser/wallet soak, outage tests, external
 review, and broader proof coverage. The proof view from
 [PR #6](https://github.com/Leokings/liquidity-arena/pull/6) is merged and deployed on the production
-alias. The current production artifact that executed successful scheduled run `32329108358` is
-READY Vercel deployment `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ` at
+alias. The historical production artifact that executed first restored scheduled run `32329108358`
+was READY Vercel deployment `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ` at
 [liquidity-arena-dz2a8196a-leokings588-5902s-projects.vercel.app](https://liquidity-arena-dz2a8196a-leokings588-5902s-projects.vercel.app),
 GitHub deployment `5994871034`, source `81850e3c814cd541d392fdeecf4dacca753d25e6`.
 Bundle `/assets/market-BQWvq82y.js` is 188376 bytes with SHA-256
-`37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`. The successor containing
-this combined evidence record will be verified after merge.
+`37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`.
+
+The current verified hardened runtime is READY Vercel deployment
+`dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
+[liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app](https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app),
+GitHub deployment `5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`. CI run
+`32332498286` passed jobs `96315684498` and `96315684590`. Bundle `/assets/market-DTvIR-Xr.js` is
+191538 bytes with SHA-256 `7056bef680f18a8e98af1b21822f91f3630644b75a639c83398e1b31601f8e00`.
+It shares one ref-counted EventSource per URL/tab, uses Vercel `supportsCancellation=true` and
+disconnect cleanup, holds steady Studio calls near 240/hour, and retains the cap of four concurrent streams per IP.
+Browser trace proved one HTTP-200 SSE request for ROUND→4H, one per rapid reload across two reloads,
+LIVE/FRESH without STALE/errors, and an immediate independent HTTP-200 five-asset stream. Public
+health/readiness/history-health/proof endpoints returned HTTP 200; readiness matched chain `0xf22f`,
+exact V7/keeper/coverage, and zero V6 liability.

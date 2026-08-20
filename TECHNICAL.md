@@ -168,9 +168,11 @@ verifying five new operations; history job `96297112208` also succeeded. Authent
 health was active at `ready=true`, `schemaVersion=3`. V6 workflow `338089016` remains
 `disabled_manually`, and its `main` YAML is `workflow_dispatch`-only. PR #11 merged as `81850e3` and
 restored the V7 cron source. Scheduled run `32329108358` passed reconcile job `96306191739` and
-history job `96306791996`, verifying one resolve and one create. Contract time defines
-every gate. `resolve_epoch` and `activate_timeout_refund` remain permissionless, so scheduler loss
-cannot create an exclusive operator deadlock.
+history job `96306791996`, verifying one resolve and one create. Second action-bearing scheduled run
+`32332196428` on source `2664e739` passed reconcile job `96314848434` and history job `96315355338`,
+verifying RESOLVE `1787198400` and CREATE `1787292000` with zero deferred reads/actions. Contract
+time defines every gate. `resolve_epoch` and `activate_timeout_refund` remain permissionless, so
+scheduler loss cannot create an exclusive operator deadlock.
 
 Readiness shares the same deployment configuration as the server. For V7 it checks chain, contract
 identity, roles, stake and fee policy, exact-hour coverage, and all five live feeds. A V6 legacy
@@ -246,9 +248,10 @@ scheduled workflow is continuously active. Two additional exact-hour epochs, `17
 `1787259600`, were then created and OPEN-state verified through the dedicated keeper transactions
 recorded above.
 
-The manual canary and first restored scheduled run raise the live read-back total to 35 exact-hour
-epochs: 25 seeded, two local dedicated-keeper creates, and eight workflow-created epochs. Neon held
-eight journal operations, all VERIFIED, with zero unresolved after the scheduled run.
+The manual canary and two restored scheduled action-bearing cycles raise the evidenced live
+read-back total to at least 36 exact-hour epochs: 25 seeded, two local dedicated-keeper creates, and
+nine workflow-created epochs. Neon held 10 journal operations, all VERIFIED, with zero unresolved
+after the second scheduled run.
 
 The funded canary resolved with transaction
 `0xc2c86fdb37da9569e67eae00a15b6864ddab05364e92f4d6c0c4c75d6a4aab66` from four qualified venues.
@@ -268,11 +271,26 @@ identity is bundle `market-BHlwjm1W.js` with SHA-256
 passed browser/operator job `96247333491` and intelligent-contracts job `96247333299`. Health,
 readiness, and history
 health returned `200`. Readiness identified V7, two covered epochs, five feeds, and readable V6 with
-zero known player liability. Proof view PR #6 has since merged and is deployed. The current
-schedule-restoration production artifact that executed run `32329108358` is READY Vercel deployment
+zero known player liability. Proof view PR #6 has since merged and is deployed. The historical
+schedule-restoration production artifact that executed first restored run `32329108358` was READY
+Vercel deployment
 `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, GitHub deployment `5994871034`, source
 `81850e3c814cd541d392fdeecf4dacca753d25e6`. Bundle `/assets/market-BQWvq82y.js` is 188376 bytes with
 SHA-256 `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`.
+
+The current verified hardened production runtime is READY Vercel deployment
+`dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
+`https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app`, GitHub deployment
+`5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`. CI run `32332498286` passed
+browser/operator job `96315684498` and intelligent-contracts job `96315684590`. Bundle
+`/assets/market-DTvIR-Xr.js` is 191538 bytes with SHA-256
+`7056bef680f18a8e98af1b21822f91f3630644b75a639c83398e1b31601f8e00`. The runtime has a shared
+ref-counted EventSource, `supportsCancellation=true`, disconnect cleanup, about 240 steady Studio
+calls/hour, and a cap of four concurrent streams per IP. Browser trace proved one HTTP-200 stream for
+ROUND→4H, exactly one HTTP-200 stream per rapid reload across two reloads, LIVE/FRESH without
+STALE/errors, and an immediate independent curl returning five-asset live events. Public
+health/readiness/history-health/proof endpoints all returned HTTP 200; readiness matched chain
+`0xf22f`, exact V7/keeper configuration, epoch coverage, and zero V6 liability.
 
 Main commit `958e51743a821606ca78881e6bcc8fb0a34a8e8f` separately extends keeper receipt propagation to
 seven attempts on the same hash, using 315 seconds of outer backoff and no write resubmission; CI run
@@ -284,7 +302,11 @@ merged and was deployed. Manual run `32325583494` subsequently proved the author
 path by recovering one exact operation across runs and ending with six VERIFIED operations without
 duplicate submission. Restored scheduled run `32329108358` then verified RESOLVE `1787194800` and
 CREATE `1787288400`; post-run journal read-back was 8/8 VERIFIED with zero unresolved, and dependent
-history synchronization passed.
+history synchronization passed. Second scheduled run `32332196428` then verified exact attempt-1
+RESOLVE transaction `0xebc4478607bbc6ca17d670dafa05d4aca99d8282959db50072fa881af47199dd`
+and CREATE transaction `0x3d4b235c91dbefaeffc1f790ed5a4f3466cefb7b452d190aac12eb4c099b8a88`;
+both finalized with majority agreement and matching post-state. Neon read back 10/10 VERIFIED with
+zero unresolved, and the dependent two-deployment/two-epoch/two-snapshot history sync passed.
 
 Observed StudioNet finality has been in the tens-of-seconds range, and an earlier V6 funded resolver
 was observed at 53.38 seconds record-to-finalized. These are samples for UX design only, not a bound

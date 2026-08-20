@@ -19,7 +19,10 @@ coverage was at least 34 epochs, including seven workflow-created epochs. V6 wor
 `disabled_manually` with `workflow_dispatch`-only `main` source. PR #11 merged as `81850e3` and
 restored the V7 cron source. Scheduled run `32329108358` passed reconcile/history, verified one
 resolve and one create, and left Neon at eight operations, all VERIFIED, zero unresolved. Live epoch
-count became 35, including eight workflow-created epochs. Long-run monitoring,
+count became 35, including eight workflow-created epochs. Second scheduled run `32332196428` passed
+reconcile job `96314848434` and history job `96315355338`, finalized another exact resolve/create
+pair, and left Neon at 10/10 VERIFIED operations with zero unresolved. Evidenced coverage is now at
+least 36 epochs, nine workflow-created. Extended scheduled soak and external alert delivery,
 database-outage recovery, broader proof coverage, and an independent security review remain release
 gates. The payment path must not be described as production-ready.
 
@@ -135,6 +138,9 @@ VERIFIED operations: one exact cross-run recovery and five newly submitted opera
 three resolves and three creates. Live V6 workflow `338089016` remains `disabled_manually`, and its
 merged `main` source is `workflow_dispatch`-only. PR #11 merge `81850e3` restored the V7 cron source;
 run `32329108358` then passed with two exact VERIFIED operations and green history synchronization.
+Second action-bearing scheduled run `32332196428` repeated that result with two more exact VERIFIED
+operations and a green history job; this is incremental soak evidence, not completion of the
+extended-soak or external-alert gates.
 
 The restored GitHub cron is best-effort. Cron does not
 define epoch time and is not an availability guarantee.
@@ -185,8 +191,8 @@ versions 1/2/3, zero operations at that migration-time read-back, all four attem
 unresolved unique index including `QUARANTINED`, and the parent-freeze trigger installed. The matching
 API now reports authenticated `ready=true`, `schemaVersion=3`, and manual run `32325583494` proved
 the live journal path with six VERIFIED operations. Proof-view PR #6 is merged and deployed;
-scheduled run `32329108358` subsequently proved the restored cron path and current production
-artifact recorded below.
+scheduled run `32329108358` subsequently proved the restored cron path, and `32332196428` proved a
+second action-bearing scheduled cycle. The current hardened production runtime is recorded below.
 
 ## Remaining security gates
 
@@ -214,13 +220,26 @@ zero-liability V6 recovery. Vercel metadata anchors it to merged receipt-proof c
 `e5627ebd270a7c6d5291151795b0af6442eba0a6` and records `gitDirty=1`; bundle
 `market-BHlwjm1W.js` with SHA-256
 `c0be752a9a1407e76a1f417256f220f068969fdcf80f88872683e33f2c96e79e` is the exact browser artifact
-identity. Proof-view PR #6 has since merged and is deployed. The current schedule-restoration
-production artifact is READY Vercel deployment `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, GitHub
+identity. Proof-view PR #6 has since merged and is deployed. The historical schedule-restoration
+artifact that executed first restored run `32329108358` was READY Vercel deployment
+`dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, GitHub
 deployment `5994871034`, source
 `81850e3c814cd541d392fdeecf4dacca753d25e6`. Its bundle `/assets/market-BQWvq82y.js` is 188376 bytes
-with SHA-256 `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`, and it executed successful
-scheduled run `32329108358`. The earlier V6 compatibility deployment remains a rollback artifact,
-but rollback must never re-enable V6 writes.
+with SHA-256 `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`.
+
+The current verified hardened runtime is READY Vercel deployment
+`dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
+`https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app`, GitHub deployment
+`5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`. CI run `32332498286` passed jobs
+`96315684498` and `96315684590`; bundle `/assets/market-DTvIR-Xr.js` is 191538 bytes with SHA-256
+`7056bef680f18a8e98af1b21822f91f3630644b75a639c83398e1b31601f8e00`. It uses one shared
+ref-counted EventSource per URL/tab, Vercel request cancellation, idempotent disconnect cleanup,
+about 240 steady Studio calls/hour, and a cap of four concurrent streams per IP. Adversarial production browser
+verification found one HTTP-200 SSE request for ROUND→4H, one per rapid reload across two reloads,
+LIVE/FRESH without STALE/errors, and an immediate independent HTTP-200 curl with five-asset events.
+Health, readiness, history-health, and proof view returned HTTP 200; readiness matched chain
+`0xf22f`, exact V7/keeper/coverage, and zero V6 liability. The earlier V6 compatibility deployment
+remains a rollback artifact, but rollback must never re-enable V6 writes.
 
 ## Reporting
 

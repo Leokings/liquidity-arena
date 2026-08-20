@@ -123,7 +123,11 @@ submitted; history job `96297112208` also succeeded. At that manual-run checkpoi
 coverage was at least 34 epochs, including seven workflow-created epochs. Authenticated journal API health is active at `ready=true`,
 `schemaVersion=3`. Scheduled run `32329108358` then passed jobs `96306191739` and `96306791996`,
 verified RESOLVE `1787194800` and CREATE `1787288400`, and left Neon at 8/8 VERIFIED with zero
-unresolved. Live epoch count was 35, including eight workflow-created epochs.
+unresolved. Live epoch count was 35, including eight workflow-created epochs. Second action-bearing
+scheduled run `32332196428` then passed jobs `96314848434` and `96315355338`, verified RESOLVE
+`1787198400` and CREATE `1787292000`, and left Neon at 10/10 VERIFIED with zero unresolved.
+Evidenced coverage is now at least 36 epochs, nine workflow-created. Extended soak and external
+alert delivery remain open.
 
 ## 5. Phase C — funded V7 canary
 
@@ -269,10 +273,21 @@ to merged receipt-proof commit `e5627ebd270a7c6d5291151795b0af6442eba0a6` and re
 both jobs; health/readiness/history
 health returned `200`, and V6 remained readable with zero known liability. Deployment
 `dpl_DQEvnGup417wvTxuxzeNfJvySiM5` remains the prior V6 rollback artifact. Proof-view PR #6 is merged
-and deployed. The current READY artifact that executed successful scheduled run `32329108358` is
+and deployed. The historical READY artifact that executed first restored run `32329108358` was
 Vercel deployment `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, GitHub deployment `5994871034`, source
 `81850e3c814cd541d392fdeecf4dacca753d25e6`, bundle `/assets/market-BQWvq82y.js` (188376 bytes),
 SHA-256 `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`.
+
+The current verified hardened runtime is READY deployment `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
+`https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app`, GitHub deployment
+`5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`. CI run `32332498286` passed jobs
+`96315684498` and `96315684590`. Bundle `/assets/market-DTvIR-Xr.js` is 191538 bytes with SHA-256
+`7056bef680f18a8e98af1b21822f91f3630644b75a639c83398e1b31601f8e00`. Shared ref-counted SSE,
+`supportsCancellation=true`, and disconnect cleanup reduce steady Studio calls to about 240/hour
+under the cap of four concurrent streams per IP. Browser tracing proved one HTTP-200 stream for ROUND→4H, one per rapid
+reload, LIVE/FRESH without STALE/errors, and an immediate independent HTTP-200 five-asset stream.
+Health, readiness, history-health, and proof view returned HTTP 200; readiness matched chain
+`0xf22f`, exact V7/keeper/coverage, and zero V6 liability.
 
 ## 9. Phase G — submission package
 
@@ -292,8 +307,9 @@ Required artifacts:
 
 - StudioNet observed finality is not an SLA; always wait for actual `FINALIZED` status.
 - V6 workflow `338089016` remains `disabled_manually`, with `workflow_dispatch`-only source on
-  `main`. PR #11 merge `81850e3` restored the V7 cron source, and run `32329108358` passed. Contract
-  time defines every epoch and permissionless methods avoid an exclusive
+  `main`. PR #11 merge `81850e3` restored the V7 cron source; runs `32329108358` and `32332196428`
+  both passed exact action-bearing reconcile/history cycles. Contract time defines every epoch and
+  permissionless methods avoid an exclusive
   settlement operator.
 - Public exchange endpoint availability and terms can change.
 - Vercel request runtimes must not own unbounded finality waits.
@@ -307,8 +323,9 @@ The V7 contract, initial full-day schedule, funded canary, dedicated keeper rota
 scheduler preflight, repeated Neon state projection, and public V7 promotion are complete. The
 selected proof backfill, proof-view deployment, authenticated schema-v3 journal API health, and a
 successful six-operation authoritative-journal canary are also complete. The release still needs
-outage/broader-proof evidence, timeout evidence, extended monitoring, and independent reviews. The
-first restored scheduled run and its current production artifact are recorded. The prior
+outage/broader-proof evidence, timeout evidence, extended monitoring/external alerts, and independent
+reviews. Two restored action-bearing scheduled cycles and the current hardened production runtime
+are recorded. The prior
 seven-attempt live run remains recorded as a failed lookup despite both exact writes later
 finalizing/applying.
 

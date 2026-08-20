@@ -96,6 +96,11 @@ The machine-readable evidence is in
 - first restored scheduled run `32329108358` passed reconcile job `96306191739` and history job
   `96306791996`, verified RESOLVE `1787194800` and CREATE `1787288400`, and left Neon with eight
   operations, all VERIFIED, zero unresolved; live epoch count was 35, eight workflow-created;
+- second action-bearing scheduled run `32332196428` on `2664e739` passed reconcile job
+  `96314848434` and history job `96315355338`, verified RESOLVE `1787198400` and CREATE
+  `1787292000`, and left Neon with 10/10 VERIFIED operations and zero unresolved; evidenced coverage
+  is now at least 36 epochs, nine workflow-created, while extended soak and external alert delivery
+  remain pending;
 - scheduled legacy V6 drain run `32297047031` completed successfully without any creation action;
   the later live audit found all five V6 epochs resolved/determined and player liability zero, so
   recurring V6 drain execution is retired and live workflow `338089016` is `disabled_manually`;
@@ -218,9 +223,11 @@ schema version 3 health. Manual run `32325583494` then recovered the exact previ
 and left six operations VERIFIED, proving the action-bearing recovery gate. PR #11 restored the V7
 schedule; V7 workflow `338089019` is active while V6 workflow `338089016` stays
 `disabled_manually`. Scheduled run `32329108358` then passed both jobs, verified one exact resolve and
-one exact create, and left eight operations VERIFIED with zero unresolved. Continue soak, prove no
-owner-capable key is available to automation, and add alerts for coverage, source quorum, finality,
-journal health, history quota failures, and role drift.
+one exact create, and left eight operations VERIFIED with zero unresolved. Second scheduled run
+`32332196428` repeated the exact action-bearing path with two more finalized, majority-agree,
+post-state-verified attempt-1 operations and left 10/10 VERIFIED with zero unresolved. Continue the
+extended soak, prove no owner-capable key is available to automation, and add external alerts for
+coverage, source quorum, finality, journal health, history quota failures, and role drift.
 
 ### P1 — asynchronous child failure has no safe retry
 
@@ -239,13 +246,24 @@ recorded above. The public alias targets V7, health/readiness/history-health ret
 remained readable with zero known liability, and the previous V6 compatibility deployment remains a
 rollback artifact. Continue browser/wallet soak and ensure rollback never reactivates V6 creation.
 The proof view in [PR #6](https://github.com/Leokings/liquidity-arena/pull/6) is now merged and
-deployed on the production alias. The current READY artifact that executed successful scheduled run
-`32329108358` is Vercel deployment `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ` at
+deployed on the production alias. The historical READY artifact that executed the first restored
+scheduled run `32329108358` was Vercel deployment `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ` at
 [its immutable URL](https://liquidity-arena-dz2a8196a-leokings588-5902s-projects.vercel.app), GitHub
 deployment `5994871034`, source `81850e3c814cd541d392fdeecf4dacca753d25e6`, with bundle
 `/assets/market-BQWvq82y.js` (188376 bytes), SHA-256
-`37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`. Verify its successor after
-this combined evidence record merges.
+`37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`.
+
+The current verified hardened runtime is READY Vercel deployment
+`dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
+[its immutable URL](https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app), GitHub
+deployment `5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`. CI `32332498286`
+passed jobs `96315684498` and `96315684590`. Bundle `/assets/market-DTvIR-Xr.js` is 191538 bytes,
+SHA-256 `7056bef680f18a8e98af1b21822f91f3630644b75a639c83398e1b31601f8e00`. It enables Vercel request
+cancellation and one shared ref-counted EventSource per URL/tab; steady Studio calls are about
+240/hour under the cap of four concurrent streams per IP. Browser tracing proved one HTTP-200 SSE request for
+ROUND→4H, one per rapid reload across two reloads, LIVE/FRESH without STALE/errors, and an immediate
+independent HTTP-200 five-asset stream. Health, readiness, history-health, and proof view returned
+HTTP 200; readiness matched chain `0xf22f`, exact V7/keeper/coverage, and zero V6 liability.
 
 ### P2 — durable history outage recovery and broader proof coverage are pending
 

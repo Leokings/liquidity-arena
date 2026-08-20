@@ -376,6 +376,8 @@
     "workflowCreatedEpochCountAfterManualCanary": 7,
     "evidencedEpochCountAfterFirstRestoredScheduledRun": 35,
     "workflowCreatedEpochCountAfterFirstRestoredScheduledRun": 8,
+    "minimumEvidencedEpochCountAfterSecondActionBearingScheduledRun": 36,
+    "workflowCreatedEpochCountAfterSecondActionBearingScheduledRun": 9,
     "proofViewPullRequest": 6,
     "proofViewStatus": "MERGED_AND_DEPLOYED",
     "v7CronRestoration": {
@@ -391,6 +393,27 @@
         "postRunJournalOperationCount": 8,
         "postRunVerifiedOperationCount": 8,
         "postRunUnresolvedOperationCount": 0
+      },
+      "secondActionBearingScheduledRunEvidence": {
+        "workflowRunId": "32332196428",
+        "event": "schedule",
+        "headCommit": "2664e739c11ee3f223626a20663bc2564d64ec7a",
+        "status": "SUCCESS",
+        "reconcileJobId": "96314848434",
+        "historyJobId": "96315355338",
+        "verifiedOperationCount": 2,
+        "resolveEpochEndTimestamp": 1787198400,
+        "resolveOperationId": "77ea4dec2b4f3e8a5302771eb6a5c0a60736a48e8175201df1956215b2bc964e",
+        "resolveTransactionHash": "0xebc4478607bbc6ca17d670dafa05d4aca99d8282959db50072fa881af47199dd",
+        "createEpochEndTimestamp": 1787292000,
+        "createOperationId": "8e86c84b1a85eabb6768decf1fc755f3ff0207c6098c667c6bc08070c9ca48f2",
+        "createTransactionHash": "0x3d4b235c91dbefaeffc1f790ed5a4f3466cefb7b452d190aac12eb4c099b8a88",
+        "receiptsAndPostStates": "PASS_FINALIZED_MAJORITY_AGREE_SUCCESSFUL_EXACT_CALLS_MATCHING_RESOLVED_AND_OPEN_POST_STATES",
+        "postRunJournalReadAt": "2026-08-20T04:40:05.109Z",
+        "postRunJournalOperationCount": 10,
+        "postRunVerifiedOperationCount": 10,
+        "postRunUnresolvedOperationCount": 0,
+        "extendedSoakAndExternalAlertDelivery": "PENDING"
       }
     }
   },
@@ -457,7 +480,7 @@
     "knownUnsafeImmutableDeploymentStatus": "REMOVED_404_VERIFIED",
     "readinessStatus": "PASS_200_V7_READY_LEGACY_V6_READABLE_ZERO_LIABILITY",
     "artifactScopeNote": "Historical verified READY V7 artifact with V6 legacy recovery preserved; proof-view PR #6 is merged and deployed.",
-    "currentScheduleRestorationProductionArtifact": {
+    "historicalFirstRestoredScheduleExecutionArtifact": {
       "sourceCommit": "81850e3c814cd541d392fdeecf4dacca753d25e6",
       "githubDeploymentId": "5994871034",
       "githubDeploymentStatus": "success",
@@ -467,8 +490,34 @@
       "bundleFile": "/assets/market-BQWvq82y.js",
       "bundleBytes": 188376,
       "bundleSha256": "37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba",
-      "evidenceScope": "CURRENT_PRODUCTION_ARTIFACT_THAT_EXECUTED_SUCCESSFUL_V7_SCHEDULED_RUN_32329108358",
-      "postEvidenceArtifactPolicy": "VERIFY_SUCCESSOR_AFTER_COMBINED_EVIDENCE_CHANGE_MERGES"
+      "evidenceScope": "HISTORICAL_PRODUCTION_ARTIFACT_THAT_EXECUTED_FIRST_RESTORED_V7_SCHEDULED_RUN_32329108358",
+      "successorVerificationStatus": "SATISFIED_BY_CURRENT_HARDENED_PRODUCTION_RUNTIME_ARTIFACT"
+    },
+    "currentHardenedProductionRuntimeArtifact": {
+      "sourceCommit": "c32727f386f3e3f23d4a3d9a9d1e14a838655ff7",
+      "githubDeploymentId": "5995889896",
+      "githubDeploymentStatus": "success",
+      "vercelDeploymentId": "dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj",
+      "vercelDeploymentUrl": "https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app",
+      "status": "READY",
+      "ciRunId": "32332498286",
+      "browserAndOperatorJobId": "96315684498",
+      "intelligentContractsJobId": "96315684590",
+      "ciStatus": "SUCCESS",
+      "bundleFile": "/assets/market-DTvIR-Xr.js",
+      "bundleBytes": 191538,
+      "bundleSha256": "7056bef680f18a8e98af1b21822f91f3630644b75a639c83398e1b31601f8e00",
+      "sharedRefCountedEventSourcePerUrlPerTab": true,
+      "vercelSupportsCancellation": true,
+      "steadyStudioCallsPerHourApproximate": 240,
+      "concurrentStreamsPerIpCap": 4,
+      "globalConcurrentStreamsCap": 100,
+      "browserVerification": "PASS_ONE_HTTP_200_SSE_ROUND_TO_4H_ONE_PER_RAPID_RELOAD_LIVE_FRESH_NO_STALE_NO_ERRORS_IMMEDIATE_CURL_HTTP_200_FIVE_ASSETS",
+      "healthReadinessHistoryAndProofStatus": 200,
+      "readyChainId": "0xf22f",
+      "readyV7ContractAndKeeper": "PASS_EXACT",
+      "readyV6PlayerLiabilityAtto": "0",
+      "evidenceScope": "CURRENT_VERIFIED_HARDENED_PRODUCTION_RUNTIME_ARTIFACT"
     },
     "previousV6CompatibilityArtifact": {
       "deploymentId": "dpl_DQEvnGup417wvTxuxzeNfJvySiM5",
@@ -480,7 +529,7 @@
   "remainingLiveEvidence": [
     "24-hour timeout refund path; the unbacked-winner refund path is proven",
     "claim-child failure recovery or a documented protocol delivery guarantee",
-    "extended V7 scheduled-run soak and external alert delivery; manual run 32325583494 and first restored scheduled run 32329108358 are successful, while V6 workflow 338089016 remains disabled_manually at zero player liability",
+    "extended V7 scheduled-run soak and external alert delivery; manual run 32325583494 plus restored action-bearing scheduled runs 32329108358 and 32332196428 are successful, while V6 workflow 338089016 remains disabled_manually at zero player liability",
     "durable server-side market telemetry",
     "provider data-use and legal review",
     "independent security review"
