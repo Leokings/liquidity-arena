@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   assertFinalizedGenlayerExecution,
+  createPasswordWritingSpawn,
   GENLAYER_STUDIONET_RPC_URL,
   getGenlayerTransactionStatus,
   parseGenlayerCallOutput,
@@ -527,14 +528,6 @@ export async function runV6KeeperOnce({
   });
 }
 
-function passwordWritingSpawn(password) {
-  return (command, args, options) => {
-    const child = nodeSpawn(command, args, options);
-    child.once('spawn', () => child.stdin?.end(`${password}\n`));
-    return child;
-  };
-}
-
 export function createCliV6KeeperOperator({ config, environment = process.env } = {}) {
   const invocation = resolveGenlayerCommand();
   const password = environment.GENLAYER_KEYSTORE_PASSWORD || '';
@@ -574,7 +567,7 @@ export function createCliV6KeeperOperator({ config, environment = process.env } 
       args: [config.contractAddress, method, '--args', ...args.map(String)],
       onTransactionHash,
       stdin: password ? 'pipe' : 'inherit',
-      spawnImpl: password ? passwordWritingSpawn(password) : nodeSpawn,
+      spawnImpl: password ? createPasswordWritingSpawn(password) : nodeSpawn,
       ...quiet,
     }),
     waitFinalized: (transactionHash, policy) => waitForGenlayerFinalizedReceipt({
@@ -582,6 +575,8 @@ export function createCliV6KeeperOperator({ config, environment = process.env } 
       transactionHash,
       retries: policy.retries,
       intervalMs: policy.intervalMs,
+      stdin: password ? 'pipe' : 'inherit',
+      spawnImpl: password ? createPasswordWritingSpawn(password) : nodeSpawn,
       ...quiet,
     }),
   });
