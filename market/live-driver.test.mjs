@@ -10,6 +10,7 @@ import {
   STREAM_DISPLAY_CADENCE_MS,
   WINDOW_QUERIES,
   calculateRoundMetrics,
+  createSharedEventSourceConstructor,
   parseBinanceKlines,
   parseBinanceStreamPayload,
   resolveBinanceFeeds,
@@ -134,6 +135,109 @@ function streamPayload(sourceMs, priceOffset = 0, overrides = {}) {
     })),
   };
 }
+
+test('shared EventSource constructor fans one native connection out and closes it after the last subscriber', () => {
+  const NativeEventSource = createFakeEventSource();
+  const SharedEventSource = createSharedEventSourceConstructor(NativeEventSource);
+  const first = new SharedEventSource('/api/binance/stream');
+  const second = new SharedEventSource('/api/binance/stream');
+  const received = [];
+  first.addEventListener('prices', (event) => received.push(['first', event.data]));
+  second.addEventListener('prices', (event) => received.push(['second', event.data]));
+
+  assert.equal(NativeEventSource.instances.length, 1);
+  NativeEventSource.instances[0].emit('prices', { sourceTimestampUs: '1', assets: [] });
+  assert.deepEqual(received.map(([subscriber]) => subscriber), ['first', 'second']);
+
+  first.close();
+  assert.equal(NativeEventSource.instances[0].closed, false);
+  second.close();
+  assert.equal(NativeEventSource.instances[0].closed, true);
+});
+
+test('a failing shared EventSource listener cannot starve another subscriber', () => {
+  const NativeEventSource = createFakeEventSource();
+  const SharedEventSource = createSharedEventSourceConstructor(NativeEventSource);
+  const first = new SharedEventSource('/api/binance/stream');
+  const second = new SharedEventSource('/api/binance/stream');
+  const reported = [];
+  const previousReportError = globalThis.reportError;
+  globalThis.reportError = (error) => reported.push(error);
+  let received = 0;
+  first.addEventListener('prices', () => { throw new Error('subscriber render failed'); });
+  second.addEventListener('prices', () => { received += 1; });
+
+  try {
+    NativeEventSource.instances[0].emit('prices', { sourceTimestampUs: '1', assets: [] });
+  } finally {
+    if (previousReportError === undefined) delete globalThis.reportError;
+    else globalThis.reportError = previousReportError;
+    first.close();
+    second.close();
+  }
+
+  assert.equal(received, 1);
+  assert.equal(reported.length, 1);
+  assert.match(reported[0].message, /subscriber render failed/);
+});
+
+test('invalidating a shared EventSource closes the generation and notifies every peer', () => {
+  const NativeEventSource = createFakeEventSource();
+  const SharedEventSource = createSharedEventSourceConstructor(NativeEventSource);
+  const first = new SharedEventSource('/api/binance/stream');
+  const second = new SharedEventSource('/api/binance/stream');
+  let peerErrors = 0;
+  second.addEventListener('error', () => {
+    peerErrors += 1;
+    second.close();
+  });
+
+  first.invalidate();
+  assert.equal(NativeEventSource.instances[0].closed, true);
+  assert.equal(peerErrors, 1);
+  assert.equal(first.closed, true);
+  assert.equal(second.closed, true);
+
+  const replacement = new SharedEventSource('/api/binance/stream');
+  assert.equal(NativeEventSource.instances.length, 2);
+  replacement.close();
+});
+
+test('two live market drivers share one native stream without coupling normal teardown', async () => {
+  const scheduler = createScheduler();
+  const NativeEventSource = createFakeEventSource();
+  const SharedEventSource = createSharedEventSourceConstructor(NativeEventSource);
+  const firstRecorder = createFetchRecorder();
+  const secondRecorder = createFetchRecorder();
+  const options = {
+    EventSourceImpl: SharedEventSource,
+    setTimeoutImpl: scheduler.setTimeoutImpl,
+    clearTimeoutImpl: scheduler.clearTimeoutImpl,
+    now: scheduler.now,
+    autoStart: false,
+  };
+  const roundDriver = new LiveMarketDriver({
+    ...options,
+    window: 'ROUND',
+    fetchImpl: firstRecorder.fetchImpl,
+  });
+  const contextDriver = new LiveMarketDriver({
+    ...options,
+    window: '4H',
+    fetchImpl: secondRecorder.fetchImpl,
+  });
+  await Promise.all([roundDriver.refresh(), contextDriver.refresh()]);
+
+  roundDriver.start();
+  contextDriver.start();
+  assert.equal(NativeEventSource.instances.length, 1);
+
+  contextDriver.destroy();
+  assert.equal(NativeEventSource.instances[0].closed, false);
+  roundDriver.destroy();
+  assert.equal(NativeEventSource.instances[0].closed, true);
+  assert.equal(scheduler.size(), 0);
+});
 
 test('Binance kline parser aligns close prices and removes invalid rows', () => {
   const parsed = parseBinanceKlines([

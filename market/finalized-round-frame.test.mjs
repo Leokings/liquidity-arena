@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { MARKET_ASSETS, createMarketFrame } from './index.js';
 import {
+  canReuseFinalizedDisplayRound,
   canReuseFinalizedRoundVector,
   hasVerifiedFinalizedRoundVector,
   reconcileFinalizedRoundFrame,
@@ -38,6 +39,7 @@ function finalRound(overrides = {}) {
     protocolVersion: 'LIQUIDITY_ARENA_V6',
     deploymentAlias: 'v6',
     contractAddress: `0x${'6'.repeat(40)}`,
+    objective: 'HIGH',
     status: 'RESOLVED',
     epochEndTimestamp: 1_787_155_200,
     venueCount: 5,
@@ -176,4 +178,25 @@ test('only a complete vector that agrees with the fresh terminal epoch is reusab
     finalRound({ status: 'OPEN' }),
     finalAssets,
   ), false);
+});
+
+test('a complete terminal display round is reusable only for the same view identity', () => {
+  const round = finalRound();
+  const target = {
+    epochEndTimestamp: round.epochEndTimestamp,
+    objective: round.objective,
+    deploymentAlias: round.deploymentAlias,
+    protocolVersion: round.protocolVersion,
+    contractAddress: round.contractAddress,
+  };
+  assert.equal(canReuseFinalizedDisplayRound(round, finalAssets, target), true);
+  assert.equal(canReuseFinalizedDisplayRound(round, finalAssets.slice(0, 4), target), false);
+  assert.equal(canReuseFinalizedDisplayRound(round, finalAssets, {
+    ...target,
+    epochEndTimestamp: target.epochEndTimestamp + 3_600,
+  }), false);
+  assert.equal(canReuseFinalizedDisplayRound(round, finalAssets, {
+    ...target,
+    objective: 'LOW',
+  }), false);
 });

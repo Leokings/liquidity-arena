@@ -334,6 +334,130 @@ export function parseBinanceStreamPayload(payload) {
   });
 }
 
+/**
+ * Create an EventSource-compatible constructor that shares one native stream
+ * for each URL. Liquidity Arena keeps an independent ROUND driver alongside
+ * the selected context driver; both need the same price packets, not separate
+ * long-lived HTTP connections.
+ *
+ * `invalidate()` is an intentionally small extension used when one subscriber
+ * proves the shared transport stale. It closes the native stream and notifies
+ * every peer so all drivers reconnect on the same new generation. Ordinary
+ * `close()` only detaches that subscriber, which keeps timeframe changes from
+ * interrupting the ROUND feed.
+ */
+export function createSharedEventSourceConstructor(EventSourceImpl = globalThis.EventSource) {
+  if (typeof EventSourceImpl !== 'function') return null;
+  const entries = new Map();
+
+  const removeNativeListeners = (entry) => {
+    for (const [type, handler] of Object.entries(entry.nativeHandlers)) {
+      entry.source.removeEventListener?.(type, handler);
+    }
+  };
+
+  const closeEntry = (entry) => {
+    if (entries.get(entry.key) === entry) entries.delete(entry.key);
+    removeNativeListeners(entry);
+    try { entry.source.close(); } catch {}
+  };
+
+  class SharedEventSource {
+    constructor(url, options) {
+      const normalizedUrl = String(url);
+      const withCredentials = options?.withCredentials === true;
+      const key = `${withCredentials ? 'credentials' : 'anonymous'}:${normalizedUrl}`;
+      let entry = entries.get(key);
+      if (!entry) {
+        const source = new EventSourceImpl(url, options);
+        entry = {
+          key,
+          source,
+          clients: new Set(),
+          invalidated: false,
+          nativeHandlers: {},
+        };
+        for (const type of ['open', 'prices', 'error']) {
+          const handler = (event) => {
+            for (const client of [...entry.clients]) {
+              if (client._entry === entry) client._dispatch(type, event);
+            }
+          };
+          entry.nativeHandlers[type] = handler;
+          source.addEventListener(type, handler);
+        }
+        entries.set(key, entry);
+      }
+      this.url = normalizedUrl;
+      this.withCredentials = withCredentials;
+      this.closed = false;
+      this._entry = entry;
+      this._listeners = new Map();
+      entry.clients.add(this);
+    }
+
+    get readyState() {
+      return this._entry?.source?.readyState ?? 2;
+    }
+
+    addEventListener(type, listener) {
+      if (this.closed || typeof listener !== 'function') return;
+      const listeners = this._listeners.get(type) || new Set();
+      listeners.add(listener);
+      this._listeners.set(type, listeners);
+    }
+
+    removeEventListener(type, listener) {
+      this._listeners.get(type)?.delete(listener);
+    }
+
+    _dispatch(type, event) {
+      if (this.closed) return;
+      for (const listener of [...(this._listeners.get(type) || [])]) {
+        try {
+          listener.call(this, event);
+        } catch (error) {
+          // Match EventTarget dispatch: one consumer cannot prevent another
+          // shared subscriber from receiving the same transport event.
+          globalThis.reportError?.(error);
+        }
+      }
+    }
+
+    close() {
+      if (this.closed) return;
+      this.closed = true;
+      const entry = this._entry;
+      this._entry = null;
+      this._listeners.clear();
+      if (!entry) return;
+      entry.clients.delete(this);
+      if (!entry.invalidated && entry.clients.size === 0) closeEntry(entry);
+    }
+
+    invalidate() {
+      const entry = this._entry;
+      if (!entry || entry.invalidated) {
+        this.close();
+        return;
+      }
+      entry.invalidated = true;
+      closeEntry(entry);
+      const peers = [...entry.clients].filter((client) => client !== this);
+      this.close();
+      const event = Object.freeze({ type: 'error', sharedEventSourceInvalidated: true });
+      for (const peer of peers) {
+        if (peer._entry !== entry || peer.closed) continue;
+        peer._dispatch('error', event);
+        // A peer without an error handler must not retain an invalid source.
+        if (peer._entry === entry) peer.close();
+      }
+    }
+  }
+
+  return SharedEventSource;
+}
+
 export class LiveMarketDriver {
   constructor({
     onFrame = () => {},
@@ -666,7 +790,7 @@ export class LiveMarketDriver {
     this.streamConnected = false;
     this._emitStaleStreamFrame();
     this.streamOpenedAt = null;
-    this._removeEventSource();
+    this._removeEventSource({ invalidate: true });
     this._scheduleReconnect();
     this._recoverHistory();
   }
@@ -845,7 +969,7 @@ export class LiveMarketDriver {
     this._scheduleStreamFlush();
   }
 
-  _removeEventSource() {
+  _removeEventSource({ invalidate = false } = {}) {
     const source = this.eventSource;
     if (!source) return;
     const handlers = this.eventSourceHandlers;
@@ -854,7 +978,10 @@ export class LiveMarketDriver {
       source.removeEventListener('prices', handlers.prices);
       source.removeEventListener('error', handlers.error);
     }
-    try { source.close(); } catch {}
+    try {
+      if (invalidate && typeof source.invalidate === 'function') source.invalidate();
+      else source.close();
+    } catch {}
     this.eventSource = null;
     this.eventSourceHandlers = null;
   }
@@ -880,7 +1007,7 @@ export class LiveMarketDriver {
     this.streamConnected = false;
     this.streamOpenedAt = null;
     this._clearStreamFreshnessTimer();
-    this._removeEventSource();
+    this._removeEventSource({ invalidate: true });
     this._scheduleReconnect();
     this._recoverHistory();
   }

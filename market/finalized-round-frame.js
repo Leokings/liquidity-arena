@@ -130,6 +130,21 @@ export function canReuseFinalizedRoundVector(cachedRound, cachedAssetRecords, fr
 }
 
 /**
+ * A complete terminal display record is immutable and can replace a repeated
+ * display-epoch read only while its full route and objective identity still
+ * match the requested view. Action epochs are deliberately outside this
+ * helper and continue to be polled by the application.
+ */
+export function canReuseFinalizedDisplayRound(round, assetRecords, target = {}) {
+  return Number(round?.epochEndTimestamp) === Number(target.epochEndTimestamp)
+    && String(round?.objective || '').toUpperCase() === String(target.objective || '').toUpperCase()
+    && String(round?.deploymentAlias || '').toLowerCase() === String(target.deploymentAlias || '').toLowerCase()
+    && String(round?.protocolVersion || '').toUpperCase() === String(target.protocolVersion || '').toUpperCase()
+    && String(round?.contractAddress || '').toLowerCase() === String(target.contractAddress || '').toLowerCase()
+    && hasVerifiedFinalizedRoundVector(round, assetRecords);
+}
+
+/**
  * Rebuild only a ROUND frame from the selected deployment's FINALIZED return vector.
  * Prices remain live display quotes, momentum still controls flow, and
  * volatility still controls turbulence; settlement returns alone control

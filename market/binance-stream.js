@@ -908,38 +908,62 @@ export function createBinanceStreamMiddleware({
 
     let requestClosed = false;
     const releaseReservation = reserveClient(clientIp);
+    // Node may emit `aborted`, `error`, and `close` for the same cancelled
+    // request. Keep a harmless transport-error guard for the lifetime of the
+    // per-request objects so cleanup triggered by the first signal cannot turn
+    // a later ECONNRESET into an unhandled EventEmitter error. The active
+    // cancellation handler below still performs all resource cleanup.
+    const absorbTransportError = () => {};
+    req.on?.('error', absorbTransportError);
+    res.on?.('error', absorbTransportError);
+    const disconnectSignals = [
+      [req, 'aborted'],
+      [req, 'error'],
+      [req, 'close'],
+      [res, 'error'],
+      [res, 'close'],
+    ];
+    const bindDisconnect = (handler) => {
+      for (const [emitter, event] of disconnectSignals) emitter?.once?.(event, handler);
+    };
+    const unbindDisconnect = (handler) => {
+      for (const [emitter, event] of disconnectSignals) {
+        if (typeof emitter?.off === 'function') emitter.off(event, handler);
+        else emitter?.removeListener?.(event, handler);
+      }
+    };
+    const endCancelledResponse = () => {
+      if (res.destroyed || res.writableEnded) return;
+      try { res.end(); } catch {}
+    };
     const markClosed = () => {
       requestClosed = true;
       releaseReservation();
+      endCancelledResponse();
     };
-    req.once?.('close', markClosed);
-    res.once?.('close', markClosed);
+    bindDisconnect(markClosed);
 
     try {
       streamHub.start();
     } catch (error) {
-      req.off?.('close', markClosed);
-      res.off?.('close', markClosed);
+      unbindDisconnect(markClosed);
       releaseReservation();
       if (requestClosed) return undefined;
       streamHub._report?.(error);
       return json(res, 502, { error: 'Unable to start the Binance price stream.' });
     }
     if (requestClosed || res.destroyed || res.writableEnded) {
-      req.off?.('close', markClosed);
-      res.off?.('close', markClosed);
+      unbindDisconnect(markClosed);
       releaseReservation();
       return undefined;
     }
     if (Number(streamHub.clientCount || 0) >= maxClients) {
-      req.off?.('close', markClosed);
-      res.off?.('close', markClosed);
+      unbindDisconnect(markClosed);
       releaseReservation();
       res.setHeader('retry-after', '5');
       return json(res, 503, { error: 'Binance stream capacity is currently full.' });
     }
-    req.off?.('close', markClosed);
-    res.off?.('close', markClosed);
+    unbindDisconnect(markClosed);
 
     res.statusCode = 200;
     res.setHeader('content-type', 'text/event-stream; charset=utf-8');
@@ -991,11 +1015,13 @@ export function createBinanceStreamMiddleware({
       keepaliveTimer = null;
       if (lifetimeTimer !== null) sseClearTimeoutImpl(lifetimeTimer);
       lifetimeTimer = null;
-      req.off?.('close', cleanup);
-      res.off?.('close', cleanup);
+      unbindDisconnect(cancel);
     };
-    req.once?.('close', cleanup);
-    res.once?.('close', cleanup);
+    const cancel = () => {
+      cleanup();
+      endCancelledResponse();
+    };
+    bindDisconnect(cancel);
     if (sseKeepaliveMs > 0) {
       keepaliveTimer = setIntervalImpl(() => {
         if (!closed && !res.writableEnded && !backpressured) writeChunk(': keepalive\n\n');

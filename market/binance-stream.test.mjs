@@ -585,6 +585,63 @@ test('SSE middleware ends cleanly at its configured lifetime and releases the cl
   assert.deepEqual(timers.counts(), { timeouts: 0, intervals: 0 });
 });
 
+test('SSE middleware releases clients on request aborts and transport errors', async () => {
+  const hub = {
+    configured: true,
+    running: false,
+    clientCount: 0,
+    start() { this.running = true; },
+    subscribe() {
+      this.clientCount += 1;
+      return () => { this.clientCount -= 1; };
+    },
+  };
+  const middleware = createBinanceStreamMiddleware({ hub, sseKeepaliveMs: 0 });
+
+  const aborted = requestResponse('/api/binance/stream');
+  await middleware(aborted.req, aborted.res, () => assert.fail('stream route should be handled'));
+  assert.equal(hub.clientCount, 1);
+  aborted.req.emit('aborted');
+  assert.doesNotThrow(() => aborted.req.emit('error', new Error('connection reset after abort')));
+  aborted.req.emit('close');
+  assert.equal(hub.clientCount, 0, 'abort and close cleanup is idempotent');
+  assert.equal(aborted.res.writableEnded, true);
+
+  const failed = requestResponse('/api/binance/stream');
+  await middleware(failed.req, failed.res, () => assert.fail('stream route should be handled'));
+  assert.equal(hub.clientCount, 1);
+  failed.res.emit('error', new Error('connection reset'));
+  failed.res.emit('close');
+  assert.equal(hub.clientCount, 0, 'error and close cleanup is idempotent');
+  assert.equal(failed.res.writableEnded, true);
+});
+
+test('SSE middleware releases a reservation when cancellation happens during startup', async () => {
+  const request = requestResponse('/api/binance/stream');
+  let subscriptions = 0;
+  const hub = {
+    configured: true,
+    running: false,
+    clientCount: 0,
+    start() {
+      this.running = true;
+      request.req.emit('aborted');
+    },
+    subscribe() {
+      subscriptions += 1;
+      return () => {};
+    },
+  };
+  const middleware = createBinanceStreamMiddleware({ hub, sseKeepaliveMs: 0, maxClientsPerIp: 1 });
+  await middleware(request.req, request.res, () => assert.fail('stream route should be handled'));
+  assert.equal(subscriptions, 0);
+
+  const next = requestResponse('/api/binance/stream');
+  await middleware(next.req, next.res, () => assert.fail('stream route should be handled'));
+  assert.equal(next.res.statusCode, 200, 'the cancelled startup released its per-IP reservation');
+  next.req.emit('close');
+});
+
 test('SSE lifetime timer injection does not replace hub timer injection', () => {
   const hubSetTimeout = () => 1;
   const hubClearTimeout = () => {};
