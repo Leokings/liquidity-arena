@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   classifyOpenEpoch,
   genlayerRetryAfterMilliseconds,
+  runV7KeeperCli,
   runV7KeeperOnce,
   V7KeeperError,
   validateReceiptIdentity,
@@ -16,6 +17,8 @@ import {
   V7_PROTOCOL_VERSION,
   V7_VENUES,
 } from './v7-keeper-config.mjs';
+import { keeperAttemptOperationId } from '../keeper-journal/schema.mjs';
+import { createMemoryAuthoritativeKeeperJournalClient } from './authoritative-keeper-journal.test-helper.mjs';
 
 const CONTRACT = '0x1111111111111111111111111111111111111111';
 const OWNER = '0x2222222222222222222222222222222222222222';
@@ -136,10 +139,11 @@ function fakeOperator({
   configOverride = {},
   receiptOverride,
   mutateWrite,
+  journalHarness = createMemoryAuthoritativeKeeperJournalClient(),
 } = {}) {
   const state = new Map(epochs.map((record) => [String(record.epoch_end_timestamp), { ...record }]));
   const calls = {
-    submits: [], waits: [], pages: [], epochReads: [], configReads: 0,
+    submits: [], waits: [], statuses: [], pages: [], epochReads: [], configReads: 0,
   };
   const transactions = new Map();
   let hashIndex = 0;
@@ -170,6 +174,7 @@ function fakeOperator({
   };
 
   const operator = {
+    journalClient: journalHarness.client,
     canSignLockedAccount: true,
     getNetworkInfo: async () => ({ alias: 'studionet' }),
     getAccountInfo: async () => ({ address: KEEPER, active: true, status: 'locked' }),
@@ -214,7 +219,7 @@ function fakeOperator({
       const hash = `0x${(++hashIndex).toString(16).padStart(64, '0')}`;
       calls.submits.push({ method, args: [...args], hash });
       transactions.set(hash, { method, args: [...args] });
-      onTransactionHash(hash);
+      await onTransactionHash(hash);
       await (mutateWrite
         ? mutateWrite({ method, args, state, hash, defaultMutation })
         : defaultMutation(method, args));
@@ -228,8 +233,19 @@ function fakeOperator({
         ? receiptOverride({ hash, ...transaction })
         : finalizedReceipt(hash, transaction.method, transaction.args);
     },
+    getTransactionStatus: async (hash) => {
+      calls.statuses.push(hash);
+      return 'FINALIZED';
+    },
   };
-  return { operator, calls, state, keeperConfig, maximumWritesInFlight: () => maximumWritesInFlight };
+  return {
+    operator,
+    calls,
+    state,
+    keeperConfig,
+    journalHarness,
+    maximumWritesInFlight: () => maximumWritesInFlight,
+  };
 }
 
 const silentLogger = () => {};
@@ -249,6 +265,7 @@ test('dry-run plans three exact-hour epochs two hours ahead and submits nothing'
   assert.deepEqual(result.targetEpochEnds, plannedFutureEpochEnds(keeperConfig, NOW));
   assert.deepEqual(result.actions.map((action) => action.type), ['CREATE', 'CREATE', 'CREATE']);
   assert.equal(result.execute, false);
+  assert.equal(result.blocked, undefined);
   assert.deepEqual(fake.calls.submits, []);
 });
 
@@ -309,10 +326,10 @@ test('serialized execution creates ahead, times out only expired OPEN, and resol
   });
 
   assert.deepEqual(fake.calls.submits.map(({ method }) => method), [
-    'create_epoch', 'create_epoch', 'create_epoch',
     'activate_timeout_refund', 'resolve_epoch',
+    'create_epoch', 'create_epoch', 'create_epoch',
   ]);
-  assert.deepEqual(fake.calls.submits[0].args, [String(result.targetEpochEnds[0])]);
+  assert.deepEqual(fake.calls.submits[2].args, [String(result.targetEpochEnds[0])]);
   assert.equal(fake.maximumWritesInFlight(), 1);
   assert.equal(result.completed.length, 5);
   assert.equal(fake.state.get(String(expiredEnd)).status, 'TIMED_OUT');
@@ -320,7 +337,7 @@ test('serialized execution creates ahead, times out only expired OPEN, and resol
   assert.equal(fake.calls.waits.length, 5);
 });
 
-test('ACCEPTED lifecycle is never treated as execution success even when state appears changed', async () => {
+test('a contradictory ACCEPTED full receipt is quarantined and never treated as success', async () => {
   const keeperConfig = config();
   const fake = fakeOperator({
     keeperConfig,
@@ -329,23 +346,22 @@ test('ACCEPTED lifecycle is never treated as execution success even when state a
     }),
   });
 
-  await assert.rejects(() => runV7KeeperOnce({
+  const result = await runV7KeeperOnce({
     config: keeperConfig,
     operator: fake.operator,
     execute: true,
     nowEpochSeconds: NOW,
     logger: silentLogger,
     sleep: noSleep,
-  }), (error) => {
-    assert.ok(error instanceof V7KeeperError);
-    assert.equal(error.code, 'ACTION_FAILURES');
-    assert.equal(error.details.summary.failures.length, 3);
-    assert.equal(error.details.summary.completed.length, 0);
-    return true;
   });
+  assert.equal(result.completed.length, 0);
+  assert.equal(result.pending[0].reason, 'RECEIPT_IDENTITY_AMBIGUOUS');
+  assert.equal(result.skipped.length, 2);
+  assert.equal(fake.calls.submits.length, 1);
+  assert.equal([...fake.journalHarness.operations.values()][0].state, 'QUARANTINED');
 });
 
-test('FINALIZED execution errors are rejected and the same action is left for the next run', async () => {
+test('exact FINALIZED execution failure becomes terminal FINALIZED_FAILURE evidence', async () => {
   const keeperConfig = config({ epochs: { futureHours: 1 } });
   const fake = fakeOperator({
     keeperConfig,
@@ -355,32 +371,112 @@ test('FINALIZED execution errors are rejected and the same action is left for th
     }),
   });
 
-  await assert.rejects(() => runV7KeeperOnce({
+  const result = await runV7KeeperOnce({
     config: keeperConfig,
     operator: fake.operator,
     execute: true,
     nowEpochSeconds: NOW,
     logger: silentLogger,
     sleep: noSleep,
-  }), /keeper action\(s\) failed/);
+  });
+  assert.equal(result.completed.length, 0);
+  assert.equal(result.pending[0].reason, 'FINALIZED_EXECUTION_FAILED');
   assert.equal(fake.calls.submits.length, 1);
   assert.equal(fake.calls.waits.length, 1);
   assert.equal(fake.state.size, 0);
+  assert.equal([...fake.journalHarness.operations.values()][0].state, 'FINALIZED_FAILURE');
+  const transition = fake.journalHarness.calls.find(
+    ({ method, request }) => method === 'transition'
+      && request.targetState === 'FINALIZED_FAILURE',
+  );
+  assert.equal(transition.request.reasonCode, 'FINALIZED_EXECUTION_FAILED');
+  assert.deepEqual(transition.request.metadata, {
+    transactionHash: fake.calls.submits[0].hash,
+    lifecycleStatus: 'FINALIZED',
+    receiptIdentityVerified: true,
+    executionVerified: true,
+    executionSucceeded: false,
+  });
 });
 
-test('FINALIZED polling retries the same recorded hash without resubmitting the write', async () => {
+test('a later run retries an exact FINALIZED_FAILURE as a new append-only attempt', async () => {
+  const keeperConfig = config({ epochs: { futureHours: 1 } });
+  let broadcastCount = 0;
+  const fake = fakeOperator({
+    keeperConfig,
+    mutateWrite: async ({ method, args, defaultMutation }) => {
+      broadcastCount += 1;
+      if (broadcastCount > 1) defaultMutation(method, args);
+    },
+    receiptOverride: ({ hash, method, args }) => finalizedReceipt(hash, method, args, {
+      txExecutionResultName: broadcastCount === 1
+        ? 'FINISHED_WITH_ERROR'
+        : 'FINISHED_WITH_RETURN',
+    }),
+  });
+
+  const firstRun = await runV7KeeperOnce({
+    config: keeperConfig,
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    logger: silentLogger,
+    sleep: noSleep,
+  });
+  assert.equal(firstRun.completed.length, 0);
+  assert.equal(firstRun.pending[0].reason, 'FINALIZED_EXECUTION_FAILED');
+  assert.equal(fake.calls.submits.length, 1);
+
+  const firstAttempt = [...fake.journalHarness.operations.values()][0];
+  const firstSnapshot = structuredClone(firstAttempt);
+  assert.equal(firstAttempt.attemptNumber, '1');
+  assert.equal(firstAttempt.operationId, firstAttempt.logicalOperationId);
+  assert.equal(firstAttempt.retryOfOperationId, null);
+  assert.equal(firstAttempt.state, 'FINALIZED_FAILURE');
+
+  const secondRun = await runV7KeeperOnce({
+    config: keeperConfig,
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    logger: silentLogger,
+    sleep: noSleep,
+  });
+  assert.equal(secondRun.pending.length, 0);
+  assert.equal(secondRun.completed.length, 1);
+  assert.equal(fake.calls.submits.length, 2);
+
+  const attempts = [...fake.journalHarness.operations.values()]
+    .sort((left, right) => Number(left.attemptNumber) - Number(right.attemptNumber));
+  assert.equal(attempts.length, 2);
+  assert.deepEqual(attempts[0], firstSnapshot);
+  assert.equal(attempts[1].logicalOperationId, attempts[0].logicalOperationId);
+  assert.equal(attempts[1].attemptNumber, '2');
+  assert.equal(attempts[1].retryOfOperationId, attempts[0].operationId);
+  assert.equal(
+    attempts[1].operationId,
+    keeperAttemptOperationId(attempts[0].logicalOperationId, '2'),
+  );
+  assert.notEqual(attempts[1].transactionHash, attempts[0].transactionHash);
+  assert.equal(attempts[1].state, 'VERIFIED');
+
+  const boundAttemptIds = fake.journalHarness.calls
+    .filter(({ method }) => method === 'bindSubmission')
+    .map(({ request }) => request.operationId);
+  assert.deepEqual(boundAttemptIds, attempts.map(({ operationId }) => operationId));
+});
+
+test('lightweight lifecycle polling reaches FINALIZED without resubmitting the recorded hash', async () => {
   const keeperConfig = config({
     epochs: { futureHours: 1 },
-    operator: { finalityWaitAttempts: 7 },
+    operator: { finalityRetries: 7 },
   });
   const fake = fakeOperator({ keeperConfig });
-  const originalWait = fake.operator.waitFinalized;
-  let waitAttempts = 0;
+  let statusAttempts = 0;
   const retryDelays = [];
-  fake.operator.waitFinalized = async (hash, policy) => {
-    waitAttempts += 1;
-    if (waitAttempts <= 6) throw new Error('transaction not found');
-    return originalWait(hash, policy);
+  fake.operator.getTransactionStatus = async () => {
+    statusAttempts += 1;
+    return statusAttempts <= 6 ? 'PENDING' : 'FINALIZED';
   };
 
   const result = await runV7KeeperOnce({
@@ -392,12 +488,8 @@ test('FINALIZED polling retries the same recorded hash without resubmitting the 
     sleep: async (delayMs) => retryDelays.push(delayMs),
   });
   assert.equal(result.completed.length, 1);
-  assert.equal(waitAttempts, 7);
-  assert.deepEqual(
-    retryDelays.filter((delayMs) => delayMs < keeperConfig.operator.readIntervalMs),
-    [100, 200, 400, 800, 1_600],
-  );
-  assert.ok(retryDelays.includes(3_200));
+  assert.equal(statusAttempts, 7);
+  assert.equal(retryDelays.filter((delayMs) => delayMs === 100).length, 6);
   assert.equal(fake.calls.submits.length, 1);
   assert.equal(fake.calls.submits[0].hash, result.completed[0].transactionHash);
 });
@@ -562,8 +654,8 @@ test('bounded open-index scanning reconciles OPEN epochs older than 30 hours', a
   assert.equal(result.knownEpochCount, 1);
   assert.deepEqual(fake.calls.pages, [[0, 1]]);
   assert.deepEqual(result.actions, [
-    { type: 'CREATE', epochEndTimestamp: plannedFutureEpochEnds(keeperConfig, NOW)[0] },
     { type: 'TIMEOUT', epochEndTimestamp: oldOpenEnd },
+    { type: 'CREATE', epochEndTimestamp: plannedFutureEpochEnds(keeperConfig, NOW)[0] },
   ]);
 });
 
@@ -591,7 +683,7 @@ test('due-epoch reads are oldest-first and bounded per keeper run', async () => 
   assert.deepEqual(fake.calls.epochReads, dueEnds.slice(0, 2));
   assert.equal(result.deferredEpochReadCount, 3);
   assert.equal(result.deferredActionCount, 3);
-  assert.deepEqual(result.actions.map(({ type }) => type), ['CREATE', 'RESOLVE', 'RESOLVE']);
+  assert.deepEqual(result.actions.map(({ type }) => type), ['RESOLVE', 'RESOLVE', 'CREATE']);
 });
 
 test('all preflight, page, and epoch reads share one quota-aware pacing lane', async () => {
@@ -686,4 +778,411 @@ test('role or immutable stake drift fails closed before any write', async () => 
     }), /must be|keeper|treasury/);
     assert.deepEqual(fake.calls.submits, []);
   }
+});
+
+test('authoritative PREPARE failure permits zero broadcasts', async () => {
+  const keeperConfig = config({ epochs: { futureHours: 2 } });
+  const journalHarness = createMemoryAuthoritativeKeeperJournalClient({
+    hooks: {
+      prepareOperation: async () => { throw new Error('Neon unavailable'); },
+    },
+  });
+  const fake = fakeOperator({ keeperConfig, journalHarness });
+
+  await assert.rejects(() => runV7KeeperOnce({
+    config: keeperConfig,
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    logger: silentLogger,
+    sleep: noSleep,
+  }), (error) => {
+    assert.equal(error.code, 'ACTION_FAILURES');
+    assert.match(error.details.summary.failures[0].message, /Neon unavailable/);
+    return true;
+  });
+  assert.equal(fake.calls.submits.length, 0);
+});
+
+test('journal schema readiness fails before lease acquisition and every broadcast', async () => {
+  const keeperConfig = config({ epochs: { futureHours: 1 } });
+  const journalHarness = createMemoryAuthoritativeKeeperJournalClient({
+    hooks: {
+      health: async () => ({
+        status: 'degraded',
+        service: 'liquidity-arena-keeper-journal',
+        ready: false,
+        network: 'studionet',
+        chainId: '61999',
+        configuration: {
+          databaseConfigured: true,
+          authenticationConfigured: true,
+          signerConfigured: true,
+        },
+        database: { configured: true, ready: false, schemaVersion: 2 },
+      }),
+    },
+  });
+  const fake = fakeOperator({ keeperConfig, journalHarness });
+
+  await assert.rejects(() => runV7KeeperOnce({
+    config: keeperConfig,
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    logger: silentLogger,
+    sleep: noSleep,
+  }), (error) => {
+    assert.equal(error.code, 'KEEPER_JOURNAL_NOT_READY');
+    return true;
+  });
+  assert.deepEqual(journalHarness.calls.map(({ method }) => method), ['health']);
+  assert.equal(fake.calls.submits.length, 0);
+});
+
+test('hash binding failure leaves PREPARED authority and stops after the first broadcast', async () => {
+  const keeperConfig = config({ epochs: { futureHours: 2 } });
+  const journalHarness = createMemoryAuthoritativeKeeperJournalClient({
+    hooks: {
+      bindSubmission: async () => { throw new Error('Neon bind unavailable'); },
+    },
+  });
+  const fake = fakeOperator({ keeperConfig, journalHarness });
+
+  await assert.rejects(() => runV7KeeperOnce({
+    config: keeperConfig,
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    logger: silentLogger,
+    sleep: noSleep,
+  }), (error) => {
+    assert.equal(error.code, 'ACTION_FAILURES');
+    assert.match(error.details.summary.failures[0].message, /Neon bind unavailable/);
+    return true;
+  });
+  assert.equal(fake.calls.submits.length, 1);
+  assert.equal([...journalHarness.operations.values()][0].state, 'PREPARED');
+  assert.equal([...journalHarness.operations.values()][0].transactionHash, null);
+});
+
+test('a PREPARED operation without a durable hash blocks planning and every write', async () => {
+  const keeperConfig = config({ epochs: { futureHours: 2 } });
+  const target = plannedFutureEpochEnds(keeperConfig, NOW)[0];
+  const journalHarness = createMemoryAuthoritativeKeeperJournalClient();
+  journalHarness.seedOperation({
+    signerAddress: KEEPER,
+    state: 'PREPARED',
+    deploymentAlias: 'v7',
+    chainId: '61999',
+    contractAddress: CONTRACT,
+    method: 'create_epoch',
+    args: [String(target)],
+    valueAtto: '0',
+    epochEndTimestamp: String(target),
+  });
+  const fake = fakeOperator({ keeperConfig, journalHarness });
+  const result = await runV7KeeperOnce({
+    config: keeperConfig,
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    logger: silentLogger,
+    sleep: noSleep,
+  });
+
+  assert.equal(result.blocked, true);
+  assert.equal(result.pending[0].reason, 'PREPARED_WITHOUT_DURABLE_HASH');
+  assert.deepEqual(result.actions, []);
+  assert.deepEqual(fake.calls.submits, []);
+  assert.deepEqual(fake.calls.pages, []);
+});
+
+test('UNKNOWN lifecycle blocks all writes without consulting a full receipt', async () => {
+  const keeperConfig = config({ epochs: { futureHours: 2 } });
+  const target = plannedFutureEpochEnds(keeperConfig, NOW)[0];
+  const hash = `0x${'9'.repeat(64)}`;
+  const journalHarness = createMemoryAuthoritativeKeeperJournalClient();
+  journalHarness.seedOperation({
+    signerAddress: KEEPER,
+    state: 'SUBMITTED',
+    transactionHash: hash,
+    deploymentAlias: 'v7',
+    chainId: '61999',
+    contractAddress: CONTRACT,
+    method: 'create_epoch',
+    args: [String(target)],
+    valueAtto: '0',
+    epochEndTimestamp: String(target),
+  });
+  const fake = fakeOperator({ keeperConfig, journalHarness });
+  fake.operator.getTransactionStatus = async () => 'UNKNOWN';
+  const result = await runV7KeeperOnce({
+    config: keeperConfig,
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    logger: silentLogger,
+    sleep: noSleep,
+  });
+
+  assert.equal(result.pending[0].reason, 'LIFECYCLE_UNKNOWN');
+  assert.deepEqual(fake.calls.submits, []);
+  assert.deepEqual(fake.calls.waits, []);
+});
+
+test('raw FINALIZED with an unindexed full receipt blocks the second planned write', async () => {
+  const keeperConfig = config({ epochs: { futureHours: 2 } });
+  const fake = fakeOperator({ keeperConfig });
+  fake.operator.waitFinalized = async () => { throw new Error('transaction not found'); };
+
+  const result = await runV7KeeperOnce({
+    config: keeperConfig,
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    logger: silentLogger,
+    sleep: noSleep,
+  });
+
+  assert.equal(result.pending.length, 1);
+  assert.equal(result.pending[0].reason, 'FINALIZED_RECEIPT_NOT_INDEXED');
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].reason, 'BLOCKED_BY_NONTERMINAL_OPERATION');
+  assert.equal(fake.calls.submits.length, 1);
+  assert.equal([...fake.journalHarness.operations.values()][0].state, 'SUBMITTED');
+  assert.equal([...fake.journalHarness.operations.values()][0].lifecycleStatus, 'FINALIZED');
+});
+
+test('full receipt hash mismatch is quarantined with exact bounded evidence', async () => {
+  const keeperConfig = config({ epochs: { futureHours: 2 } });
+  const fake = fakeOperator({
+    keeperConfig,
+    receiptOverride: ({ hash, method, args }) => finalizedReceipt(hash, method, args, {
+      transactionHash: `0x${'f'.repeat(64)}`,
+    }),
+  });
+
+  const result = await runV7KeeperOnce({
+    config: keeperConfig,
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    logger: silentLogger,
+    sleep: noSleep,
+  });
+  assert.equal(result.pending[0].reason, 'RECEIPT_HASH_MISMATCH');
+  assert.equal(result.skipped.length, 1);
+  assert.equal(fake.calls.submits.length, 1);
+  assert.equal([...fake.journalHarness.operations.values()][0].state, 'QUARANTINED');
+  const transition = fake.journalHarness.calls.find(
+    ({ method, request }) => method === 'transition' && request.targetState === 'QUARANTINED',
+  );
+  assert.deepEqual(transition.request.metadata, {
+    transactionHash: fake.calls.submits[0].hash,
+    lifecycleStatus: 'FINALIZED',
+    receiptIdentityVerified: false,
+    ambiguityCode: 'RECEIPT_HASH_MISMATCH',
+  });
+});
+
+test('method, argument, and malformed identity receipts get distinct quarantine evidence', async () => {
+  const cases = [
+    {
+      code: 'RECEIPT_METHOD_MISMATCH',
+      override: ({ hash, args }) => finalizedReceipt(hash, 'resolve_epoch', args),
+    },
+    {
+      code: 'RECEIPT_ARGUMENTS_MISMATCH',
+      override: ({ hash, method }) => finalizedReceipt(hash, method, [String(NOW)]),
+    },
+    {
+      code: 'RECEIPT_IDENTITY_AMBIGUOUS',
+      override: ({ hash, method, args }) => finalizedReceipt(hash, method, args, {
+        txDataDecoded: null,
+      }),
+    },
+  ];
+  for (const { code, override } of cases) {
+    const keeperConfig = config({ epochs: { futureHours: 1 } });
+    const fake = fakeOperator({ keeperConfig, receiptOverride: override });
+    const result = await runV7KeeperOnce({
+      config: keeperConfig,
+      operator: fake.operator,
+      execute: true,
+      nowEpochSeconds: NOW,
+      logger: silentLogger,
+      sleep: noSleep,
+    });
+    assert.equal(result.pending[0].reason, code);
+    assert.equal([...fake.journalHarness.operations.values()][0].state, 'QUARANTINED');
+    const transition = fake.journalHarness.calls.find(
+      ({ method, request }) => method === 'transition' && request.targetState === 'QUARANTINED',
+    );
+    assert.equal(transition.request.reasonCode, code);
+    assert.equal(transition.request.metadata.ambiguityCode, code);
+    assert.equal(transition.request.metadata.receiptIdentityVerified, false);
+  }
+});
+
+test('a failed lease heartbeat prevents every later write', async () => {
+  const keeperConfig = config({ epochs: { futureHours: 2 } });
+  let renewals = 0;
+  let heartbeat;
+  const journalHarness = createMemoryAuthoritativeKeeperJournalClient({
+    hooks: {
+      renewLease: async () => {
+        renewals += 1;
+        if (renewals === 4) throw new Error('lease renewal unavailable');
+      },
+    },
+  });
+  const fake = fakeOperator({ keeperConfig, journalHarness });
+  fake.operator.getTransactionStatus = async () => {
+    heartbeat();
+    await new Promise((resolve) => setImmediate(resolve));
+    return 'FINALIZED';
+  };
+
+  await assert.rejects(() => runV7KeeperOnce({
+    config: keeperConfig,
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    logger: silentLogger,
+    sleep: noSleep,
+    journalSessionOptions: {
+      heartbeatMs: 1,
+      setIntervalImpl: (callback) => {
+        heartbeat = callback;
+        return { unref() {} };
+      },
+      clearIntervalImpl: () => {},
+    },
+  }), (error) => {
+    assert.equal(error.code, 'KEEPER_JOURNAL_LEASE_LOST');
+    return true;
+  });
+  assert.equal(fake.calls.submits.length, 1);
+});
+
+test('a receipt invisible beyond 315 seconds is recovered across runs without resubmission', async () => {
+  const keeperConfig = config({
+    epochs: { futureHours: 2 },
+    operator: {
+      retryBaseMs: 5_000,
+      finalityIntervalMs: 5_000,
+      finalityRetries: 65,
+    },
+  });
+  const targets = plannedFutureEpochEnds(keeperConfig, NOW);
+  let firstHash;
+  let rawFinalized = false;
+  const fake = fakeOperator({
+    keeperConfig,
+    mutateWrite: async ({ method, args, hash, defaultMutation }) => {
+      if (!firstHash) {
+        firstHash = hash;
+        return;
+      }
+      defaultMutation(method, args);
+    },
+  });
+  fake.operator.getTransactionStatus = async () => (rawFinalized ? 'FINALIZED' : 'PENDING');
+  const delays = [];
+
+  const firstRun = await runV7KeeperOnce({
+    config: keeperConfig,
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    logger: silentLogger,
+    sleep: async (milliseconds) => delays.push(milliseconds),
+  });
+  assert.equal(firstRun.pending.length, 1);
+  assert.equal(firstRun.completed.length, 0);
+  assert.equal(firstRun.skipped.length, 1);
+  assert.equal(fake.calls.submits.length, 1);
+  assert.ok(delays.filter((value) => value === 5_000)
+    .reduce((total, value) => total + value, 0) > 315_000);
+  assert.equal([...fake.journalHarness.operations.values()][0].transactionHash, firstHash);
+
+  const secondRun = await runV7KeeperOnce({
+    config: keeperConfig,
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    logger: silentLogger,
+    sleep: noSleep,
+  });
+  assert.equal(secondRun.pending.length, 1);
+  assert.equal(secondRun.pending[0].transactionHash, firstHash);
+  assert.equal(secondRun.blocked, true);
+  assert.equal(fake.calls.submits.length, 1);
+
+  fake.state.set(String(targets[0]), epochRecord(targets[0]));
+  fake.state.set(String(targets[1]), epochRecord(targets[1]));
+  rawFinalized = true;
+  const thirdRun = await runV7KeeperOnce({
+    config: keeperConfig,
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    logger: silentLogger,
+    sleep: noSleep,
+  });
+  assert.equal(thirdRun.recovered.length, 1);
+  assert.equal(thirdRun.recovered[0].transactionHash, firstHash);
+  assert.equal(fake.calls.submits.length, 1);
+  assert.equal([...fake.journalHarness.operations.values()][0].state, 'VERIFIED');
+});
+
+test('V7 CLI rejects a blocked summary only after the keeper run has emitted it', async () => {
+  const blockedSummary = Object.freeze({
+    execute: true,
+    blocked: true,
+    pending: Object.freeze([{ reason: 'FINALIZED_RECEIPT_NOT_INDEXED' }]),
+    failures: Object.freeze([]),
+  });
+  const order = [];
+  const environment = Object.freeze({ KEEPER_JOURNAL_SECRET: 'test-secret' });
+  const keeperConfig = Object.freeze({ network: 'studionet' });
+  const operator = Object.freeze({});
+  const journalClient = Object.freeze({});
+
+  await assert.rejects(
+    () => runV7KeeperCli(['--config', 'unused.json', '--execute'], {
+      environment,
+      loadConfig: (path) => {
+        assert.equal(path, 'unused.json');
+        return keeperConfig;
+      },
+      createOperator: (options) => {
+        assert.deepEqual(options, { config: keeperConfig, environment });
+        return operator;
+      },
+      createJournalClient: (receivedEnvironment) => {
+        assert.equal(receivedEnvironment, environment);
+        return journalClient;
+      },
+      runOnce: async (options) => {
+        assert.deepEqual(options, {
+          config: keeperConfig,
+          execute: true,
+          operator,
+          journalClient,
+        });
+        order.push('blocked-summary-emitted');
+        return blockedSummary;
+      },
+    }),
+    (error) => {
+      order.push('cli-rejected');
+      assert.ok(error instanceof V7KeeperError);
+      assert.equal(error.code, 'RUN_BLOCKED');
+      assert.equal(error.details.summary, blockedSummary);
+      return true;
+    },
+  );
+  assert.deepEqual(order, ['blocked-summary-emitted', 'cli-rejected']);
 });

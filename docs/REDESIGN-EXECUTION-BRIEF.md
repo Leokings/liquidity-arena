@@ -43,7 +43,9 @@ For a 15:00 UTC target:
 | after actual finality | Eligible claims/refunds become available. |
 | next day 15:00 | Permissionless timeout becomes available if still open. |
 
-The 16:00 epoch begins on schedule even if the 15:00 resolver is still finalizing.
+An already-created 16:00 epoch continues on its contract clock even if the 15:00 resolver is still
+finalizing. If that 16:00 epoch is missing, the keeper cannot create it while an earlier journal
+operation remains unresolved.
 
 ## 3. Phase A — V7 contract and deployment
 
@@ -87,7 +89,9 @@ The 16:00 epoch begins on schedule even if the 15:00 resolver is still finalizin
 - [x] Bound/serialize writes and require exact finalized receipts/post-state.
 - [x] Create and verify the initial 24-hour V7 schedule.
 - [x] Pin GitHub workflow action revisions and use concurrency.
-- [x] Schedule minute-3 execution plus minute-13 watchdog.
+- [x] Historical minute-3 execution plus minute-13 watchdog activation was proven. Live GitHub
+      workflow IDs `338089016` (V6) and `338089019` (V7) are `disabled_manually`; release-candidate
+      YAML removes the cron schedules but is not merged to `main` yet.
 
 ### Remaining
 
@@ -109,7 +113,10 @@ keeper created `1787256000` via finalized transaction `0xe10ce0bf…a9c4` and `1
 finalized transaction `0x00398a3c…9058`; both exact post-states were verified OPEN. This proves the
 limited role. Scheduled run `32298454771` then passed reconciliation, and later run `32299468899`
 passed exact signer/profile reconciliation with no actions required. Long-run monitoring remains
-open.
+open. Scheduled run `32312864108`, job `96259232716`, later exercised all seven receipt attempts:
+CREATE `0xe6af…3574` and RESOLVE `0x0850…c7e` were reported lookup failures but both later finalized
+and applied. Recorded V7 coverage is therefore at least 31 epochs, including four workflow-created
+epochs; this is incident evidence, not a successful journal-backed run.
 
 ## 5. Phase C — funded V7 canary
 
@@ -161,6 +168,9 @@ ended at zero; 1.748 GEN was conserved throughout. Full hashes are recorded in
 - [ ] Rollback does not reactivate V6 creation.
 
 V6 may be removed from the browser only after liabilities and user recovery obligations are closed.
+The live retirement audit found all five epochs resolved/determined, zero player liability, and no
+drain actions. Recurring V6 drain execution is retired. Live workflow `338089016` is
+`disabled_manually`; the `workflow_dispatch`-only release-candidate source remains pending merge.
 
 ## 7. Phase E — durable history
 
@@ -200,6 +210,23 @@ Applied migration ID: `aa7617fa-bfa7-4d48-9b30-f60afeda43a1`. Normalized marked-
 `dd95ed3a5c55bf55d02090605a46557377778afb220126451bb4e750dbc280b2`. Raw migration-file SHA-256:
 `8a6cb36aed985575fa797ab446481c89a1495c8d6d99a8024931cbda67674af5`.
 
+The authoritative keeper journal is a separate Neon concern. Migration 002 was prepared as
+`1e440327-2e66-403d-934d-c302790ac775` on temporary branch `br-sweet-frost-auakkl85`, applied
+identically to production `br-calm-fire-aup0rw0r`, and the temporary branch was deleted. Final
+checksum `d2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266`
+read back with unchanged v1, four journal tables, the trigger, and zero operations. The runtime
+invariants are a fenced global signer lease, durable PREPARE before broadcast, exact captured-hash
+binding, and fail-closed recovery before planning. Raw transaction status is liveness only; full
+exact receipt identity, successful execution, and matching post-state are required for VERIFIED.
+No workflow artifact or cache is authoritative. Migration 003
+`keeper_transaction_journal_attempts` is now applied to production as migration
+`14160d53-a2a3-43ab-a762-6bb7e54a95e8` through deleted temporary branch
+`br-polished-shape-aund54y0`, at checksum
+`9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70`. Production read-back found
+exact versions 1/2/3, zero operations, four attempt columns, the `QUARANTINED` unresolved-index rule,
+and the parent-freeze trigger. No action-bearing run is safe until the matching API is deployed and
+authenticated health reports `ready=true` with `schemaVersion=3`.
+
 ## 8. Phase F — browser/API release candidate
 
 Required release behavior:
@@ -233,6 +260,10 @@ to merged receipt-proof commit `e5627ebd270a7c6d5291151795b0af6442eba0a6` and re
 both jobs; health/readiness/history
 health returned `200`, and V6 remained readable with zero known liability. Deployment
 `dpl_DQEvnGup417wvTxuxzeNfJvySiM5` remains the prior V6 rollback artifact.
+The new proof view is unmerged and undeployed in
+[open PR #6](https://github.com/Leokings/liquidity-arena/pull/6) at commit
+[`2f52f6e`](https://github.com/Leokings/liquidity-arena/commit/2f52f6e); it is not present in this
+verified production artifact.
 
 ## 9. Phase G — submission package
 
@@ -251,26 +282,31 @@ Required artifacts:
 ## 10. Operational constraints
 
 - StudioNet observed finality is not an SLA; always wait for actual `FINALIZED` status.
-- GitHub cron is best-effort; contract time defines every epoch and permissionless methods avoid an
-  exclusive settlement operator.
+- Live keeper workflows are `disabled_manually`; release-candidate YAML is `workflow_dispatch`-only
+  pending merge. No restored cron is claimed. Contract time defines every epoch and permissionless
+  methods avoid an exclusive settlement operator.
 - Public exchange endpoint availability and terms can change.
 - Vercel request runtimes must not own unbounded finality waits.
 - Claims require exact child monitoring; no automatic replay is permitted.
-- Neon can improve discoverability but cannot authorize a payment.
+- Neon history can improve discoverability but cannot authorize settlement or payment; the separate
+  keeper journal intentionally gates whether an automation write may broadcast.
 
 ## 11. Current truthful status
 
 The V7 contract, initial full-day schedule, funded canary, dedicated keeper rotation, default-branch
 scheduler preflight, repeated Neon state projection, and public V7 promotion are complete. The
 selected proof backfill is also complete. The release still needs outage/broader-proof evidence,
-the first live action-bearing scheduled run under merged seven-attempt/315-second receipt grace,
-timeout evidence, monitoring, and independent reviews.
+matching journal API deployment and authenticated schema-v3 health, the first successful
+action-bearing run through the authoritative journal, timeout evidence,
+monitoring, and independent reviews. The prior seven-attempt live run is recorded and failed lookup
+despite both exact writes later finalizing/applying.
 
 The next safe sequence is:
 
 1. extend transaction-proof coverage and rehearse database outage recovery;
-2. capture the first live action-bearing scheduled run under the merged receipt grace, then continue
-   keeper/drain monitoring and alerting;
-3. continue public browser/wallet soak with V6 legacy recovery;
-4. rehearse rollback without re-enabling V6 writes;
-5. finish operational/external review and submission media.
+2. deploy the matching journal API and verify authenticated `ready=true`, `schemaVersion=3` health;
+3. complete and review a successful manual action-bearing journal run before considering a V7
+   schedule; keep the zero-liability V6 workflow disabled;
+4. continue public browser/wallet soak with V6 legacy recovery;
+5. rehearse rollback without re-enabling V6 writes;
+6. finish operational/external review and submission media.

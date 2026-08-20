@@ -165,8 +165,20 @@ alias targets V7 through READY deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` at
 `c0be752a9a1407e76a1f417256f220f068969fdcf80f88872683e33f2c96e79e`. Vercel metadata anchors it
 to `e5627ebd270a7c6d5291151795b0af6442eba0a6` and records `gitDirty=1`. Keeper receipt grace is
 merged on main `958e51743a821606ca78881e6bcc8fb0a34a8e8f`: seven same-hash attempts with 315 seconds of
-outer backoff and no resubmission. The first live action-bearing scheduled run under that policy,
-long-run monitoring, outage recovery, and external review remain pending.
+outer backoff and no resubmission. The first live scheduled use, run `32312864108` / job
+`96259232716`, exhausted all seven receipt lookups even though CREATE `0xe6af…3574` and RESOLVE
+`0x0850…c7e` later finalized and applied. The recorded schedule therefore reaches at least 31 epochs,
+including four workflow-created epochs. Live writer workflows `338089016` and `338089019` are
+`disabled_manually`; release-candidate YAML removes their cron schedules pending merge. The
+authoritative Neon journal remains staged: migration 002 is applied/read back at checksum
+`d2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266` with zero operations. Its
+fenced global signer lease, durable PREPARE-before-broadcast and exact-hash binding fail closed until
+full receipt identity, successful execution, and post-state are proven; raw lifecycle status and
+artifacts/caches are never proof or authority. Migration 003 retry-attempt lineage is applied and
+production-read-back verified at checksum
+`9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70`; matching API deployment and
+authenticated schema-v3 health are still required before execution. A successful action-bearing journal run, long-run
+monitoring, outage recovery, and external review remain pending.
 
 See [`../docs/STUDIONET-V7.md`](../docs/STUDIONET-V7.md) and
 [`../deployments/studionet-v7.json`](../deployments/studionet-v7.json).

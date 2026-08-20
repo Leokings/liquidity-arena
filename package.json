@@ -15,7 +15,6 @@
     "test": "node --test market/*.test.mjs api/*.test.mjs history/*.test.mjs scripts/claim-delivery-monitor.test.mjs scripts/fee-delivery-monitor.test.mjs scripts/genlayer-command.test.mjs scripts/history-sync.test.mjs scripts/v6-drain.test.mjs scripts/v6-keeper-config.test.mjs scripts/v6-keeper.test.mjs scripts/v7-keeper-config.test.mjs scripts/v7-keeper.test.mjs server/*.test.mjs",
     "test:market": "node --test market/*.test.mjs",
     "keeper:check": "node scripts/v6-keeper.mjs --config scripts/examples/v6-keeper.example.json",
-    "keeper:run": "node scripts/v6-keeper.mjs --config scripts/examples/v6-keeper.example.json --execute",
     "keeper:v7:check": "node scripts/v7-keeper.mjs --config scripts/examples/v7-keeper.example.json",
     "keeper:v7:run": "node scripts/v7-keeper.mjs --config scripts/examples/v7-keeper.example.json --execute",
     "drain:v6:check": "node scripts/v6-drain.mjs --config scripts/examples/v6-keeper.example.json",

@@ -8,9 +8,14 @@ The active review target is `LIQUIDITY_ARENA_V7` at
 proved finalized resolution, refund/payout delivery, loser rejection, liability conservation, and
 fee withdrawal. Dedicated keeper rotation, default-branch scheduler preflight, and initial durable
 history ingestion, repeated projection, selected V7 proof backfill, and public browser cutover are
-complete. Long-run monitoring, the first live action-bearing scheduled run under the merged receipt
-grace, database-outage recovery, broader proof coverage, and an independent security review remain
-release gates. The payment path must not be described as production-ready.
+complete. Both live GitHub writer workflows are now `disabled_manually`; the release-candidate
+source removes their cron triggers but is not yet merged to `main`. The first live action-bearing seven-attempt run is recorded as a failed receipt-index
+lookup whose two exact writes later finalized and applied. Migration 003 is now applied and verified;
+a successful action-bearing run through the replacement Neon journal must still wait for the
+matching API deployment and authenticated schema-v3 health.
+That run, long-run monitoring, database-outage recovery, broader proof coverage, and an independent
+security review remain release gates. The payment path must not be described as
+production-ready.
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is a legacy liability surface only. It remains readable
 and claimable for existing positions; supported public app and automation paths must not use it for
@@ -105,10 +110,26 @@ requires exact receipt identity, `FINALIZED`, successful execution, and matching
 StudioNet receipt indexing may lag broadcast. Main commit
 `958e51743a821606ca78881e6bcc8fb0a34a8e8f` therefore retries finality lookup seven times against the
 same recorded hash with 5/10/20/40/80/160-second outer delays (315 seconds total); it never
-resubmits a write. CI passed, but the first live action-bearing scheduled run using that exact policy
-is still pending.
+resubmits a write. Scheduled run `32312864108`, job `96259232716`, exercised that exact policy and
+failed both receipt lookups after seven attempts. CREATE `0xe6af…3574` and RESOLVE `0x0850…c7e`
+were later independently observed `FINALIZED` with their intended post-states applied. The incident
+proves the lookup can remain invisible beyond the grace window and that a process exit cannot be the
+authority for whether an exact hash may be resubmitted.
 
-GitHub cron is best-effort. It does not define epoch time and is not an availability guarantee.
+The replacement authority is the Neon keeper journal. A fenced global signer lease prevents V7 and
+manual V6 recovery writers from racing. `PREPARED` must be durable before broadcast, and the exact
+captured transaction hash must be bound to that operation immediately after submission. The raw
+`gen_getTransactionStatus` lifecycle is a liveness lane only; even `FINALIZED` does not prove receipt
+identity or execution. Verification requires the full exact receipt, successful execution, and
+matching post-state. Unknown, pending, ambiguous, quarantined, or otherwise unverified operations
+block later writes. Only an exact receipt-verified `FINALIZED_FAILURE` may create a new numbered
+attempt, and migration 003 preserves the prior attempt and hash immutably. Workflow artifacts and
+caches have no journal authority. Live workflow IDs `338089016` (V6) and `338089019` (V7) are
+`disabled_manually`; release-candidate YAML is `workflow_dispatch`-only, but remote `main` retains
+the historical cron source until merge. No cron restoration is claimed.
+
+Any future GitHub cron would be best-effort. Cron does not
+define epoch time and is not an availability guarantee.
 Permissionless resolution and timeout reduce operator lock-in, but monitoring must still alert on
 missing coverage, source quorum loss, finality lag, scheduler failure, and unexpected role/config
 changes.
@@ -141,6 +162,24 @@ parent are stored outside that epoch array. V7 E20 and V6 E19 remain at zero bec
 part of the selected backfill. Database outage recovery and broader proof coverage remain pending.
 Database availability can affect discovery, never settlement or claim eligibility.
 
+The separate Neon keeper-journal migration 002 was prepared as migration
+`1e440327-2e66-403d-934d-c302790ac775` on temporary branch `br-sweet-frost-auakkl85`, applied
+identically to production branch `br-calm-fire-aup0rw0r`, and the temporary branch was deleted. Its
+final checksum is `d2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266`.
+Production read-back preserved the v1 checksum, found four journal tables plus the trigger, and
+reported `operation_count=0`. Migration 003 `keeper_transaction_journal_attempts` was subsequently
+applied to project `steep-hat-04600004`, parent branch `br-calm-fire-aup0rw0r`, as migration
+`14160d53-a2a3-43ab-a762-6bb7e54a95e8` through temporary branch
+`br-polished-shape-aund54y0`, which was deleted. Final checksum
+`9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70` read back with exact schema
+versions 1/2/3, zero operations, all four attempt columns, the unresolved unique index including
+`QUARANTINED`, and the parent-freeze trigger installed. This proves the database schema, not runtime
+readiness or a live journal-backed write. An action-bearing run remains prohibited until the matching
+API is deployed and authenticated health reports `ready=true` with `schemaVersion=3`. The proof-view change remains unmerged and undeployed in
+[open PR #6](https://github.com/Leokings/liquidity-arena/pull/6) at commit
+[`2f52f6e`](https://github.com/Leokings/liquidity-arena/commit/2f52f6e); it must not be attributed to
+the currently verified production bundle.
+
 ## Remaining security gates
 
 After the V7 public cutover:
@@ -148,15 +187,19 @@ After the V7 public cutover:
 1. rerun GenVM lint, V7 direct tests, full JavaScript tests, build, and dependency audit;
 2. complete an independent focused review of contract, evidence adapters, keeper, deployment
    registry, server boundary, and database ingestion;
-3. monitor repeated keeper/drain schedules and prove no owner material exists in automation;
-4. independently review the recorded funded V7 canary, including its shared resolution, fee/refund
+3. deploy the matching journal API and verify authenticated `ready=true`, `schemaVersion=3` health
+   before any action-bearing run;
+4. complete and review a successful manual action-bearing journal run before considering a V7
+   schedule; keep live V6 workflow `338089016` disabled at zero player liability and prove no owner
+   material exists in automation;
+5. independently review the recorded funded V7 canary, including its shared resolution, fee/refund
    math, loser rejection, conserved balances, and finalized parent/child deliveries;
-5. verify V6 legacy reads, resolve/timeout, and claims while proving public app/automation V6 writes
+6. verify V6 legacy reads, resolve/timeout, and claims while proving public app/automation V6 writes
    remain disabled and the retained owner creation capability is monitored and unused;
-6. extend transaction-proof coverage beyond the selected V7 evidence and complete a rollback/outage
+7. extend transaction-proof coverage beyond the selected V7 evidence and complete a rollback/outage
    rehearsal;
-7. test outage, delayed finality, restart, rate limit, and the independent 24-hour timeout path;
-8. finish provider data-use and applicable legal review.
+8. test outage, delayed finality, restart, rate limit, and the independent 24-hour timeout path;
+9. finish provider data-use and applicable legal review.
 
 The earlier V6 funded round is valuable regression evidence, not a substitute for the V7 canary.
 The current Vercel production site targets V7. Deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` is

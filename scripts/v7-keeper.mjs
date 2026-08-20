@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 import {
   assertFinalizedGenlayerExecution,
+  GENLAYER_STUDIONET_RPC_URL,
+  getGenlayerTransactionStatus,
   parseGenlayerCallOutput,
   resolveGenlayerCommand,
   runGenlayerCall,
@@ -13,6 +15,17 @@ import {
   submitGenlayerWrite,
   waitForGenlayerFinalizedReceipt,
 } from './genlayer-command.mjs';
+import {
+  createKeeperJournalClientFromEnvironment,
+} from '../keeper-journal/client.mjs';
+import {
+  createAuthoritativeKeeperSession,
+  keeperActionForOperation,
+  keeperOperationForAction,
+  reconcileAuthoritativeOperation,
+  recoverAuthoritativeOperations,
+  validateRecoveredKeeperOperation,
+} from './authoritative-keeper-journal.mjs';
 import {
   expectedEpochRecord,
   loadV7KeeperConfig,
@@ -593,7 +606,10 @@ export async function planV7KeeperRun(context) {
     if (actionType) actions.push(Object.freeze({ type: actionType, epochEndTimestamp }));
   }
 
-  const priority = { CREATE: 0, TIMEOUT: 1, RESOLVE: 2 };
+  // Release already-backed user funds before consuming signer capacity on
+  // future scheduling. A nonterminal settlement also fences that epoch before
+  // any later CREATE work is attempted.
+  const priority = { TIMEOUT: 0, RESOLVE: 1, CREATE: 2 };
   actions.sort((left, right) => priority[left.type] - priority[right.type]
     || left.epochEndTimestamp - right.epochEndTimestamp);
   const selected = actions.slice(0, config.operator.maxWritesPerRun);
@@ -625,31 +641,6 @@ export function validateReceiptIdentity(receipt, contractAddress, method, args) 
       args: actualArgs,
     });
   }
-  return receipt;
-}
-
-async function waitForFinalizedReceipt(context, transactionHash) {
-  const { config, operator, sleep } = context;
-  const receipt = await withRetries(
-    () => operator.waitFinalized(transactionHash, {
-      retries: config.operator.finalityRetries,
-      intervalMs: config.operator.finalityIntervalMs,
-    }),
-    {
-      attempts: config.operator.finalityWaitAttempts,
-      // The Studio gateway may briefly return "transaction not found" after
-      // broadcasting even though the hash is authoritative. Space outer CLI
-      // retries by at least the receipt polling interval so all attempts are
-      // not exhausted inside that propagation window.
-      baseMs: Math.max(
-        config.operator.retryBaseMs,
-        config.operator.finalityIntervalMs,
-      ),
-      sleep,
-      label: `FINALIZED receipt ${transactionHash}`,
-      logger: context.logger,
-    },
-  );
   return receipt;
 }
 
@@ -730,25 +721,19 @@ function assertPostState(action, epoch) {
   );
 }
 
-function actionCall(config, action) {
-  if (action.type === 'CREATE') {
-    return Object.freeze({
-      method: 'create_epoch',
-      args: Object.freeze([String(action.epochEndTimestamp)]),
-    });
-  }
-  return Object.freeze({
-    method: action.type === 'RESOLVE' ? 'resolve_epoch' : 'activate_timeout_refund',
-    args: Object.freeze([String(action.epochEndTimestamp)]),
-  });
-}
-
 async function executeAction(context, action) {
-  const { config, operator, logger } = context;
-  const call = actionCall(config, action);
+  const {
+    config, operator, logger, journalSession,
+  } = context;
+  const identity = keeperOperationForAction({
+    deploymentAlias: 'v7',
+    contractAddress: config.contractAddress,
+    action,
+  });
+  const call = identity.call;
   // The CLI active account is process-global local state and can be changed by
   // another terminal after initial preflight. Re-bind every individual write
-  // to the dedicated on-chain keeper immediately before submission.
+  // to the dedicated on-chain keeper immediately before PREPARE/broadcast.
   const accountInfo = await readChain(
     context,
     `account info before ${call.method}`,
@@ -759,24 +744,89 @@ async function executeAction(context, action) {
     config.expected.keeperAddress,
     operator.canSignLockedAccount === true,
   );
+  await journalSession.renew();
+  const prepared = await journalSession.prepare(identity.operation);
+  if (prepared?.canBroadcast !== true) {
+    const operation = prepared?.operation
+      ? validateRecoveredKeeperOperation(prepared.operation)
+      : null;
+    return Object.freeze({
+      ...action,
+      transactionHash: operation?.transactionHash || null,
+      pendingReceipt: true,
+      code: 'PREPARE_BLOCKED',
+      reason: 'AUTHORITATIVE_PREPARE_NOT_BROADCASTABLE',
+    });
+  }
+  let operation = validateRecoveredKeeperOperation(prepared.operation);
+  if (prepared.inserted !== true
+      || operation.logicalOperationId !== identity.logicalOperationId
+      || operation.state !== 'PREPARED'
+      || operation.transactionHash !== null
+      || operation.deploymentAlias !== 'v7'
+      || operation.contractAddress !== config.contractAddress.toLowerCase()
+      || operation.signerAddress !== journalSession.signerAddress) {
+    fail('KEEPER_JOURNAL_IDENTITY', 'Prepared V7 operation does not match the intended write.');
+  }
+  // PREPARE itself is a network round trip. Refresh the same fencing token
+  // once more at the last safe point before spawning the broadcaster.
+  await journalSession.renew();
+  const preparedOperationId = operation.operationId;
   let transactionHash;
-  const submission = await operator.submitWrite(call.method, call.args, (hash) => {
+  await operator.submitWrite(call.method, call.args, async (hash) => {
     transactionHash = hash;
+    // This event is a non-authoritative forensic mirror. The wrapper remains
+    // alive and no later write is allowed until the Neon bind below succeeds.
+    logger({
+      event: 'V7_KEEPER_TRANSACTION_HASH_CAPTURED',
+      operationId: operation.operationId,
+      logicalOperationId: operation.logicalOperationId,
+      attemptNumber: operation.attemptNumber,
+      action: action.type,
+      epochEndTimestamp: action.epochEndTimestamp,
+      transactionHash: hash,
+      authoritativeBound: false,
+    });
+    const bound = await journalSession.bind(operation.operationId, hash);
+    operation = validateRecoveredKeeperOperation(bound?.operation);
+    if (operation.operationId !== preparedOperationId
+        || operation.logicalOperationId !== identity.logicalOperationId
+        || operation.transactionHash !== String(hash).toLowerCase()
+        || operation.state !== 'SUBMITTED') {
+      fail('KEEPER_JOURNAL_IDENTITY', 'V7 submission hash was not bound to the prepared operation.');
+    }
     logger({
       event: 'V7_KEEPER_TRANSACTION_SUBMITTED',
+      operationId: operation.operationId,
+      logicalOperationId: operation.logicalOperationId,
+      attemptNumber: operation.attemptNumber,
       action: action.type,
       epochEndTimestamp: action.epochEndTimestamp,
       transactionHash: hash,
     });
   });
-  transactionHash = transactionHash || submission?.transactionHash;
   if (!/^0x[\da-f]{64}$/i.test(String(transactionHash ?? ''))) {
-    fail('TRANSACTION_HASH_MISSING', `${call.method} did not report a transaction hash`);
+    fail(
+      'TRANSACTION_HASH_NOT_DURABLE',
+      `${call.method} did not durably bind its transaction hash before the wrapper exited`,
+    );
   }
-  const receipt = await waitForFinalizedReceipt(context, transactionHash);
-  validateReceiptIdentity(receipt, config.contractAddress, call.method, call.args);
-
-  const epoch = await readVerifiedPostState(context, action);
+  const reconciled = await reconcileAuthoritativeOperation({
+    ...authoritativeRecoveryOptions(context),
+    operation,
+  });
+  if (!reconciled.verified) {
+    const pending = Object.freeze({
+      ...action,
+      transactionHash,
+      pendingReceipt: true,
+      code: 'AUTHORITATIVE_OPERATION_PENDING',
+      reason: reconciled.pending.reason,
+    });
+    logger({ event: 'V7_KEEPER_TRANSACTION_DEFERRED', ...pending });
+    return pending;
+  }
+  const epoch = reconciled.postState;
   logger({
     event: 'V7_KEEPER_ACTION_VERIFIED',
     action: action.type,
@@ -785,6 +835,42 @@ async function executeAction(context, action) {
     status: epoch.status,
   });
   return Object.freeze({ ...action, transactionHash, status: epoch.status });
+}
+
+function authoritativeRecoveryOptions(context) {
+  const { config } = context;
+  return {
+    session: context.journalSession,
+    deploymentAlias: 'v7',
+    contractAddress: config.contractAddress,
+    operator: context.operator,
+    validateReceipt: (receipt, operation) => {
+      const action = keeperActionForOperation(operation);
+      const expected = keeperOperationForAction({
+        deploymentAlias: 'v7',
+        contractAddress: config.contractAddress,
+        action,
+      });
+      if (expected.logicalOperationId !== operation.logicalOperationId) {
+        fail('KEEPER_JOURNAL_CALL_MISMATCH', 'Recovered V7 call is not the canonical intended operation.');
+      }
+      validateReceiptIdentity(receipt, config.contractAddress, expected.call.method, expected.call.args);
+    },
+    verifyPostState: (action) => readVerifiedPostState(context, action),
+    sleep: context.sleep,
+    lifecycleAttempts: config.operator.finalityRetries,
+    lifecycleIntervalMs: config.operator.finalityIntervalMs,
+    receiptPolicy: {
+      // gen_getTransactionStatus is the liveness lane. Once it reports
+      // FINALIZED, perform one full exact receipt lookup; an index miss is
+      // durably deferred instead of multiplying 318-second CLI waits.
+      retries: 1,
+      intervalMs: config.operator.finalityIntervalMs,
+    },
+    deadlineAtMs: context.deadlineAtMs,
+    clockMs: context.clockMs,
+    logger: context.logger,
+  };
 }
 
 async function revalidateSettlementAction(context, action) {
@@ -800,12 +886,26 @@ export async function runV7KeeperOnce({
   execute = false,
   nowEpochSeconds = Math.floor(Date.now() / 1_000),
   operator,
+  journalClient = operator?.journalClient,
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   logger = (event) => console.log(JSON.stringify(event)),
+  deadlineAtMs = Date.now() + (45 * 60 * 1_000),
+  clockMs = Date.now,
+  journalSessionOptions = {},
 }) {
   if (!config || !operator) fail('KEEPER_ARGUMENT', 'config and operator are required');
   const now = safeInteger(nowEpochSeconds, 'nowEpochSeconds');
-  const context = { config, execute, nowEpochSeconds: now, operator, sleep, logger };
+  const context = {
+    config,
+    execute,
+    nowEpochSeconds: now,
+    operator,
+    sleep,
+    logger,
+    deadlineAtMs,
+    clockMs,
+    journalSession: null,
+  };
 
   const networkInfo = await readChain(context, 'network info', () => operator.getNetworkInfo());
   assertNetwork(networkInfo);
@@ -828,52 +928,135 @@ export async function runV7KeeperOnce({
     assetCatalog,
     venueCatalog,
   );
-  if (execute) {
-    const accountInfo = await readChain(context, 'account info', () => operator.getAccountInfo());
-    assertSigningAccount(accountInfo, verified.keeper, operator.canSignLockedAccount === true);
+  if (!execute) {
+    const plan = await planV7KeeperRun(context);
+    logger({
+      event: 'V7_KEEPER_DRY_RUN_PLAN',
+      nowEpochSeconds: now,
+      actions: plan.actions,
+      deferredEpochReadCount: plan.deferredEpochReadCount,
+      deferredActionCount: plan.deferredActionCount,
+    });
+    return Object.freeze({
+      ...plan,
+      execute: false,
+      recovered: [],
+      completed: [],
+      pending: [],
+      skipped: [],
+      failures: [],
+    });
   }
 
-  const plan = await planV7KeeperRun(context);
-  logger({
-    event: execute ? 'V7_KEEPER_EXECUTION_PLAN' : 'V7_KEEPER_DRY_RUN_PLAN',
-    nowEpochSeconds: now,
-    actions: plan.actions,
-    deferredEpochReadCount: plan.deferredEpochReadCount,
-    deferredActionCount: plan.deferredActionCount,
+  const accountInfo = await readChain(context, 'account info', () => operator.getAccountInfo());
+  assertSigningAccount(accountInfo, verified.keeper, operator.canSignLockedAccount === true);
+  const journalSession = createAuthoritativeKeeperSession({
+    client: journalClient,
+    signerAddress: verified.keeper,
+    logger,
+    ...journalSessionOptions,
   });
-  if (!execute) return Object.freeze({ ...plan, execute: false, completed: [], skipped: [], failures: [] });
+  context.journalSession = journalSession;
+  await journalSession.acquire();
 
-  const completed = [];
-  const skipped = [];
-  const failures = [];
-  for (const plannedAction of plan.actions) {
-    try {
-      const action = await revalidateSettlementAction(context, plannedAction);
-      if (!action) {
-        skipped.push(Object.freeze({ ...plannedAction, reason: 'NO_LONGER_ACTIONABLE' }));
-        continue;
+  let summary;
+  try {
+    summary = await journalSession.withHeartbeat(async () => {
+      // The Neon journal is authoritative and signer-global. Recover every
+      // nonterminal operation before even computing a new action plan.
+      const recovery = await recoverAuthoritativeOperations(authoritativeRecoveryOptions(context));
+      if (recovery.blocked) {
+        logger({
+          event: 'V7_KEEPER_RECOVERY_BLOCKED',
+          pending: recovery.pending,
+        });
+        return Object.freeze({
+          knownEpochCount: null,
+          targetEpochEnds: Object.freeze([]),
+          actions: Object.freeze([]),
+          deferredEpochReadCount: 0,
+          deferredActionCount: 0,
+          execute: true,
+          recovered: recovery.recovered,
+          completed: [],
+          pending: recovery.pending,
+          skipped: [],
+          failures: [],
+          blocked: true,
+        });
       }
-      completed.push(await executeAction(context, action));
-    } catch (error) {
-      failures.push(Object.freeze({
-        ...plannedAction,
-        code: error?.code || 'ACTION_FAILED',
-        message: error instanceof Error ? error.message : String(error),
-      }));
+
+      const plan = await planV7KeeperRun(context);
       logger({
-        event: 'V7_KEEPER_ACTION_FAILED',
-        action: plannedAction.type,
-        epochEndTimestamp: plannedAction.epochEndTimestamp,
-        code: error?.code || 'ACTION_FAILED',
-        message: error instanceof Error ? error.message : String(error),
+        event: 'V7_KEEPER_EXECUTION_PLAN',
+        nowEpochSeconds: now,
+        actions: plan.actions,
+        deferredEpochReadCount: plan.deferredEpochReadCount,
+        deferredActionCount: plan.deferredActionCount,
       });
-    }
+      const completed = [];
+      const skipped = [];
+      const pending = [];
+      const failures = [];
+      for (let index = 0; index < plan.actions.length; index += 1) {
+        const plannedAction = plan.actions[index];
+        if (clockMs() >= deadlineAtMs) {
+          skipped.push(...plan.actions.slice(index).map((item) => Object.freeze({
+            ...item,
+            reason: 'RUN_DEADLINE',
+          })));
+          break;
+        }
+        try {
+          const action = await revalidateSettlementAction(context, plannedAction);
+          if (!action) {
+            skipped.push(Object.freeze({ ...plannedAction, reason: 'NO_LONGER_ACTIONABLE' }));
+            continue;
+          }
+          const result = await executeAction(context, action);
+          if (result.pendingReceipt) {
+            pending.push(result);
+            skipped.push(...plan.actions.slice(index + 1).map((item) => Object.freeze({
+              ...item,
+              reason: 'BLOCKED_BY_NONTERMINAL_OPERATION',
+              transactionHash: result.transactionHash,
+            })));
+            break;
+          }
+          completed.push(result);
+        } catch (error) {
+          const failure = Object.freeze({
+            ...plannedAction,
+            code: error?.code || 'ACTION_FAILED',
+            message: error instanceof Error ? error.message : String(error),
+          });
+          failures.push(failure);
+          logger({ event: 'V7_KEEPER_ACTION_FAILED', ...failure });
+          skipped.push(...plan.actions.slice(index + 1).map((item) => Object.freeze({
+            ...item,
+            reason: 'BLOCKED_AFTER_ACTION_FAILURE',
+          })));
+          break;
+        }
+      }
+      return Object.freeze({
+        ...plan,
+        execute: true,
+        recovered: recovery.recovered,
+        completed,
+        pending,
+        skipped,
+        failures,
+        blocked: pending.length > 0 || failures.length > 0,
+      });
+    });
+  } finally {
+    await journalSession.release();
   }
-  const summary = Object.freeze({ ...plan, execute: true, completed, skipped, failures });
-  if (failures.length > 0) {
+  if (summary.failures.length > 0) {
     throw new V7KeeperError(
       'ACTION_FAILURES',
-      `${failures.length} V7 keeper action(s) failed; successful actions remain verified`,
+      `${summary.failures.length} V7 keeper action(s) failed; successful actions remain verified`,
       { summary },
     );
   }
@@ -918,6 +1101,10 @@ export function createCliV7KeeperOperator({ config, environment = process.env } 
     getOpenEpochCount: () => call('get_open_epoch_count'),
     getOpenEpochPage: (offset, limit) => call('get_open_epoch_page', [offset, limit]),
     getEpoch: (epochEndTimestamp) => call('get_epoch', [epochEndTimestamp]),
+    getTransactionStatus: (transactionHash) => getGenlayerTransactionStatus({
+      rpcUrl: GENLAYER_STUDIONET_RPC_URL,
+      transactionHash,
+    }),
     submitWrite: (method, args, onTransactionHash) => submitGenlayerWrite({
       invocation,
       args: [config.contractAddress, method, '--args', ...args.map(String)],
@@ -956,16 +1143,36 @@ function parseArguments(argv) {
   return result;
 }
 
-export async function runV7KeeperCli(argv = process.argv.slice(2)) {
+export async function runV7KeeperCli(
+  argv = process.argv.slice(2),
+  {
+    environment = process.env,
+    loadConfig = loadV7KeeperConfig,
+    createOperator = createCliV7KeeperOperator,
+    createJournalClient = createKeeperJournalClientFromEnvironment,
+    runOnce = runV7KeeperOnce,
+  } = {},
+) {
   const parsed = parseArguments(argv);
   if (parsed.help) {
     console.log(usage());
     return undefined;
   }
   if (!parsed.configPath) throw new Error('--config is required');
-  const config = loadV7KeeperConfig(parsed.configPath);
-  const operator = createCliV7KeeperOperator({ config });
-  return runV7KeeperOnce({ config, execute: parsed.execute, operator });
+  const config = loadConfig(parsed.configPath);
+  const operator = createOperator({ config, environment });
+  const journalClient = parsed.execute
+    ? createJournalClient(environment)
+    : undefined;
+  const summary = await runOnce({ config, execute: parsed.execute, operator, journalClient });
+  if (summary?.blocked === true) {
+    throw new V7KeeperError(
+      'RUN_BLOCKED',
+      'V7 keeper stopped with an authoritative operation still blocked',
+      { summary },
+    );
+  }
+  return summary;
 }
 
 const invokedPath = process.argv[1] ? fileURLToPath(import.meta.url) : '';

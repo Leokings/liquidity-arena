@@ -68,7 +68,7 @@
         }
       ]
     },
-    "defaultBranchWorkflowActivation": "PASS",
+    "defaultBranchWorkflowActivation": "HISTORICAL_PASS_NOW_MANUAL_ONLY",
     "defaultBranchWorkflowEvidence": {
       "firstScheduledRunId": "32298454771",
       "firstScheduledReconcileStatus": "SUCCESS",
@@ -86,6 +86,10 @@
       "latestHistoryJobId": "96221327115",
       "latestHistoryStatus": "SUCCESS",
       "longRunMonitoring": "PENDING",
+      "liveWorkflowId": 338089019,
+      "liveWorkflowState": "disabled_manually",
+      "remoteMainSourceTriggerMode": "HISTORICAL_CRON_STILL_PRESENT_PENDING_RELEASE_MERGE",
+      "releaseCandidateSourceTriggerMode": "WORKFLOW_DISPATCH_ONLY",
       "receiptPropagationGrace": {
         "mainCommit": "958e51743a821606ca78881e6bcc8fb0a34a8e8f",
         "pullRequest": 5,
@@ -160,7 +164,32 @@
             }
           }
         ],
-        "firstLiveActionBearingScheduledRunEvidence": "PENDING"
+        "firstLiveActionBearingScheduledRunEvidence": {
+          "status": "OBSERVED_FAILURE_RECEIPT_LOOKUP_EXHAUSTED_BUT_BOTH_WRITES_LATER_FINALIZED_AND_APPLIED",
+          "workflowRunId": "32312864108",
+          "reconcileJobId": "96259232716",
+          "workflowUrl": "https://github.com/Leokings/liquidity-arena/actions/runs/32312864108",
+          "jobUrl": "https://github.com/Leokings/liquidity-arena/actions/runs/32312864108/job/96259232716",
+          "event": "schedule",
+          "headCommit": "958e51743a821606ca78881e6bcc8fb0a34a8e8f",
+          "workflowConclusion": "FAILURE_RECEIPT_LOOKUP_EXHAUSTED",
+          "finalityWaitAttemptsPerWrite": 7,
+          "create": {
+            "epochEndTimestamp": 1787274000,
+            "transactionHash": "0xe6af5cd917427b5f5dadcbb77a56dc5c529a3b844a26008165c0e2c9f8d83574",
+            "receiptStatusAfterRun": "FINALIZED",
+            "postState": "OPEN",
+            "postStateApplied": true
+          },
+          "resolve": {
+            "epochEndTimestamp": 1787180400,
+            "transactionHash": "0x0850dfa1098ce773b20c9407d602592eada74cc36004333dc3ec011930d71c7e",
+            "receiptStatusAfterRun": "FINALIZED",
+            "postState": "RESOLVED_DETERMINED",
+            "postStateApplied": true
+          },
+          "finding": "The legacy seven-attempt process could report failure after 315 seconds even when both exact writes later finalized and applied; this is evidence for durable hash recovery, not a successful journal-backed run."
+        }
       }
     }
   },
@@ -182,10 +211,10 @@
     "fullDayLastEpochEndTimestamp": 1787252400,
     "fullDayFirstCreateTransactionHash": "0x7b94b2d0dc4d0970482e60a2cec1fc4d3c3bcf0592816e992b3acbc9474b7726",
     "fullDayFinalCreateTransactionHash": "0x443afcf771f1c5751bdc0e525b75b8d04e7378ef37bb7f817799f98f36c7677f",
-    "minimumRecordedEpochCount": 30,
-    "recordedWorkflowCreatedEpochCount": 3,
-    "continuousAutomationActivation": "PASS_FIRST_SCHEDULED_RECONCILE_OBSERVED",
-    "longRunAutomationSoak": "PENDING"
+    "minimumRecordedEpochCount": 31,
+    "recordedWorkflowCreatedEpochCount": 4,
+    "continuousAutomationActivation": "HISTORICAL_PASS_LIVE_WORKFLOW_DISABLED_MANUALLY_SOURCE_CRON_REMOVAL_PENDING_MERGE",
+    "longRunAutomationSoak": "PENDING_MIGRATION_003_READINESS_AND_SUCCESSFUL_ACTION_BEARING_JOURNAL_RUN"
   },
   "fundedCanary": {
     "epochEndTimestamp": 1787166000,
@@ -448,6 +477,77 @@
       }
     }
   },
+  "keeperJournal": {
+    "provider": "Neon Postgres",
+    "authority": "AUTHORITATIVE_PENDING_OPERATION_JOURNAL",
+    "operationalAuthorityActive": false,
+    "inactiveReason": "MATCHING_API_NOT_YET_DEPLOYED_AND_AUTHENTICATED_SCHEMA_V3_HEALTH_NOT_YET_VERIFIED",
+    "projectId": "steep-hat-04600004",
+    "productionBranchId": "br-calm-fire-aup0rw0r",
+    "migration002": {
+      "number": 2,
+      "path": "migrations/002_keeper_journal.sql",
+      "target": "NEON_MAIN",
+      "status": "APPLIED",
+      "prepareMigrationId": "1e440327-2e66-403d-934d-c302790ac775",
+      "prepareBranchId": "br-sweet-frost-auakkl85",
+      "prepareBranchDeletedAfterCompletion": true,
+      "finalChecksumSha256": "d2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266",
+      "productionReadback": "PASS",
+      "historyV1ChecksumUnchanged": true,
+      "historyV1ChecksumSha256": "dd95ed3a5c55bf55d02090605a46557377778afb220126451bb4e750dbc280b2",
+      "journalTableCount": 4,
+      "journalTriggerPresent": true,
+      "operationCountAtReadback": 0
+    },
+    "migration003": {
+      "number": 3,
+      "name": "keeper_transaction_journal_attempts",
+      "path": "migrations/003_keeper_journal_attempts.sql",
+      "target": "NEON_MAIN",
+      "status": "APPLIED",
+      "migrationId": "14160d53-a2a3-43ab-a762-6bb7e54a95e8",
+      "parentBranchId": "br-calm-fire-aup0rw0r",
+      "prepareBranchId": "br-polished-shape-aund54y0",
+      "prepareBranchDeletedAfterCompletion": true,
+      "purpose": "APPEND_ONLY_NUMBERED_RETRY_ATTEMPTS_AFTER_EXACT_FINALIZED_FAILURE",
+      "finalChecksumSha256": "9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70",
+      "productionReadback": "PASS",
+      "schemaVersionsReadBack": [1, 2, 3],
+      "schemaVersionsExact": true,
+      "operationCountAtReadback": 0,
+      "attemptColumns": [
+        "logical_operation_id",
+        "attempt_number",
+        "retry_of_operation_id",
+        "retry_of_attempt_number"
+      ],
+      "quarantinedIncludedInUnresolvedUniqueIndex": true,
+      "parentFreezeTriggerInstalled": true,
+      "applicationGateSatisfied": true
+    },
+    "requiredHealthGate": {
+      "authenticated": true,
+      "ready": true,
+      "schemaVersion": 3,
+      "checkedBeforeLeaseAcquisition": true,
+      "productionVerified": false,
+      "status": "PENDING_MATCHING_API_DEPLOYMENT_AND_AUTHENTICATED_HEALTH_READBACK"
+    },
+    "rolloutStatus": "MIGRATIONS_002_AND_003_APPLIED_API_HEALTH_AND_ACTION_BEARING_CANARY_PENDING_LIVE_WORKFLOWS_DISABLED_MANUALLY",
+    "invariants": {
+      "fencedGlobalSignerLeaseRequired": true,
+      "prepareMustCommitBeforeBroadcast": true,
+      "capturedHashMustBindToPreparedOperation": true,
+      "rawTransactionStatusIsLivenessOnly": true,
+      "fullExactReceiptIdentityAndSuccessfulExecutionRequired": true,
+      "matchingPostStateRequiredBeforeVerified": true,
+      "unknownOrUnverifiedOperationBlocksFurtherWrites": true,
+      "exactFinalizedFailureRetryRequiresNewNumberedAttempt": true,
+      "priorAttemptAndHashRemainImmutable": true,
+      "artifactOrCacheAuthorityAllowed": false
+    }
+  },
   "publicRelease": {
     "productionAlias": "https://liquidity-arena.vercel.app",
     "activeDeployment": "v7",
@@ -470,6 +570,11 @@
     "retiredOlderDeploymentCount": 6,
     "retiredOlderDeploymentsStatus": "DELETED",
     "v7Cutover": "PASS",
+    "proofViewStatus": "OPEN_PR_PREVIEW_ONLY_NOT_MERGED_OR_DEPLOYED",
+    "proofViewPullRequest": 6,
+    "proofViewPullRequestUrl": "https://github.com/Leokings/liquidity-arena/pull/6",
+    "proofViewCommit": "2f52f6e",
+    "proofViewCommitUrl": "https://github.com/Leokings/liquidity-arena/commit/2f52f6e",
     "currentVerifiedProductionArtifact": {
       "sourceAnchorCommit": "e5627ebd270a7c6d5291151795b0af6442eba0a6",
       "sourceAnchorGitDirty": true,
@@ -510,15 +615,15 @@
     "seededEpochCount": 25,
     "dedicatedKeeperCreatedEpochCount": 2,
     "dedicatedKeeperLimitedExecution": "PASS_TWO_FINALIZED_OPEN_EPOCHS",
-    "defaultBranchKeeperWorkflow": "PASS_PROFILE_SIGNER_NO_ACTION_RECONCILE_AND_315_SECOND_GRACE_MERGED_LIVE_ACTION_PENDING",
+    "defaultBranchKeeperWorkflow": "HISTORICAL_PROFILE_SIGNER_RECONCILE_PASS_LIVE_WORKFLOW_338089019_DISABLED_MANUALLY_SOURCE_CRON_REMOVAL_PENDING_MERGE",
     "legacyV6ScheduledDrainWorkflowRunId": "32297047031",
-    "legacyV6ScheduledDrainWorkflow": "PASS",
+    "legacyV6ScheduledDrainWorkflow": "HISTORICAL_PASS_LIVE_WORKFLOW_338089016_DISABLED_MANUALLY_ZERO_PLAYER_LIABILITY_SOURCE_CRON_REMOVAL_PENDING_MERGE",
     "currentReceiptVerifierCiRunId": "32308815377",
     "currentReceiptVerifierCi": "PASS_BOTH_JOBS",
     "currentVercelDeployment": "PASS_READY_AND_PUBLIC_READINESS_200",
     "keeperReceiptGraceMainCommit": "958e51743a821606ca78881e6bcc8fb0a34a8e8f",
     "keeperReceiptGraceCiRunId": "32310160397",
-    "keeperReceiptGraceCi": "PASS_BOTH_JOBS_LIVE_ACTION_BEARING_SCHEDULED_RUN_PENDING",
+    "keeperReceiptGraceCi": "PASS_BOTH_JOBS_FIRST_LIVE_SCHEDULED_RUN_FAILED_LOOKUP_BUT_BOTH_EXACT_WRITES_LATER_FINALIZED_AND_APPLIED",
     "claimDeliveryMonitorDeploymentModes": ["v6", "v7"],
     "dedicatedKeeperRotation": "PASS_FINALIZED_AND_EXACT_CONFIG_READBACK",
     "fundedCanary": "PASS_SETTLED_DELIVERED_AND_FEE_WITHDRAWN"

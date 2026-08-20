@@ -341,7 +341,20 @@
     "runId": "32297047031",
     "event": "schedule",
     "status": "SUCCESS",
-    "createEpochCapabilityUsed": false
+    "createEpochCapabilityUsed": false,
+    "recurringScheduleEnabled": false,
+    "liveWorkflowId": 338089016,
+    "liveWorkflowState": "disabled_manually",
+    "remoteMainSourceTriggerMode": "HISTORICAL_CRON_STILL_PRESENT_PENDING_RELEASE_MERGE",
+    "releaseCandidateSourceTriggerMode": "WORKFLOW_DISPATCH_ONLY",
+    "disableReason": "LIVE_ZERO_STATE_AND_ZERO_PLAYER_LIABILITY",
+    "liveTerminalEpochCount": 5,
+    "liveEpochStatus": "ALL_RESOLVED_DETERMINED",
+    "playerLiabilityAtto": "0",
+    "latestDrainDryRun": {
+      "actions": [],
+      "deferredEpochReadCount": 0
+    }
   },
   "vercel": {
     "target": "production",
@@ -414,7 +427,7 @@
   "remainingLiveEvidence": [
     "24-hour timeout refund path; the unbacked-winner refund path is proven",
     "claim-child failure recovery or a documented protocol delivery guarantee",
-    "long-run scheduled keeper/drain monitoring and alerting; initial V7 and V6 scheduled runs are proven",
+    "matching keeper-journal API deployment, authenticated schema-v3 health, and a successful action-bearing V7 journal run; migration 003 is applied and V6 workflow 338089016 is disabled_manually at zero player liability",
     "durable server-side market telemetry",
     "provider data-use and legal review",
     "independent security review"

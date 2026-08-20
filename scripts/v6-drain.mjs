@@ -11,6 +11,17 @@ import {
   validateReceiptIdentity,
 } from './v6-keeper.mjs';
 import {
+  createKeeperJournalClientFromEnvironment,
+} from '../keeper-journal/client.mjs';
+import {
+  createAuthoritativeKeeperSession,
+  keeperActionForOperation,
+  keeperOperationForAction,
+  reconcileAuthoritativeOperation,
+  recoverAuthoritativeOperations,
+  validateRecoveredKeeperOperation,
+} from './authoritative-keeper-journal.mjs';
+import {
   loadV6KeeperConfig,
   V6_NETWORK,
 } from './v6-keeper-config.mjs';
@@ -254,29 +265,17 @@ export function assertV6DrainPostState(action, epoch) {
   return epoch;
 }
 
-function actionCall(action) {
-  return Object.freeze({
-    method: action.type === 'TIMEOUT' ? 'activate_timeout_refund' : 'resolve_epoch',
-    args: Object.freeze([String(action.epochEndTimestamp)]),
+async function readVerifiedPostState(context, action) {
+  return withRetries(async () => {
+    const current = await context.operator.getEpoch(action.epochEndTimestamp);
+    assertEpochMatchesConfiguration(context.config, current, action.epochEndTimestamp);
+    return assertV6DrainPostState(action, current);
+  }, {
+    attempts: context.config.operator.postStateAttempts,
+    baseMs: context.config.operator.postStateIntervalMs,
+    sleep: context.sleep,
+    label: `post-state ${action.type} ${action.epochEndTimestamp}`,
   });
-}
-
-async function waitForFinalizedReceipt(context, transactionHash) {
-  return withRetries(
-    () => context.operator.waitFinalized(transactionHash, {
-      retries: context.config.operator.finalityRetries,
-      intervalMs: context.config.operator.finalityIntervalMs,
-    }),
-    {
-      attempts: context.config.operator.finalityWaitAttempts,
-      baseMs: Math.max(
-        context.config.operator.retryBaseMs,
-        context.config.operator.finalityIntervalMs,
-      ),
-      sleep: context.sleep,
-      label: `FINALIZED receipt ${transactionHash}`,
-    },
-  );
 }
 
 async function revalidateAction(context, plannedAction) {
@@ -287,34 +286,103 @@ async function revalidateAction(context, plannedAction) {
 }
 
 async function executeAction(context, action) {
-  const call = actionCall(action);
+  const accountInfo = await readChain(
+    context,
+    `account info before ${action.type}`,
+    () => context.operator.getAccountInfo(),
+  );
+  const activeSigner = assertActiveSigner(
+    accountInfo,
+    context.operator.canSignLockedAccount === true,
+  );
+  if (activeSigner !== context.journalSession.signerAddress) {
+    fail('SIGNER_DRIFT', 'The active StudioNet signer changed after the fenced lease was acquired.');
+  }
+  const identity = keeperOperationForAction({
+    deploymentAlias: 'v6',
+    contractAddress: context.config.contractAddress,
+    action,
+  });
+  const call = identity.call;
+  await context.journalSession.renew();
+  const prepared = await context.journalSession.prepare(identity.operation);
+  if (prepared?.canBroadcast !== true) {
+    const operation = prepared?.operation
+      ? validateRecoveredKeeperOperation(prepared.operation)
+      : null;
+    return Object.freeze({
+      ...action,
+      transactionHash: operation?.transactionHash || null,
+      pendingReceipt: true,
+      code: 'PREPARE_BLOCKED',
+      reason: 'AUTHORITATIVE_PREPARE_NOT_BROADCASTABLE',
+    });
+  }
+  let operation = validateRecoveredKeeperOperation(prepared.operation);
+  if (prepared.inserted !== true
+      || operation.logicalOperationId !== identity.logicalOperationId
+      || operation.state !== 'PREPARED'
+      || operation.transactionHash !== null
+      || operation.deploymentAlias !== 'v6'
+      || operation.contractAddress !== context.config.contractAddress.toLowerCase()
+      || operation.signerAddress !== context.journalSession.signerAddress) {
+    fail('KEEPER_JOURNAL_IDENTITY', 'Prepared V6 drain operation does not match the intended write.');
+  }
+  await context.journalSession.renew();
+  const preparedOperationId = operation.operationId;
   let transactionHash;
-  const submission = await context.operator.submitWrite(call.method, call.args, (hash) => {
+  await context.operator.submitWrite(call.method, call.args, async (hash) => {
     transactionHash = hash;
     context.logger({
+      event: 'V6_DRAIN_TRANSACTION_HASH_CAPTURED',
+      operationId: operation.operationId,
+      logicalOperationId: operation.logicalOperationId,
+      attemptNumber: operation.attemptNumber,
+      action: action.type,
+      epochEndTimestamp: action.epochEndTimestamp,
+      transactionHash: hash,
+      authoritativeBound: false,
+    });
+    const bound = await context.journalSession.bind(operation.operationId, hash);
+    operation = validateRecoveredKeeperOperation(bound?.operation);
+    if (operation.operationId !== preparedOperationId
+        || operation.logicalOperationId !== identity.logicalOperationId
+        || operation.transactionHash !== String(hash).toLowerCase()
+        || operation.state !== 'SUBMITTED') {
+      fail('KEEPER_JOURNAL_IDENTITY', 'V6 drain hash was not bound to its prepared operation.');
+    }
+    context.logger({
       event: 'V6_DRAIN_TRANSACTION_SUBMITTED',
+      operationId: operation.operationId,
+      logicalOperationId: operation.logicalOperationId,
+      attemptNumber: operation.attemptNumber,
       action: action.type,
       epochEndTimestamp: action.epochEndTimestamp,
       transactionHash: hash,
     });
   });
-  transactionHash = transactionHash || submission?.transactionHash;
   if (!/^0x[\da-f]{64}$/i.test(String(transactionHash ?? ''))) {
-    fail('TRANSACTION_HASH_MISSING', `${call.method} did not report a transaction hash`);
+    fail(
+      'TRANSACTION_HASH_NOT_DURABLE',
+      `${call.method} did not durably bind its transaction hash before the wrapper exited`,
+    );
   }
-
-  const receipt = await waitForFinalizedReceipt(context, transactionHash);
-  validateReceiptIdentity(receipt, context.config.contractAddress, call.method, call.args);
-  const epoch = await withRetries(async () => {
-    const current = await context.operator.getEpoch(action.epochEndTimestamp);
-    assertEpochMatchesConfiguration(context.config, current, action.epochEndTimestamp);
-    return assertV6DrainPostState(action, current);
-  }, {
-    attempts: context.config.operator.postStateAttempts,
-    baseMs: context.config.operator.postStateIntervalMs,
-    sleep: context.sleep,
-    label: `post-state ${action.type} ${action.epochEndTimestamp}`,
+  const reconciled = await reconcileAuthoritativeOperation({
+    ...authoritativeRecoveryOptions(context),
+    operation,
   });
+  if (!reconciled.verified) {
+    const pending = Object.freeze({
+      ...action,
+      transactionHash,
+      pendingReceipt: true,
+      code: 'AUTHORITATIVE_OPERATION_PENDING',
+      reason: reconciled.pending.reason,
+    });
+    context.logger({ event: 'V6_DRAIN_TRANSACTION_DEFERRED', ...pending });
+    return pending;
+  }
+  const epoch = reconciled.postState;
 
   context.logger({
     event: 'V6_DRAIN_ACTION_VERIFIED',
@@ -326,14 +394,51 @@ async function executeAction(context, action) {
   return Object.freeze({ ...action, transactionHash, status: epoch.status });
 }
 
+function authoritativeRecoveryOptions(context) {
+  const { config } = context;
+  return {
+    session: context.journalSession,
+    deploymentAlias: 'v6',
+    contractAddress: config.contractAddress,
+    operator: context.operator,
+    validateReceipt: (receipt, operation) => {
+      const action = keeperActionForOperation(operation);
+      const expected = keeperOperationForAction({
+        deploymentAlias: 'v6',
+        contractAddress: config.contractAddress,
+        action,
+      });
+      if (expected.logicalOperationId !== operation.logicalOperationId) {
+        fail('KEEPER_JOURNAL_CALL_MISMATCH', 'Recovered V6 drain call is not canonical.');
+      }
+      validateReceiptIdentity(receipt, config.contractAddress, expected.call.method, expected.call.args);
+    },
+    verifyPostState: (action) => readVerifiedPostState(context, action),
+    sleep: context.sleep,
+    lifecycleAttempts: config.operator.finalityRetries,
+    lifecycleIntervalMs: config.operator.finalityIntervalMs,
+    receiptPolicy: {
+      retries: 1,
+      intervalMs: config.operator.finalityIntervalMs,
+    },
+    deadlineAtMs: context.deadlineAtMs,
+    clockMs: context.clockMs,
+    logger: context.logger,
+  };
+}
+
 export async function runV6DrainOnce({
   config,
   execute = false,
   nowEpochSeconds,
   clock,
   operator,
+  journalClient = operator?.journalClient,
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   logger = (event) => console.log(JSON.stringify(event)),
+  deadlineAtMs = Date.now() + (45 * 60 * 1_000),
+  clockMs = Date.now,
+  journalSessionOptions = {},
 }) {
   if (!config || !operator) fail('DRAIN_ARGUMENT', 'config and operator are required');
   const readNow = typeof clock === 'function'
@@ -342,7 +447,18 @@ export async function runV6DrainOnce({
       ? () => Math.floor(Date.now() / 1_000)
       : () => safeInteger(nowEpochSeconds, 'nowEpochSeconds'));
   const now = readNow();
-  const context = { config, execute, nowEpochSeconds: now, readNow, operator, sleep, logger };
+  const context = {
+    config,
+    execute,
+    nowEpochSeconds: now,
+    readNow,
+    operator,
+    sleep,
+    logger,
+    deadlineAtMs,
+    clockMs,
+    journalSession: null,
+  };
 
   const networkInfo = await readChain(context, 'network info', () => operator.getNetworkInfo());
   assertStudioNet(networkInfo);
@@ -353,53 +469,132 @@ export async function runV6DrainOnce({
   ]);
   assertV6ContractConfiguration(config, contractConfig, assetCatalog, venueCatalog);
 
-  let signer = null;
-  if (execute) {
-    const accountInfo = await readChain(context, 'account info', () => operator.getAccountInfo());
-    signer = assertActiveSigner(accountInfo, operator.canSignLockedAccount === true);
-  }
-
-  const plan = await planV6DrainRun(context);
-  logger({
-    event: execute ? 'V6_DRAIN_EXECUTION_PLAN' : 'V6_DRAIN_DRY_RUN_PLAN',
-    nowEpochSeconds: now,
-    signer,
-    actions: plan.actions,
-    deferredActionCount: plan.deferredActionCount,
-  });
   if (!execute) {
-    return Object.freeze({ ...plan, execute: false, signer, completed: [], skipped: [], failures: [] });
+    const plan = await planV6DrainRun(context);
+    logger({
+      event: 'V6_DRAIN_DRY_RUN_PLAN',
+      nowEpochSeconds: now,
+      signer: null,
+      actions: plan.actions,
+      deferredActionCount: plan.deferredActionCount,
+    });
+    return Object.freeze({
+      ...plan,
+      execute: false,
+      signer: null,
+      recovered: [],
+      completed: [],
+      pending: [],
+      skipped: [],
+      failures: [],
+    });
   }
 
-  const completed = [];
-  const skipped = [];
-  const failures = [];
-  for (const plannedAction of plan.actions) {
-    try {
-      const action = await revalidateAction(context, plannedAction);
-      if (!action) {
-        skipped.push(Object.freeze({ ...plannedAction, reason: 'NO_LONGER_ACTIONABLE' }));
-        continue;
+  const accountInfo = await readChain(context, 'account info', () => operator.getAccountInfo());
+  const signer = assertActiveSigner(accountInfo, operator.canSignLockedAccount === true);
+  const journalSession = createAuthoritativeKeeperSession({
+    client: journalClient,
+    signerAddress: signer,
+    logger,
+    ...journalSessionOptions,
+  });
+  context.journalSession = journalSession;
+  await journalSession.acquire();
+
+  let summary;
+  try {
+    summary = await journalSession.withHeartbeat(async () => {
+      const recovery = await recoverAuthoritativeOperations(authoritativeRecoveryOptions(context));
+      if (recovery.blocked) {
+        logger({ event: 'V6_DRAIN_RECOVERY_BLOCKED', pending: recovery.pending });
+        return Object.freeze({
+          scannedEpochCount: null,
+          openEpochCount: null,
+          actions: Object.freeze([]),
+          deferredActionCount: 0,
+          execute: true,
+          signer,
+          recovered: recovery.recovered,
+          completed: [],
+          pending: recovery.pending,
+          skipped: [],
+          failures: [],
+          blocked: true,
+        });
       }
-      // Intentionally serialized: do not submit the next drain write until the
-      // current transaction is FINALIZED and its exact post-state is visible.
-      completed.push(await executeAction(context, action));
-    } catch (error) {
-      const failure = Object.freeze({
-        ...plannedAction,
-        code: error?.code || 'ACTION_FAILED',
-        message: error instanceof Error ? error.message : String(error),
-      });
-      failures.push(failure);
-      logger({ event: 'V6_DRAIN_ACTION_FAILED', ...failure });
-    }
-  }
 
-  const summary = Object.freeze({ ...plan, execute: true, signer, completed, skipped, failures });
-  if (failures.length > 0) {
+      const plan = await planV6DrainRun(context);
+      logger({
+        event: 'V6_DRAIN_EXECUTION_PLAN',
+        nowEpochSeconds: now,
+        signer,
+        actions: plan.actions,
+        deferredActionCount: plan.deferredActionCount,
+      });
+      const completed = [];
+      const skipped = [];
+      const pending = [];
+      const failures = [];
+      for (let index = 0; index < plan.actions.length; index += 1) {
+        const plannedAction = plan.actions[index];
+        if (clockMs() >= deadlineAtMs) {
+          skipped.push(...plan.actions.slice(index).map((item) => Object.freeze({
+            ...item,
+            reason: 'RUN_DEADLINE',
+          })));
+          break;
+        }
+        try {
+          const action = await revalidateAction(context, plannedAction);
+          if (!action) {
+            skipped.push(Object.freeze({ ...plannedAction, reason: 'NO_LONGER_ACTIONABLE' }));
+            continue;
+          }
+          const result = await executeAction(context, action);
+          if (result.pendingReceipt) {
+            pending.push(result);
+            skipped.push(...plan.actions.slice(index + 1).map((item) => Object.freeze({
+              ...item,
+              reason: 'BLOCKED_BY_NONTERMINAL_OPERATION',
+              transactionHash: result.transactionHash,
+            })));
+            break;
+          }
+          completed.push(result);
+        } catch (error) {
+          const failure = Object.freeze({
+            ...plannedAction,
+            code: error?.code || 'ACTION_FAILED',
+            message: error instanceof Error ? error.message : String(error),
+          });
+          failures.push(failure);
+          logger({ event: 'V6_DRAIN_ACTION_FAILED', ...failure });
+          skipped.push(...plan.actions.slice(index + 1).map((item) => Object.freeze({
+            ...item,
+            reason: 'BLOCKED_AFTER_ACTION_FAILURE',
+          })));
+          break;
+        }
+      }
+      return Object.freeze({
+        ...plan,
+        execute: true,
+        signer,
+        recovered: recovery.recovered,
+        completed,
+        pending,
+        skipped,
+        failures,
+        blocked: pending.length > 0 || failures.length > 0,
+      });
+    });
+  } finally {
+    await journalSession.release();
+  }
+  if (summary.failures.length > 0) {
     throw new V6DrainError(
       'ACTION_FAILURES',
-      `${failures.length} V6 drain action(s) failed; successful actions remain verified`,
+      `${summary.failures.length} V6 drain action(s) failed; successful actions remain verified`,
       { summary },
     );
   }
@@ -407,7 +602,7 @@ export async function runV6DrainOnce({
 }
 
 function usage() {
-  return `Drain only the already-deployed Liquidity Arena V6 epochs on StudioNet.\n\nUsage:\n  node scripts/v6-drain.mjs --config <file> [--execute]\n\nOptions:\n  --config <file>  Existing V6 keeper JSON configuration (required)\n  --execute        Submit permissionless resolve/timeout writes; default is read-only\n  --help           Show this help\n\nThis operator never schedules new epochs. Any active StudioNet signer may execute it because both drain writes are permissionless.`;
+  return `Drain only the already-deployed Liquidity Arena V6 epochs on StudioNet.\n\nUsage:\n  node scripts/v6-drain.mjs --config <file> [--execute]\n\nOptions:\n  --config <file>  Existing V6 keeper JSON configuration (required)\n  --execute        Submit permissionless resolve/timeout writes; default is read-only\n  --help           Show this help\n\nThis operator never schedules new epochs. The contract methods are permissionless, but this journal-backed operator accepts only the configured fenced keeper signer.`;
 }
 
 function parseArguments(argv) {
@@ -426,16 +621,36 @@ function parseArguments(argv) {
   return parsed;
 }
 
-export async function runV6DrainCli(argv = process.argv.slice(2)) {
+export async function runV6DrainCli(
+  argv = process.argv.slice(2),
+  {
+    environment = process.env,
+    loadConfig = loadV6KeeperConfig,
+    createOperator = createCliV6KeeperOperator,
+    createJournalClient = createKeeperJournalClientFromEnvironment,
+    runOnce = runV6DrainOnce,
+  } = {},
+) {
   const parsed = parseArguments(argv);
   if (parsed.help) {
     console.log(usage());
     return undefined;
   }
   if (!parsed.configPath) throw new Error('--config is required');
-  const config = loadV6KeeperConfig(parsed.configPath);
-  const operator = createCliV6KeeperOperator({ config });
-  return runV6DrainOnce({ config, execute: parsed.execute, operator });
+  const config = loadConfig(parsed.configPath);
+  const operator = createOperator({ config, environment });
+  const journalClient = parsed.execute
+    ? createJournalClient(environment)
+    : undefined;
+  const summary = await runOnce({ config, execute: parsed.execute, operator, journalClient });
+  if (summary?.blocked === true) {
+    throw new V6DrainError(
+      'RUN_BLOCKED',
+      'V6 drain stopped with an authoritative operation still blocked',
+      { summary },
+    );
+  }
+  return summary;
 }
 
 const invokedPath = process.argv[1] ? fileURLToPath(import.meta.url) : '';
