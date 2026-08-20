@@ -167,7 +167,10 @@ six operations (three resolves and three creates), including one recovered acros
 submitted; history job `96297112208` also succeeded. V6 workflow `338089016` remains
 `disabled_manually` and its merged `main` YAML is `workflow_dispatch`-only. PR #11 merged as
 `81850e3`, restoring the V7 cron source. Scheduled run `32329108358` passed reconcile job
-`96306191739` and history job `96306791996`, verifying one resolve and one create.
+`96306191739` and history job `96306791996`, verifying one resolve and one create. Second
+action-bearing scheduled run `32332196428` passed jobs `96314848434` and `96315355338`, verifying
+RESOLVE `1787198400` and CREATE `1787292000`. Neon read back 10/10 VERIFIED operations with zero
+unresolved; extended soak and external alert delivery remain mandatory.
 
 ## 9. Visualization
 
@@ -200,9 +203,10 @@ must not be used; legacy resolve/timeout/claim discoverability remains until lia
 
 The public Vercel site targets V7 and retains V6 legacy recovery. The dedicated keeper rotation,
 funded canary, exact public readiness, and proof view from merged PR #6 are deployed. Browser/wallet
-soak and rollback discipline remain ongoing obligations. Current READY schedule-restoration artifact
-`dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ` executed successful scheduled run `32329108358`; its exact source
-and bundle identity are recorded below.
+soak and rollback discipline remain ongoing obligations. Historical READY schedule-restoration
+artifact `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ` executed first restored run `32329108358`; the current
+verified hardened runtime is `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj`. Exact identities are recorded
+below.
 
 ## 11. Keeper and readiness
 
@@ -218,7 +222,8 @@ The reconciler:
 - requires exact receipt identity, `FINALIZED`, successful execution, and post-state.
 
 V6 workflow `338089016` remains `disabled_manually` with `workflow_dispatch`-only source on `main`.
-PR #11 merge `81850e3` restored the V7 cron source, and scheduled run `32329108358` passed.
+PR #11 merge `81850e3` restored the V7 cron source, and action-bearing scheduled runs `32329108358`
+and `32332196428` passed.
 Contract time remains authoritative. The Neon journal uses one fenced global signer
 lease across V7 and manual V6 recovery, requires durable PREPARE before broadcast and exact captured
 hash binding, and blocks every later write while an operation is unknown or unverified. Raw
@@ -305,6 +310,11 @@ Tests and review must cover:
 - first restored scheduled run `32329108358` passed both jobs, verified RESOLVE `1787194800` and
   CREATE `1787288400`, left Neon at 8/8 VERIFIED with zero unresolved, and raised live read-back to
   35 epochs with eight workflow-created;
+- second scheduled run `32332196428` passed both jobs, verified exact attempt-1 RESOLVE
+  `1787198400` and CREATE `1787292000` transactions with finalized majority-agree receipts and
+  matching post-state, left Neon at 10/10 VERIFIED with zero unresolved, and raised evidenced
+  read-back to at least 36 epochs with nine workflow-created; extended soak and external alert
+  delivery remain pending;
 - funded V7 canary: complete—resolution `0xc2c86fdb…ab66`, three exact claim deliveries, expected
   loser rejection, 1.748 GEN conserved, and exact 0.002 GEN fee withdrawal delivered;
 - Neon production migrations: history v1 and keeper-journal v2/v3 applied; six-table/four-index history
@@ -316,12 +326,22 @@ Tests and review must cover:
   `https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app`, with public readiness and
   legacy V6 read-back `200`. Vercel metadata anchors it to
   `e5627ebd270a7c6d5291151795b0af6442eba0a6` and records `gitDirty=1`; its browser bundle/hash is
-  recorded in the deployment evidence JSON. Proof-view PR #6 is merged and deployed. Current READY
-  schedule-restoration artifact `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, GitHub deployment `5994871034`,
+  recorded in the deployment evidence JSON. Proof-view PR #6 is merged and deployed. Historical
+  READY schedule-restoration artifact `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, GitHub deployment `5994871034`,
   source `81850e3c814cd541d392fdeecf4dacca753d25e6`, served bundle
   `/assets/market-BQWvq82y.js` (188376 bytes), SHA-256
   `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`, and executed successful
-  scheduled run `32329108358`.
+  scheduled run `32329108358`. Current verified hardened runtime
+  `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
+  `https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app`, GitHub deployment
+  `5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`, passed CI run `32332498286`
+  jobs `96315684498`/`96315684590` and serves `/assets/market-DTvIR-Xr.js` (191538 bytes), SHA-256
+  `7056bef680f18a8e98af1b21822f91f3630644b75a639c83398e1b31601f8e00`. Shared ref-counted SSE,
+  Vercel request cancellation, and disconnect cleanup hold steady Studio calls near 240/hour under
+  the cap of four concurrent streams per IP. Browser trace proved one HTTP-200 stream for ROUND→4H, one per rapid reload,
+  LIVE/FRESH without STALE/errors, plus immediate independent HTTP-200 five-asset events. Public
+  health/readiness/history-health/proof endpoints returned HTTP 200; readiness matched chain
+  `0xf22f`, exact V7/keeper/coverage, and zero V6 liability.
 
 Observed StudioNet finality is not an SLA. The recorded deploy finalized in about 36 seconds, but the
 system always waits for actual finality rather than a timer.

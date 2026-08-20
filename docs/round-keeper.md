@@ -157,7 +157,10 @@ GitHub workflow `338089019` is active. PR #11 restored the minute-3/minute-13 sc
 `81850e3c814cd541d392fdeecf4dacca753d25e6` after the manual authoritative-journal canary passed.
 Restored scheduled run [`32329108358`](https://github.com/Leokings/liquidity-arena/actions/runs/32329108358)
 then passed reconcile job `96306191739` and history job `96306791996`. This proves the trigger and
-journal path at that checkpoint; extended soak remains a monitoring obligation.
+journal path at that checkpoint. Second action-bearing scheduled run
+[`32332196428`](https://github.com/Leokings/liquidity-arena/actions/runs/32332196428) passed reconcile
+job `96314848434` and history job `96315355338`, providing meaningful incremental soak evidence;
+extended soak and external alert delivery remain monitoring obligations.
 Contract time still defines every gate. The separate read/project history job has its own
 concurrency group, but it must not run after a blocked keeper CLI result.
 
@@ -278,10 +281,63 @@ with zero deferred reads or actions. Both attempt-1 operations reached VERIFIED:
 Post-run Neon read-back contained eight operations, all VERIFIED, and zero unresolved. History job
 `96306791996` synchronized two deployments, two epochs, and two snapshots at
 `2026-08-20T03:45:10.146Z`, with zero new or rejected proofs. Live epoch count was 35, including eight
-workflow-created epochs. The READY production artifact that executed this run is Vercel deployment
+workflow-created epochs. The historical READY production artifact that executed this run was Vercel
+deployment
 `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, source
 `81850e3c814cd541d392fdeecf4dacca753d25e6`, bundle `/assets/market-BQWvq82y.js` SHA-256
 `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`.
+
+### Recorded second action-bearing scheduled run
+
+Run `32332196428` fired from `schedule` on
+`2664e739c11ee3f223626a20663bc2564d64ec7a` and completed successfully. At
+`2026-08-20T04:32:31.6853794Z` it planned exactly RESOLVE `1787198400` followed by CREATE
+`1787292000`, with `nowEpochSeconds=1787200317` and zero deferred reads/actions. Both attempt-1
+operations reached VERIFIED:
+
+- RESOLVE operation/logical operation
+  `77ea4dec2b4f3e8a5302771eb6a5c0a60736a48e8175201df1956215b2bc964e`, transaction
+  `0xebc4478607bbc6ca17d670dafa05d4aca99d8282959db50072fa881af47199dd`, reached FINALIZED with
+  MAJORITY_AGREE and successful exact keeper-to-V7 `resolve_epoch(1787198400)` execution. Post-state
+  was RESOLVED/DETERMINED at `1787200361`, digest
+  `b851d5c3973f192a939c350a924ab3b9d40bbfa5a82af027485917f4b42ed3ad`, venues
+  Binance/OKX/Gate/KuCoin, BNB HIGH `3195374` ppb and XRP LOW `530561` ppb, both
+  `REFUND_UNBACKED_WINNER`;
+- CREATE operation/logical operation
+  `8e86c84b1a85eabb6768decf1fc755f3ff0207c6098c667c6bc08070c9ca48f2`, transaction
+  `0x3d4b235c91dbefaeffc1f790ed5a4f3466cefb7b452d190aac12eb4c099b8a88`, reached FINALIZED with
+  MAJORITY_AGREE and successful exact keeper-to-V7 `create_epoch(1787292000)` execution. Post-state
+  was OPEN/SCHEDULED/PENDING with the dedicated keeper as creator, `wagerOpens=1787289600`,
+  `wagerCloses=battleStarts=1787290800`, and `resolutionAvailable=1787292120`.
+
+Neon independently recorded the RESOLVE as PREPARED at `2026-08-20T04:32:40.467Z`, SUBMITTED at
+`04:32:42.161Z`, FINALIZED at `04:33:36.206Z`, and VERIFIED at `04:33:41.005Z`; the CREATE followed
+at `04:33:44.882Z`, `04:33:46.767Z`, `04:34:24.947Z`, and `04:34:29.922Z`. Snapshot read-back at
+`2026-08-20T04:40:05.109Z` contained 10 operations, all VERIFIED, and zero unresolved. History job
+`96315355338` synchronized two deployments, two epochs, and two snapshots at
+`2026-08-20T04:34:56.951Z`, with zero proof failures/rejections and `replayed=false`. Evidenced live
+coverage is now at least 36 epochs, including nine workflow-created epochs. This is a second
+action-bearing scheduled cycle, not completion of the extended-soak or external-alert requirements.
+
+### Current hardened production runtime
+
+The current verified runtime is READY Vercel deployment `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
+[its immutable URL](https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app), GitHub
+deployment `5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`. CI run
+`32332498286` passed browser/operator job `96315684498` and intelligent-contracts job
+`96315684590`. Bundle `/assets/market-DTvIR-Xr.js` is 191538 bytes with SHA-256
+`7056bef680f18a8e98af1b21822f91f3630644b75a639c83398e1b31601f8e00`.
+
+The client shares one ref-counted EventSource per URL/tab, the Vercel function declares
+`supportsCancellation=true`, and request/response disconnect cleanup releases reservations
+idempotently. Steady Studio calls are about 240/hour; the cap is four concurrent streams per IP and
+100 server-wide by default.
+Production Network tracing showed exactly one HTTP-200 `/api/binance/stream` request/response across
+ROUND→4H with no additional stream, then exactly one HTTP-200 stream for each of two rapid reloads.
+The UI remained LIVE/FRESH with no STALE state or browser error. A separate curl immediately after
+the stress sequence returned HTTP 200 `text/event-stream` with live BTC/ETH/BNB/SOL/XRP events.
+Health, readiness, history-health, and proof view returned HTTP 200; readiness matched chain
+`0xf22f`, exact V7/keeper/coverage, and zero V6 liability.
 
 ## Monitoring and recovery
 
@@ -350,8 +406,8 @@ discoverable.
 - The hosted RPC budget may change; reads are paged/paced and writes serialized.
 - GitHub concurrency is not a distributed lease; the Neon fenced signer lease is the write boundary.
 - External alert delivery and long-run soak evidence remain release work.
-- The schema-v3 journal/API/action-bearing gate and first restored scheduled run are complete;
-  extended soak and external alert delivery remain pending.
+- The schema-v3 journal/API/action-bearing gate and two restored action-bearing scheduled cycles are
+  complete; extended soak and external alert delivery remain pending.
 - The Neon production schema and repeated V7/V6 snapshot ingestion are complete. Public rows cover
   V7 E20/E19 and V6 E19 without a duplicate overlapping V6 row. Protected run `32309637237` verified
   one deployment proof, nine V7 E19 epoch proofs, and the epochless fee-withdrawal parent with zero

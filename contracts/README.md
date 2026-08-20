@@ -176,10 +176,21 @@ checkpoint, evidenced coverage was at least 34 epochs, including seven workflow-
 `disabled_manually`, with its `main` YAML `workflow_dispatch`-only. PR #11 merged as `81850e3` and
 restored the V7 cron source. Scheduled run `32329108358` passed reconcile job `96306191739` and
 history job `96306791996`, verified one resolve and one create, and left Neon at 8/8 VERIFIED with
-zero unresolved. Live epoch count was 35, including eight workflow-created epochs. The current READY
-artifact that executed that run is Vercel deployment `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, source
+zero unresolved. Live epoch count was 35, including eight workflow-created epochs. Second scheduled
+run `32332196428` passed reconcile job `96314848434` and history job `96315355338`, verified
+RESOLVE `1787198400` and CREATE `1787292000`, and left Neon at 10/10 VERIFIED with zero unresolved;
+evidenced coverage is at least 36 epochs, nine workflow-created. Extended soak and external alert
+delivery remain pending. The historical READY artifact that executed the first restored run was
+Vercel deployment `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, source
 `81850e3c814cd541d392fdeecf4dacca753d25e6`, bundle `/assets/market-BQWvq82y.js` SHA-256
-`37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`. Migration 002 was applied/read
+`37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`. The current verified
+hardened runtime is READY Vercel deployment `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj`, GitHub deployment
+`5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`; CI `32332498286` passed jobs
+`96315684498` and `96315684590`. Bundle `/assets/market-DTvIR-Xr.js` is 191538 bytes with SHA-256
+`7056bef680f18a8e98af1b21822f91f3630644b75a639c83398e1b31601f8e00`. Its shared ref-counted
+EventSource and Vercel request cancellation passed reload/interval-switch browser stress with one
+HTTP-200 stream per page load, LIVE/FRESH UI, no errors, and an immediate independent five-asset
+HTTP-200 stream probe. Migration 002 was applied/read
 back at checksum
 `d2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266` with zero operations at that
 migration-time read-back. Its
