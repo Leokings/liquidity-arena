@@ -13,6 +13,7 @@ import { LiveMarketDriver, WINDOW_QUERIES } from './live-driver.js';
 import { EPOCH_PHASE, arenaEpochState, createEpoch } from './epoch-schedule.js';
 import {
   isTerminalRound,
+  canReuseFinalizedRoundVector,
   reconcileFinalizedRoundFrame,
   roundMatchesDisplayTarget,
   selectRoundTargets,
@@ -722,10 +723,24 @@ class LiquidityArenaApp {
             this.deployment,
           );
           if (isTerminalRound(nextDisplayRound) && nextDisplayRound.epoch.resultStatus === 'DETERMINED') {
-            const rawAssets = await Promise.all(V6_ASSETS.map((assetId) =>
-              this.gateway.readEpochAsset(targets.displayEpochEndTimestamp, assetId)));
-            nextDisplayAssets = Object.freeze(rawAssets.map((asset) =>
-              v6AssetView(asset, this.objectiveSelector)));
+            // A terminal DETERMINED vector is immutable. Keep reading its
+            // compact epoch record every cycle, but do not spend five more
+            // StudioNet calls when the complete cached vector still agrees
+            // with that freshly read record. This takes a terminal display
+            // refresh from six reads to one without trusting an incomplete or
+            // mismatched cache.
+            if (canReuseFinalizedRoundVector(
+              this.displayRound,
+              this.displayRoundAssets,
+              nextDisplayRound,
+            )) {
+              nextDisplayAssets = this.displayRoundAssets;
+            } else {
+              const rawAssets = await Promise.all(V6_ASSETS.map((assetId) =>
+                this.gateway.readEpochAsset(targets.displayEpochEndTimestamp, assetId)));
+              nextDisplayAssets = Object.freeze(rawAssets.map((asset) =>
+                v6AssetView(asset, this.objectiveSelector)));
+            }
           }
         } catch {
           // Keep a previously verified copy of this same scoreboard epoch if

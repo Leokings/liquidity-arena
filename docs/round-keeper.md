@@ -119,7 +119,8 @@ address and the finalized rotation transaction in release evidence.
   `0x00398a3c1acf443220848fabecdc4dd0e2cb4232a0b10588ac6ebbbfdf4c9058`, `FINALIZED`, verified OPEN.
 
 This proves rotation, configuration identity, and local use of the intended limited on-chain role,
-not a successful default-branch scheduled run.
+not by itself a successful default-branch run. Authoritative default-branch journal execution is
+recorded separately below.
 
 ## Reconciliation algorithm
 
@@ -151,10 +152,12 @@ zero-fee fallback for an epoch that remains open.
 
 ## GitHub Actions
 
-Live GitHub workflow `338089019` is `disabled_manually`. The release-candidate
-`.github/workflows/studionet-v7-keeper.yml` removes the cron and retains only `workflow_dispatch`,
-but remote `main` still has the historical minute-3/minute-13 source until merge. Historical
-activation remains evidence, not the live trigger state, and no cron restoration is claimed.
+GitHub workflow `338089019` is active. PR #11 restored the minute-3/minute-13 schedule in
+`.github/workflows/studionet-v7-keeper.yml` on main commit
+`81850e3c814cd541d392fdeecf4dacca753d25e6` after the manual authoritative-journal canary passed.
+Restored scheduled run [`32329108358`](https://github.com/Leokings/liquidity-arena/actions/runs/32329108358)
+then passed reconcile job `96306191739` and history job `96306791996`. This proves the trigger and
+journal path at that checkpoint; extended soak remains a monitoring obligation.
 Contract time still defines every gate. The separate read/project history job has its own
 concurrency group, but it must not run after a blocked keeper CLI result.
 
@@ -217,23 +220,68 @@ captured: run `32312864108`, reconcile job `96259232716`, on head `958e517`. It 
 lookups for CREATE `0xe6af5cd917427b5f5dadcbb77a56dc5c529a3b844a26008165c0e2c9f8d83574`
 and RESOLVE `0x0850dfa1098ce773b20c9407d602592eada74cc36004333dc3ec011930d71c7e`.
 Both exact hashes were later observed `FINALIZED`, and epoch `1787274000` was OPEN while
-`1787180400` was RESOLVED/DETERMINED. Recorded coverage is therefore at least 31 epochs, four of them
-workflow-created. The failure was receipt-index visibility beyond 315 seconds, not failed execution.
+`1787180400` was RESOLVED/DETERMINED. At that historical checkpoint, recorded coverage was at least
+31 epochs, four of them workflow-created. The failure was receipt-index visibility beyond 315
+seconds, not failed execution.
 
 The replacement safety architecture uses the authoritative Neon journal. Its migration-002
 foundation is applied to production branch
 `br-calm-fire-aup0rw0r` with checksum
 `d2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266`.
 Production read-back preserved history v1, found four journal tables and the trigger, and contained
-zero operations. Migration 003 `keeper_transaction_journal_attempts` was then applied to project
+zero operations at migration time. Migration 003 `keeper_transaction_journal_attempts` was then applied to project
 `steep-hat-04600004`, parent branch `br-calm-fire-aup0rw0r`, as migration
 `14160d53-a2a3-43ab-a762-6bb7e54a95e8` through temporary branch
 `br-polished-shape-aund54y0`, which was deleted. Checksum
 `9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70` read back with exact versions
-1/2/3, zero operations, four attempt-lineage columns, `QUARANTINED` in the unresolved unique index,
-and the parent-freeze trigger. Do not run with `--execute` until the matching API is deployed and
-authenticated health returns `ready=true` with `schemaVersion=3`; a successful manual action-bearing
-canary is required after that.
+1/2/3, zero operations at migration time, four attempt-lineage columns, `QUARANTINED` in the
+unresolved unique index, and the parent-freeze trigger. The matching API is now deployed and its
+authenticated health returns `ready=true` with `schemaVersion=3` before lease acquisition. Manual
+run `32325583494` passed the required action-bearing canary.
+
+### Recorded authoritative-journal canary
+
+Run [`32325583494`](https://github.com/Leokings/liquidity-arena/actions/runs/32325583494) on
+`f937b95a108dddd84e4fda3149452a2c22dd8f84` completed reconcile job
+[`96296050506`](https://github.com/Leokings/liquidity-arena/actions/runs/32325583494/job/96296050506)
+and history job `96297112208` successfully. Reconciliation first recovered the prior run's already
+bound `resolve_epoch(1787184000)` hash without submitting a replacement, then submitted five new
+writes. All six operations reached VERIFIED:
+
+- RESOLVE `1787184000`, operation `518adcc2…544e`, transaction `0x1e90…02a6` (cross-run recovery);
+- RESOLVE `1787187600`, operation `474e8b1a…7db4`, transaction `0xbfb4…80a4`;
+- RESOLVE `1787191200`, operation `43de5e0f…9806`, transaction `0xbd09…5211`;
+- CREATE `1787277600`, operation `309ede57…0280`, transaction `0xc081…ff8c`;
+- CREATE `1787281200`, operation `dbc48bbb…560b`, transaction `0xae3e…061a`;
+- CREATE `1787284800`, operation `0712f637…6bb7`, transaction `0x8a81…9ae1`.
+
+Every entry is attempt 1 with exact receipt identity, successful execution, and matching post-state.
+The canary proves one recovery plus five new writes, not six new broadcasts. History synchronized two
+deployments, two epochs, and two snapshots from `2026-08-20T02:49:02.975Z` with zero rejected proof
+requests.
+
+### Recorded first restored scheduled run
+
+Run `32329108358` fired from `schedule` on
+`81850e3c814cd541d392fdeecf4dacca753d25e6` and completed successfully. At
+`2026-08-20T03:42:20.118Z` it planned exactly RESOLVE `1787194800` followed by CREATE `1787288400`,
+with zero deferred reads or actions. Both attempt-1 operations reached VERIFIED:
+
+- RESOLVE operation `b49b8680…6d0b`, transaction `0x1943…9206`, finalized with majority agreement
+  and successful exact keeper-to-V7 execution. Post-state was RESOLVED/DETERMINED with digest
+  `2f86ecb7…f1d6`, four venues, BTC HIGH `-1190077` ppb and XRP LOW `-5067874` ppb, both
+  `REFUND_UNBACKED_WINNER`;
+- CREATE operation `90f8867c…bf74`, transaction `0xe9fc…b85a`, finalized with majority agreement
+  and successful exact keeper-to-V7 execution. Epoch `1787288400` read back OPEN/SCHEDULED/PENDING
+  with the dedicated keeper as creator.
+
+Post-run Neon read-back contained eight operations, all VERIFIED, and zero unresolved. History job
+`96306791996` synchronized two deployments, two epochs, and two snapshots at
+`2026-08-20T03:45:10.146Z`, with zero new or rejected proofs. Live epoch count was 35, including eight
+workflow-created epochs. The READY production artifact that executed this run is Vercel deployment
+`dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, source
+`81850e3c814cd541d392fdeecf4dacca753d25e6`, bundle `/assets/market-BQWvq82y.js` SHA-256
+`37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`.
 
 ## Monitoring and recovery
 
@@ -276,9 +324,9 @@ capability, but operational policy forbids using it. The V6 drain process:
 - verifies every exact receipt and post-state;
 - leaves claim handling to participants.
 
-Live GitHub workflow `338089016` is `disabled_manually`. Release-candidate
-`.github/workflows/studionet-v6-keeper.yml` retains only `workflow_dispatch`, but remote `main`
-still contains the old cron until merge. The live audit found exactly five V6 epochs, all
+Live GitHub workflow `338089016` is `disabled_manually`, and main
+`.github/workflows/studionet-v6-keeper.yml` retains only `workflow_dispatch`. The live audit found
+exactly five V6 epochs, all
 RESOLVED/DETERMINED, with zero remaining payout/unclaimed winning stake, zero player liability, and
 an empty drain plan. Recurring drain execution is therefore retired. If manual recovery is ever
 needed after schema-v3 readiness, it shares the authoritative fenced signer lease with V7.
@@ -302,6 +350,8 @@ discoverable.
 - The hosted RPC budget may change; reads are paged/paced and writes serialized.
 - GitHub concurrency is not a distributed lease; the Neon fenced signer lease is the write boundary.
 - External alert delivery and long-run soak evidence remain release work.
+- The schema-v3 journal/API/action-bearing gate and first restored scheduled run are complete;
+  extended soak and external alert delivery remain pending.
 - The Neon production schema and repeated V7/V6 snapshot ingestion are complete. Public rows cover
   V7 E20/E19 and V6 E19 without a duplicate overlapping V6 row. Protected run `32309637237` verified
   one deployment proof, nine V7 E19 epoch proofs, and the epochless fee-withdrawal parent with zero

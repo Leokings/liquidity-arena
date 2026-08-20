@@ -7,15 +7,21 @@ The active review target is `LIQUIDITY_ARENA_V7` at
 `CRYPTO_SPOT_1M_MEDIAN_V1`. Contract lint and direct tests have passed, and the complete V7 canary
 proved finalized resolution, refund/payout delivery, loser rejection, liability conservation, and
 fee withdrawal. Dedicated keeper rotation, default-branch scheduler preflight, and initial durable
-history ingestion, repeated projection, selected V7 proof backfill, and public browser cutover are
-complete. Both live GitHub writer workflows are now `disabled_manually`; the release-candidate
-source removes their cron triggers but is not yet merged to `main`. The first live action-bearing seven-attempt run is recorded as a failed receipt-index
-lookup whose two exact writes later finalized and applied. Migration 003 is now applied and verified;
-a successful action-bearing run through the replacement Neon journal must still wait for the
-matching API deployment and authenticated schema-v3 health.
-That run, long-run monitoring, database-outage recovery, broader proof coverage, and an independent
-security review remain release gates. The payment path must not be described as
-production-ready.
+history ingestion, repeated projection, selected V7 proof backfill, proof-view deployment, and public
+browser cutover are complete. The earlier action-bearing seven-attempt run remains recorded as a
+failed receipt-index lookup whose two exact writes later finalized and applied. Migration 003 and
+the matching journal API are now active, with authenticated `ready=true`, `schemaVersion=3` health.
+Manual authoritative-journal run `32325583494` on
+`f937b95a108dddd84e4fda3149452a2c22dd8f84` succeeded: reconcile job `96296050506` verified three
+resolves and three creates, including one operation recovered across runs and five newly submitted
+operations; history job `96297112208` also succeeded. At that manual-run checkpoint, evidenced
+coverage was at least 34 epochs, including seven workflow-created epochs. V6 workflow `338089016` remains
+`disabled_manually` with `workflow_dispatch`-only `main` source. PR #11 merged as `81850e3` and
+restored the V7 cron source. Scheduled run `32329108358` passed reconcile/history, verified one
+resolve and one create, and left Neon at eight operations, all VERIFIED, zero unresolved. Live epoch
+count became 35, including eight workflow-created epochs. Long-run monitoring,
+database-outage recovery, broader proof coverage, and an independent security review remain release
+gates. The payment path must not be described as production-ready.
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is a legacy liability surface only. It remains readable
 and claimable for existing positions; supported public app and automation paths must not use it for
@@ -124,11 +130,13 @@ identity or execution. Verification requires the full exact receipt, successful 
 matching post-state. Unknown, pending, ambiguous, quarantined, or otherwise unverified operations
 block later writes. Only an exact receipt-verified `FINALIZED_FAILURE` may create a new numbered
 attempt, and migration 003 preserves the prior attempt and hash immutably. Workflow artifacts and
-caches have no journal authority. Live workflow IDs `338089016` (V6) and `338089019` (V7) are
-`disabled_manually`; release-candidate YAML is `workflow_dispatch`-only, but remote `main` retains
-the historical cron source until merge. No cron restoration is claimed.
+caches have no journal authority. Manual run `32325583494` proved this recovery boundary with six
+VERIFIED operations: one exact cross-run recovery and five newly submitted operations, split across
+three resolves and three creates. Live V6 workflow `338089016` remains `disabled_manually`, and its
+merged `main` source is `workflow_dispatch`-only. PR #11 merge `81850e3` restored the V7 cron source;
+run `32329108358` then passed with two exact VERIFIED operations and green history synchronization.
 
-Any future GitHub cron would be best-effort. Cron does not
+The restored GitHub cron is best-effort. Cron does not
 define epoch time and is not an availability guarantee.
 Permissionless resolution and timeout reduce operator lock-in, but monitoring must still alert on
 missing coverage, source quorum loss, finality lag, scheduler failure, and unexpected role/config
@@ -167,18 +175,18 @@ The separate Neon keeper-journal migration 002 was prepared as migration
 identically to production branch `br-calm-fire-aup0rw0r`, and the temporary branch was deleted. Its
 final checksum is `d2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266`.
 Production read-back preserved the v1 checksum, found four journal tables plus the trigger, and
-reported `operation_count=0`. Migration 003 `keeper_transaction_journal_attempts` was subsequently
+reported `operation_count=0` at that migration-time read-back. Migration 003
+`keeper_transaction_journal_attempts` was subsequently
 applied to project `steep-hat-04600004`, parent branch `br-calm-fire-aup0rw0r`, as migration
 `14160d53-a2a3-43ab-a762-6bb7e54a95e8` through temporary branch
 `br-polished-shape-aund54y0`, which was deleted. Final checksum
 `9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70` read back with exact schema
-versions 1/2/3, zero operations, all four attempt columns, the unresolved unique index including
-`QUARANTINED`, and the parent-freeze trigger installed. This proves the database schema, not runtime
-readiness or a live journal-backed write. An action-bearing run remains prohibited until the matching
-API is deployed and authenticated health reports `ready=true` with `schemaVersion=3`. The proof-view change remains unmerged and undeployed in
-[open PR #6](https://github.com/Leokings/liquidity-arena/pull/6) at commit
-[`2f52f6e`](https://github.com/Leokings/liquidity-arena/commit/2f52f6e); it must not be attributed to
-the currently verified production bundle.
+versions 1/2/3, zero operations at that migration-time read-back, all four attempt columns, the
+unresolved unique index including `QUARANTINED`, and the parent-freeze trigger installed. The matching
+API now reports authenticated `ready=true`, `schemaVersion=3`, and manual run `32325583494` proved
+the live journal path with six VERIFIED operations. Proof-view PR #6 is merged and deployed;
+scheduled run `32329108358` subsequently proved the restored cron path and current production
+artifact recorded below.
 
 ## Remaining security gates
 
@@ -187,30 +195,32 @@ After the V7 public cutover:
 1. rerun GenVM lint, V7 direct tests, full JavaScript tests, build, and dependency audit;
 2. complete an independent focused review of contract, evidence adapters, keeper, deployment
    registry, server boundary, and database ingestion;
-3. deploy the matching journal API and verify authenticated `ready=true`, `schemaVersion=3` health
-   before any action-bearing run;
-4. complete and review a successful manual action-bearing journal run before considering a V7
-   schedule; keep live V6 workflow `338089016` disabled at zero player liability and prove no owner
-   material exists in automation;
-5. independently review the recorded funded V7 canary, including its shared resolution, fee/refund
+3. continue scheduled-run soak and external alert verification; keep live V6 workflow `338089016`
+   disabled at zero player liability and prove no owner material exists in automation;
+4. independently review the recorded funded V7 canary, including its shared resolution, fee/refund
    math, loser rejection, conserved balances, and finalized parent/child deliveries;
-6. verify V6 legacy reads, resolve/timeout, and claims while proving public app/automation V6 writes
+5. verify V6 legacy reads, resolve/timeout, and claims while proving public app/automation V6 writes
    remain disabled and the retained owner creation capability is monitored and unused;
-7. extend transaction-proof coverage beyond the selected V7 evidence and complete a rollback/outage
+6. extend transaction-proof coverage beyond the selected V7 evidence and complete a rollback/outage
    rehearsal;
-8. test outage, delayed finality, restart, rate limit, and the independent 24-hour timeout path;
-9. finish provider data-use and applicable legal review.
+7. test outage, delayed finality, restart, rate limit, and the independent 24-hour timeout path;
+8. finish provider data-use and applicable legal review.
 
 The earlier V6 funded round is valuable regression evidence, not a substitute for the V7 canary.
-The current Vercel production site targets V7. Deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` is
-READY at `https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app`; its public
+Historical verified V7 production deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` was READY at
+`https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app`; its public
 `/readyz` returned `200` with the exact V7 roles/policy, future coverage, five feeds, and readable
 zero-liability V6 recovery. Vercel metadata anchors it to merged receipt-proof commit
 `e5627ebd270a7c6d5291151795b0af6442eba0a6` and records `gitDirty=1`; bundle
 `market-BHlwjm1W.js` with SHA-256
 `c0be752a9a1407e76a1f417256f220f068969fdcf80f88872683e33f2c96e79e` is the exact browser artifact
-identity. The earlier V6 compatibility deployment remains a rollback artifact, but rollback must
-never re-enable V6 writes.
+identity. Proof-view PR #6 has since merged and is deployed. The current schedule-restoration
+production artifact is READY Vercel deployment `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, GitHub
+deployment `5994871034`, source
+`81850e3c814cd541d392fdeecf4dacca753d25e6`. Its bundle `/assets/market-BQWvq82y.js` is 188376 bytes
+with SHA-256 `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`, and it executed successful
+scheduled run `32329108358`. The earlier V6 compatibility deployment remains a rollback artifact,
+but rollback must never re-enable V6 writes.
 
 ## Reporting
 

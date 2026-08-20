@@ -18,8 +18,8 @@ pari-mutuel objectives: highest return (`HIGH`) and lowest return (`LOW`).
 | Fee | 2% of losing pool by default; 5% hard cap |
 | Stake limits | 0.1–10 GEN per wallet/objective |
 | Evidence | Binance, OKX, Bybit, Gate, KuCoin; at least 3 complete baskets |
-| Operator | Limited epoch-creation keeper; permissionless resolve/timeout; live writer workflows `disabled_manually` |
-| Keeper write authority | Neon migrations 002/003 applied; activation blocked pending matching API deployment and authenticated schema-v3 health |
+| Operator | Limited epoch-creation keeper; permissionless resolve/timeout; V7 workflow `338089019` active after journal canary, V6 workflow `338089016` disabled |
+| Keeper write authority | Active authoritative Neon journal: manual canary plus restored scheduled run passed; 8/8 operations VERIFIED, 0 unresolved |
 | Public host | [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app), V7 active/READY with V6 legacy recovery |
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is retained for historical reads, eligible
@@ -30,7 +30,7 @@ resolved epoch `1787162400` with `0x03f2ac80…0399`, and another resolved `1787
 deployed owner creation capability remains and must not be used.
 The final live audit found all five V6 epochs resolved/determined and player liability zero. Its
 recurring drain is retired; live workflow `338089016` is `disabled_manually`. The release-candidate
-YAML is `workflow_dispatch`-only, but remote `main` retains the old cron until merge.
+YAML change is merged and main retains only `workflow_dispatch` for the V6 drain.
 
 ## User-visible timing
 
@@ -80,9 +80,10 @@ historical context and do not reset with the hourly wager round.
 - V7 direct tests passed 22/22; combined V6/V7 direct tests passed 37/37 at deployment review;
 - 25 epochs were seeded and verified: one canary plus a full 24-hour exact-epoch schedule, whose
   first/final creation hashes are `0x7b94b2d0…7726` and `0x443afcf7…7677f`;
-- at least 31 epochs are now recorded, including two local dedicated-keeper creates and four
+- 35 epochs are now read back, including two local dedicated-keeper creates and eight
   workflow-created epochs beyond the 25 seeded epochs;
-- V7 keeper safeguards and the dual-deployment registry are implemented; READY production deployment
+- V7 keeper safeguards and the dual-deployment registry are implemented; the last fully enumerated
+  pre-journal READY production deployment
   `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` serves V7 while preserving V6 legacy recovery. Its immutable URL
   is `https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app`; Vercel metadata
   anchors it to merged receipt-proof commit `e5627ebd270a7c6d5291151795b0af6442eba0a6` and records
@@ -103,6 +104,20 @@ historical context and do not reset with the hourly wager round.
   head `958e51743a821606ca78881e6bcc8fb0a34a8e8f` exhausted receipt lookup for CREATE
   `0xe6af…3574` and RESOLVE `0x0850…c7e`; both exact writes later finalized and applied, proving
   receipt-index lag beyond 315 seconds rather than failed execution;
+- authoritative-journal run `32325583494` on
+  `f937b95a108dddd84e4fda3149452a2c22dd8f84` passed reconcile job `96296050506`: it recovered the
+  previously bound `resolve_epoch(1787184000)` hash without resubmission, submitted five more exact
+  writes, and finished with six VERIFIED operations (three resolves and three creates); history job
+  `96297112208` also passed with two deployments, two epochs, and two snapshots synchronized;
+- PR #11 restored the V7 minute-3/minute-13 schedule at main commit
+  `81850e3c814cd541d392fdeecf4dacca753d25e6`; workflow `338089019` is active;
+- restored scheduled run `32329108358` passed reconcile job `96306191739` and history job
+  `96306791996`, verified RESOLVE `1787194800` and CREATE `1787288400`, and left Neon at eight
+  operations, all VERIFIED, zero unresolved; live epoch count was 35, eight workflow-created;
+- current schedule-restoration production artifact is READY Vercel deployment
+  `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, GitHub deployment `5994871034`, source
+  `81850e3c814cd541d392fdeecf4dacca753d25e6`, bundle `/assets/market-BQWvq82y.js` (188376 bytes),
+  SHA-256 `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`;
 - historical scheduled V6 drain run `32297047031` completed successfully without creating any epoch;
   the later zero-liability audit retired recurring execution and live workflow `338089016` is now
   `disabled_manually`;
@@ -117,12 +132,13 @@ historical context and do not reset with the hourly wager round.
   `1e440327-2e66-403d-934d-c302790ac775` on temporary branch `br-sweet-frost-auakkl85`, applied
   identically to production branch `br-calm-fire-aup0rw0r`, and the temporary branch was deleted;
   final checksum `d2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266`
-  read back with unchanged v1, four journal tables, the trigger, and zero operations; migration 003
+  read back with unchanged v1, four journal tables, the trigger, and zero operations at migration
+  time; migration 003
   `keeper_transaction_journal_attempts` was then applied as
   `14160d53-a2a3-43ab-a762-6bb7e54a95e8` through deleted branch
   `br-polished-shape-aund54y0`, with checksum
   `9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70`; production read-back found
-  exact versions 1/2/3, zero operations, four attempt columns, the `QUARANTINED` unresolved index,
+  exact versions 1/2/3, zero operations at migration time, four attempt columns, the `QUARANTINED` unresolved index,
   and the parent-freeze trigger;
 - public history returns full resolved/determined V7 E20/E19 and V6 E19 snapshots; protected run
   `32309637237` accepted 11 selected proofs with zero rejections, and public V7 E19 exposes exactly
@@ -159,12 +175,10 @@ production-safety claim:
 - Vercel production targets V7 and retains readable, zero-known-liability V6 recovery;
 - Neon migration, repeated finalized-epoch projection, and selected V7 proof backfill are complete;
   outage recovery and broader proof coverage remain;
-- production scheduler activation is proven; seven-attempt/315-second same-hash receipt grace is
-  merged on main `958e51743a821606ca78881e6bcc8fb0a34a8e8f` and CI-tested; its first live run is
-  recorded as a lookup failure whose exact actions later finalized/applied. Live workflow IDs
-  `338089016` and `338089019` are `disabled_manually`; release-candidate YAML removes their cron
-  triggers pending merge. Matching journal API/schema-v3 health, a successful action-bearing run,
-  long-run monitoring, live
+- the authoritative journal API/schema-v3 health and six-operation action-bearing canary are proven;
+  one previously submitted hash was recovered without resubmission. PR #11 restored the V7 schedule
+  and workflow `338089019` is active, while V6 workflow `338089016` remains disabled. Restored
+  scheduled run `32329108358` passed with two VERIFIED operations and green history. Long-run monitoring, live
   timeout evidence, and rollback rehearsal remain;
 - independent security and provider data-use/legal review remain.
 
@@ -177,23 +191,24 @@ must be told that StudioNet is temporary test infrastructure and faucet GEN has 
    recovery.
 2. Continue public browser/wallet soak and prove that V6 recovery stays accessible while the app
    routes no new V6 writes; monitor that the retained owner creation capability remains unused.
-3. Deploy the matching keeper-journal API and verify authenticated `ready=true`, `schemaVersion=3`
-   health.
-4. Complete and review a successful manual action-bearing run through the authoritative Neon journal;
-   only then decide whether to restore a V7 schedule, while V6 remains disabled at zero liability.
-5. Record a 24-hour timeout proof or clearly retain it as a known demo limitation.
-6. Complete independent security and provider/legal review, screenshots, demo video, repository
+3. Continue scheduled journal, coverage, finality, and role-drift monitoring while V6 remains
+   disabled at zero liability.
+4. Record a 24-hour timeout proof or clearly retain it as a known demo limitation.
+5. Complete independent security and provider/legal review, screenshots, demo video, repository
    cleanup, and rollback evidence.
 
 Until those gates pass, the correct claim is “public V7 StudioNet test-token release with V6 recovery
 compatibility,” not “fully production-ready wagering application.”
 
-The current production artifact is READY deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` at
+The last fully enumerated pre-journal production artifact was READY deployment
+`dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` at
 `https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app`. CI run `32308815377`
 passed both jobs for Vercel's source anchor `e5627ebd270a7c6d5291151795b0af6442eba0a6`; because deployment
 metadata records `gitDirty=1`, the bundle hash above—not the commit alone—is the exact browser
-artifact identity. Health, readiness, and history health returned `200`.
-The new proof view is unmerged and undeployed in
-[open PR #6](https://github.com/Leokings/liquidity-arena/pull/6) at commit
-[`2f52f6e`](https://github.com/Leokings/liquidity-arena/commit/2f52f6e); no current production
-deployment ID or bundle is evidence for it.
+artifact identity. Health, readiness, and history health returned `200` for that checkpoint. The
+proof view from [PR #6](https://github.com/Leokings/liquidity-arena/pull/6) is now merged and deployed,
+and the alias has since received the journal API, receipt-recovery fixes, and schedule restoration.
+The current artifact that executed run `32329108358` is READY deployment
+`dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ` at
+`https://liquidity-arena-dz2a8196a-leokings588-5902s-projects.vercel.app`, with the source and bundle
+identity recorded above. Its successor will be verified after this combined evidence record merges.
