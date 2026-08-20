@@ -115,6 +115,25 @@ function publicEpoch(row) {
   });
 }
 
+function publicProof(row) {
+  return Object.freeze({
+    transactionHash: row.transaction_hash,
+    deploymentId: row.deployment_id,
+    deploymentAlias: row.deployment_alias,
+    epochEndTimestamp: row.epoch_end_timestamp === null ? null : String(row.epoch_end_timestamp),
+    kind: row.proof_kind,
+    method: row.method || null,
+    status: row.status,
+    valueAtto: row.value_atto === null ? null : String(row.value_atto),
+    valueCredited: row.value_credited === null || row.value_credited === undefined
+      ? null
+      : row.value_credited === true,
+    parentTransactionHash: row.parent_transaction_hash || null,
+    childTransactionHashes: Object.freeze([...(row.child_transaction_hashes || [])]),
+    verifiedAt: row.verified_at,
+  });
+}
+
 export function createNeonHistoryRepository({
   environment = process.env,
   importDriver = () => import('@neondatabase/serverless'),
@@ -244,6 +263,22 @@ export function createNeonHistoryRepository({
         [deployment, cursor?.epochEndTimestamp || null, cursor?.deploymentId || '', limit + 1],
       );
       return rows.map(publicEpoch);
+    },
+
+    async listProofs({ cursor, deployment, limit }) {
+      const rows = await query(
+        `SELECT transaction_hash, deployment_id, deployment_alias,
+                epoch_end_timestamp::text, proof_kind, method, status,
+                value_atto::text, value_credited, parent_transaction_hash,
+                child_transaction_hashes, verified_at
+           FROM arena_transaction_proofs
+          WHERE deployment_alias = $1::text
+            AND ($2::text IS NULL OR transaction_hash < $2::text)
+          ORDER BY transaction_hash DESC
+          LIMIT $3::integer`,
+        [deployment, cursor?.transactionHash || null, limit + 1],
+      );
+      return rows.map(publicProof);
     },
 
     async upsertDeployment(value) {

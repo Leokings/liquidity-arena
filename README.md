@@ -24,11 +24,19 @@ rotation transaction `0xbca440cc838e6d5dcb595e18124e363e0fa1780a498e3ce49703f9d8
 finalized with majority agreement and successful leader execution, and exact `get_config` read-back
 confirmed the new role. Acting as that keeper locally then created epochs `1787256000` and
 `1787259600`; transactions `0xe10ce0bf…a9c4` and `0x00398a3c…9058` finalized and both exact
-post-states were verified OPEN. The default-branch keeper is active: scheduled run `32298454771`
-passed reconciliation, and later run `32299468899` passed both no-action reconciliation and bounded
-history synchronization. Final observed run `32300282482` also passed reconciliation and history
-sync on source commit `45be825084cce9e97579ca42266e318e2e97fe17`. Long-run monitoring remains
-pending.
+post-states were verified OPEN. Historical default-branch activation is proven: scheduled run
+`32298454771` passed reconciliation, and later run `32299468899` passed both no-action reconciliation and bounded
+history synchronization. Later verified no-action run `32300282482` also passed reconciliation and history
+sync. Later action-bearing scheduled attempts exposed delayed StudioNet receipt indexing. Main
+commit `958e51743a821606ca78881e6bcc8fb0a34a8e8f` now polls the same recorded transaction hash seven
+times with 5/10/20/40/80/160-second outer delays (315 seconds total) and never resubmits the write;
+CI run `32310160397` passed. The first live action-bearing scheduled use is no longer pending:
+[run `32312864108`](https://github.com/Leokings/liquidity-arena/actions/runs/32312864108), reconcile
+[job `96259232716`](https://github.com/Leokings/liquidity-arena/actions/runs/32312864108/job/96259232716),
+failed after all seven lookups on head `958e517`. Its CREATE `0xe6af…3574` and RESOLVE
+`0x0850…c7e` nevertheless both later reached `FINALIZED` and their OPEN/RESOLVED post-states were
+applied. That is evidence that receipt-index invisibility can exceed 315 seconds, not a failed chain
+execution and not a successful journal-backed run.
 
 The public site at [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app) now targets V7.
 V6 at
@@ -39,28 +47,35 @@ epoch would accept wagers; the owner must not use that capability. Due epochs `1
 `1787158800` were resolved on 2026-08-19 by transactions `0xae0ce453…e1480` and `0x09f01c2a…e735`.
 Legacy read/resolve/timeout/claim paths remain available. Subsequent permissionless drains resolved
 epochs `1787162400` and `1787166000` with transactions `0x03f2ac80…0399` and `0x7e8030f0…27bb`.
+The final live audit found all five V6 epochs resolved/determined and zero player liability, so the
+recurring V6 drain has been retired. Live GitHub workflow `338089016` is `disabled_manually`;
+the release-candidate YAML removes its cron and keeps only `workflow_dispatch`, but that source
+change is not on `main` until the release is merged.
 
 | Surface | Current state |
 | --- | --- |
 | V7 contract | Deployed and finalized on StudioNet |
-| V7 hourly coverage | 27 exact-hour epochs evidenced: initial canary plus 24 full-day targets and 2 dedicated-keeper creates |
+| V7 hourly coverage | At least 31 exact-hour epochs evidenced: 25 seeded targets, 2 local dedicated-keeper creates, and 4 workflow-created epochs |
 | V7 funded canary | Complete: settlement, three claim deliveries, loser rejection, conservation, and fee withdrawal verified |
 | Dedicated V7 keeper rotation | Complete: finalized on-chain and exact config/repository address verified |
-| V7 keeper workflow | Active: scheduled reconcile observed and later full workflow run passed; long-run soak pending |
+| V7 keeper workflow | Live workflow `338089019` is `disabled_manually`; release-candidate YAML is `workflow_dispatch`-only pending merge, journal API/health proof, and a successful action-bearing run |
 | Public Vercel browser | V7 active and READY; V6 legacy recovery remains readable with zero known liability |
 | V6 | Public app/automation new writes disabled; owner creation capability remains and must not be used |
-| Durable settled-epoch history | Initial and repeated production sync/read-back passed; V7 E20/E19 and V6 E19 are live, proof backfill pending |
+| Durable settled-epoch history | Repeated production projection and selected proof backfill passed; V7 E19 exposes 9 finalized proofs, while outage recovery and broader proof coverage remain pending |
+| Keeper journal | Neon migrations 002 and 003 are applied/read back with zero operations; matching API deployment, authenticated schema-v3 health, and an action-bearing canary remain pending |
+| Proof view | Preview only in [open PR #6](https://github.com/Leokings/liquidity-arena/pull/6) at commit [`2f52f6e`](https://github.com/Leokings/liquidity-arena/commit/2f52f6e); it is neither merged nor deployed and is not part of the verified artifact above |
 
-The verified V7 code artifact immediately before this evidence-only documentation refresh is Vercel
-deployment `dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3`
-([immutable URL](https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app)), built from
-commit `45be825084cce9e97579ca42266e318e2e97fe17`. Bundle `market-DECrh0Dy.js` has SHA-256
-`d82c6975f0275add1e355a3d298a0170aae483f26788d4e9431a2a259cfe85ac`. Vercel reports READY; both
+The current production artifact is Vercel deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi`
+([immutable URL](https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app)). Vercel
+metadata anchors the CLI deployment to merged StudioNet receipt-proof fix
+`e5627ebd270a7c6d5291151795b0af6442eba0a6` but also records `gitDirty=1`, so that commit is an
+anchor rather than a byte-identical source claim. The exact served browser bundle
+`market-BHlwjm1W.js` has SHA-256
+`c0be752a9a1407e76a1f417256f220f068969fdcf80f88872683e33f2c96e79e`. Vercel reports READY; both
 immutable URL and public alias returned `200` readiness for V7, five feeds, keeper coverage, and
 readable zero-liability V6 compatibility. `/healthz` and `/api/history-health` also returned `200`.
-CI run `32299866117` passed browser/operator job `96219707620` and intelligent-contracts job
-`96219707869` for that exact source. The later documentation commit is not falsely treated as the
-source of this tested code artifact. V6 compatibility deployment `dpl_DQEvnGup417wvTxuxzeNfJvySiM5`
+CI run `32308815377` passed browser/operator job `96247333491` and intelligent-contracts job
+`96247333299` for the source anchor. V6 compatibility deployment `dpl_DQEvnGup417wvTxuxzeNfJvySiM5`
 remains a READY rollback artifact.
 
 The 24-target full-day seed covers epoch IDs `1787169600` through `1787252400`. Its first and final
@@ -155,6 +170,29 @@ That runtime preflight is now proven by reconcile job `96218469576` in run `3229
 the exact contract profile and imported signer and correctly planned no actions because coverage was
 already complete. This is activation evidence, not a long-run availability guarantee.
 
+The replacement keeper safety boundary uses an authoritative Neon pending-operation journal, not a
+workflow artifact or cache. A fenced global signer lease covers V7 and manual V6 recovery. Every
+write must commit `PREPARED` before broadcast and bind the exact captured hash immediately after
+submission. Raw `gen_getTransactionStatus` is only a liveness signal; `FINALIZED` there is not proof.
+The journal marks success only after the full receipt proves the exact hash/contract/method/arguments
+and successful execution, followed by matching post-state. Unknown, pending, quarantined,
+ambiguous, or otherwise unverified operations fail closed and block later writes. An exact
+receipt-verified `FINALIZED_FAILURE` may be retried only as a new immutable numbered attempt; it
+never clears or overwrites the failed attempt's hash. Neon migration 002 was applied
+to production branch `br-calm-fire-aup0rw0r` with final checksum
+`d2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266`; production read-back found
+the four journal tables and trigger, preserved migration v1, and contained zero operations.
+Migration 003 `keeper_transaction_journal_attempts` was applied to Neon project
+`steep-hat-04600004`, parent branch `br-calm-fire-aup0rw0r`, as migration
+`14160d53-a2a3-43ab-a762-6bb7e54a95e8` through temporary branch
+`br-polished-shape-aund54y0`, which was deleted after completion. Its final checksum is
+`9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70`. Production read-back found
+exact schema versions 1/2/3, zero operations, all four attempt-lineage columns, the unresolved unique
+index covering `QUARANTINED`, and the parent-freeze trigger. This closes the database migration gate
+only. The matching API must still be deployed, and the keeper must receive authenticated health with
+`ready=true` and `schemaVersion=3` before acquiring a lease; until that health proof and a successful
+action-bearing canary, keeper execution remains disabled.
+
 ## Run and verify locally
 
 ```powershell
@@ -191,10 +229,13 @@ Do not use the owner key for routine scheduling. See [the V7 keeper runbook](doc
 After public V7 cutover:
 
 1. keep V6 legacy reads/claims available and retain a tested rollback without re-enabling V6 writes;
-2. separately backfill and verify transaction proofs; recurring state projection intentionally
-   reports zero verified proofs today;
-3. monitor repeated scheduled keeper/drain runs, history quota behavior, and alerting;
-4. complete timeout evidence, independent security review, browser/wallet soak, and provider
+2. rehearse database outage/recovery and extend transaction-proof coverage beyond the selected V7
+   deployment/canary/fee evidence;
+3. deploy the matching keeper-journal API and verify authenticated health reports `ready=true` with
+   `schemaVersion=3` before any action-bearing run;
+4. complete a successful manual action-bearing canary through the authoritative journal, review its
+   exact receipt/post-state evidence, and only then decide whether to restore a V7 schedule;
+5. complete timeout evidence, independent security review, browser/wallet soak, and provider
    data-use/legal review.
 
 Initial history run `32299468899`, job `96218806119`, synchronized two deployments, two epochs, and
@@ -203,9 +244,18 @@ two full E19 snapshots. Later run `32300282482`, reconcile job `96221017562` and
 `2026-08-19T20:47:19.912Z` synchronized two deployments, two epochs, and two snapshots with
 `proofsVerified=0`. Public history now has V7 E20 (`1787169600`) plus V7 E19 and V6 E19; all three
 are resolved/determined with no duplicate V6 E19 row. This proves repeated projection behavior but
-not transaction-proof backfill. Earlier scheduled run `32298454771` had successful reconciliation
-while its history job hit the StudioNet provider quota; later bounded syncs supersede that incident.
-Scheduled V6 drain run `32297047031` also passed.
+was not itself transaction-proof backfill. Merged fix
+`e5627ebd270a7c6d5291151795b0af6442eba0a6` taught the fail-closed verifier to accept StudioNet's
+finalized consensus/leader receipt shape. Manual protected run `32309637237`, job `96249796253`,
+then completed all quota-spaced batches with 6, 3, and 2 verified proofs and zero rejected requests.
+The 11 accepted records comprise one deployment proof, nine V7 E19 epoch proofs (one creation, four
+wagers, one resolution, and three credited claims), and the epochless fee-withdrawal parent. Public
+history exposes exactly those nine E19 proofs; V7 E20 and V6 E19 remain at zero because they were not
+part of this selected backfill. The fee parent is correctly absent from an epoch array because
+`withdraw_accrued_fees` has no epoch argument; its child-delivery monitor remains the stronger
+delivery evidence. Database outage recovery is still pending. Earlier scheduled run `32298454771`
+had successful reconciliation while its history job hit the StudioNet provider quota; later bounded
+syncs supersede that incident. Scheduled V6 drain run `32297047031` also passed.
 
 StudioNet finality has been observed in tens of seconds, including finalized transactions in under a
 minute, but these samples are not a bound or service-level promise. Claims never unlock at
@@ -217,6 +267,7 @@ minute, but these samples are not a bound or service-level promise. Claims never
 - [Technical architecture](TECHNICAL.md)
 - [Contract requirements](contracts/README.md)
 - [Keeper runbook](docs/round-keeper.md)
+- [Public durable-history API](docs/HISTORY-API.md)
 - [Security model](SECURITY.md)
 - [Audit status](docs/AUDIT.md)
 - [Submission status](docs/SUBMISSION-TECH.md)

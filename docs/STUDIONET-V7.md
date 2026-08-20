@@ -62,7 +62,22 @@ Twenty-five exact-hour epochs were created and verified. Canary epoch `178716600
 `0x7b94b2d0dc4d0970482e60a2cec1fc4d3c3bcf0592816e992b3acbc9474b7726` and
 `0x443afcf771f1c5751bdc0e525b75b8d04e7378ef37bb7f817799f98f36c7677f`. This proves full-day
 derivation and creation, but it does not prove continuous scheduled operation. The default-branch
-workflow is activated; long-run monitoring remains. The dedicated keeper rotation is complete.
+workflow's historical activation/preflight is proven. Live workflow IDs `338089016` (V6) and
+`338089019` (V7) are `disabled_manually`; release-candidate YAML removes both cron schedules and
+retains `workflow_dispatch`, but that source is not merged to `main` yet. The dedicated keeper rotation is
+complete; later local and workflow creates raise the recorded total to at least 31 epochs.
+
+StudioNet may return `transaction not found` for a newly broadcast hash before its receipt index is
+visible. Main commit `958e51743a821606ca78881e6bcc8fb0a34a8e8f` (PR #5) therefore gives both V7
+and V6 automation seven attempts on the same recorded hash with 5/10/20/40/80/160-second outer
+delays, a 315-second propagation window. It never resubmits the write. CI run `32310160397` passed
+browser/operator job `96251325751` and intelligent-contracts job `96251325923`. The first live
+scheduled use is now recorded: [run `32312864108`](https://github.com/Leokings/liquidity-arena/actions/runs/32312864108),
+[job `96259232716`](https://github.com/Leokings/liquidity-arena/actions/runs/32312864108/job/96259232716),
+on head `958e517`. It exhausted seven receipt lookups for CREATE `0xe6af…3574` and RESOLVE
+`0x0850…c7e`; both exact hashes later reached `FINALIZED` and their intended OPEN and
+RESOLVED/DETERMINED post-states applied. This proves receipt-index invisibility beyond 315 seconds,
+not a failed execution or successful journal-backed run.
 
 The dedicated keeper then created two additional exact-hour epochs locally. Epoch `1787256000` used
 transaction `0xe10ce0bfc24320998e12cea148734124cb8b0f0ee2fb728ef2961191ee3aa9c4`; epoch `1787259600` used
@@ -83,8 +98,9 @@ Completed:
 - GenVM lint with 29 schema methods;
 - V7 direct tests 22/22;
 - combined V6/V7 direct tests 37/37;
-- 27 created epochs evidenced: one canary, an initial 24-target full-day schedule, and two finalized
-  dedicated-keeper creates with verified OPEN post-state;
+- at least 31 created epochs evidenced: one canary, an initial 24-target full-day schedule, two
+  finalized local dedicated-keeper creates, and four workflow-created epochs with verified OPEN
+  post-state;
 - fail-closed V7 keeper profile checks and pre-write signer recheck;
 - V6 drain tooling and a read-only claim-delivery monitor with explicit V6/V7 profiles;
 - dual V7/V6 browser-deployment registry implementation;
@@ -92,16 +108,34 @@ Completed:
 - finalized dedicated-keeper rotation, exact `get_config` role read-back, and matching GitHub
   environment secret names/repository address variable;
 - scheduled V7 reconciliation run `32298454771`, later successful no-action reconcile/history run
-  `32299468899`, final observed reconcile/history run `32300282482`, and successful scheduled V6
-  drain run `32297047031`;
+  `32299468899`, later verified no-action reconcile/history run `32300282482`, failed lookup run
+  `32312864108` whose two exact actions later finalized/applied, and historical successful V6 drain
+  run `32297047031`;
 - Neon production migration application, six-table/four-index schema read-back, and initial bounded
-  V7/V6 E19 snapshot synchronization/read-back.
+  V7/V6 E19 snapshot synchronization/read-back;
+- StudioNet consensus/leader receipt verification fix
+  `e5627ebd270a7c6d5291151795b0af6442eba0a6`, successful CI run `32308815377`, and successful
+  quota-spaced proof-backfill run `32309637237` with 11 accepted and zero rejected proof requests;
+- public proof read-back with finalized deployment proof and exactly nine V7 E19 epoch proofs: one
+  creation, four wagers, one resolution, and three credited claims with one child each;
+- seven-attempt/315-second same-hash keeper receipt propagation grace merged on main and CI-tested.
+- Neon keeper-journal migration 002 applied/read back with final checksum
+  `d2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266`, four tables plus trigger,
+  and zero production operations.
+- Neon keeper-journal migration 003 `keeper_transaction_journal_attempts` applied/read back as
+  migration `14160d53-a2a3-43ab-a762-6bb7e54a95e8`, checksum
+  `9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70`, with exact versions 1/2/3,
+  zero operations, four attempt columns, the `QUARANTINED` unresolved index, and parent-freeze trigger.
 
 Pending:
 
-- long-run dedicated-keeper/drain monitoring and alert evidence;
+- deployment of the matching keeper-journal API and authenticated `ready=true`, `schemaVersion=3`
+  health;
+- a successful manual action-bearing run through the authoritative journal and subsequent keeper
+  monitoring/alert evidence before any V7 schedule is restored;
 - live 24-hour timeout-refund proof;
-- transaction-proof backfill and outage-recovery verification;
+- database outage-recovery verification and transaction-proof coverage beyond the selected V7
+  deployment/canary/fee evidence;
 - continued public browser/wallet soak and rollback rehearsal without re-enabling V6 writes;
 - independent security and provider/legal review.
 
@@ -168,7 +202,9 @@ resolved epoch `1787162400` with `0x03f2ac803896b84fdfadbc4329ea4a085851d0559f0c
 and epoch `1787166000` with `0x7e8030f0975d86479a01a398b88d10b2606c466eec78046fc84eca18c55d27bb`.
 Supported public app and automation paths expose no new V6 epoch or wager action; historical
 resolve, timeout, and claim paths remain. The deployed V6 owner creation capability still exists and
-must not be used.
+must not be used. A later live audit found all five V6 epochs RESOLVED/DETERMINED and player
+liability zero. Its recurring drain is retired; live workflow `338089016` is `disabled_manually`,
+while the `workflow_dispatch`-only source change remains pending merge.
 
 At V7 cutover:
 
@@ -186,32 +222,66 @@ normalized marked-DDL SHA-256 `dd95ed3a5c55bf55d02090605a46557377778afb220126451
 four expected indexes were read back. Workflow run `32299468899`, history job `96218806119`, then
 synchronized two deployments, two epochs, and two snapshots from state read at
 `2026-08-19T20:38:39.397Z`. Public history returns full resolved/determined V7 and V6 snapshots for
-E19 (`1787166000`). Both `verifiedProofs` arrays are empty: state projection is live, but transaction-
-proof backfill is not. Later run `32300282482`, reconcile job `96221017562` and history job
-`96221327115`, also succeeded from state read at `2026-08-19T20:47:19.912Z`. Public history now has
-resolved/determined V7 E20 and E19 plus V6 E19 without duplicating the overlapping V6 row;
-`proofsVerified` remained zero. Outage recovery remains pending. This off-chain cache is keyed to
-allowlisted chain/contract/epoch state and cannot choose winners or make claims eligible.
+E19 (`1787166000`). Later run `32300282482`, reconcile job `96221017562` and history job
+`96221327115`, also succeeded from state read at `2026-08-19T20:47:19.912Z`; public history added
+resolved/determined V7 E20 without duplicating overlapping V6 E19. Those recurring runs projected
+state and intentionally reported zero new proofs.
+
+Merged fix `e5627ebd270a7c6d5291151795b0af6442eba0a6` reuses the audited fail-closed StudioNet
+consensus/leader receipt validator for history proof verification. Protected manual workflow
+`32309637237`, job `96249796253`, then passed all three quota-spaced batches: 6 deployment/create/
+wager proofs, 3 resolution/claim proofs, and 2 final-claim/fee proofs, with zero rejected requests.
+The 11 accepted database records comprise one deployment proof, nine E19 epoch proofs, and one
+fee-withdrawal parent. Public read-back shows the deployment transaction finalized and V7 E19 with
+exactly nine finalized proofs: `CREATE_EPOCH=1`, `WAGER=4`, `RESOLVE_EPOCH=1`, and `CLAIM=3`; all
+three claims are credited and carry one child hash. V7 E20 and V6 E19 each remain at zero verified
+epoch proofs because they were outside this selected backfill. The fee-withdrawal parent
+`0x3df8d942bd9c5d699ee0d7816761ec5fd6264108d3a3e8bf3486c2c4f4fbb01f` is intentionally epochless
+and therefore absent from E19's array; its exact finalized child is separately proven by the
+fee-delivery monitor. Outage recovery remains pending. This off-chain cache is keyed to allowlisted
+chain/contract/epoch state and cannot choose winners or make claims eligible.
+
+The keeper journal is separate from that history projection. Migration 002 was prepared as
+`1e440327-2e66-403d-934d-c302790ac775` on temporary branch `br-sweet-frost-auakkl85`, applied
+identically to production branch `br-calm-fire-aup0rw0r`, and the temporary branch was deleted. Its
+final checksum is `d2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266`;
+production read-back preserved v1, found four journal tables plus the trigger, and reported zero
+operations. Runtime authority requires a fenced global signer lease, PREPARE before broadcast,
+exact captured-hash binding, recovery before planning, and fail-closed blocking. Raw status is
+liveness only; full exact receipt identity, successful execution, and matching post-state are
+required before VERIFIED. Artifacts and caches are never journal authority. Both keeper workflows
+are disabled live. Migration 003 `keeper_transaction_journal_attempts` is applied to project
+`steep-hat-04600004`, parent branch `br-calm-fire-aup0rw0r`, as migration
+`14160d53-a2a3-43ab-a762-6bb7e54a95e8` through deleted temporary branch
+`br-polished-shape-aund54y0`. Final checksum
+`9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70` read back with exact schema
+versions 1/2/3, zero operations, all four attempt columns, the unresolved unique index covering
+`QUARANTINED`, and the parent-freeze trigger. An action-bearing run remains prohibited until the
+matching API is deployed and authenticated journal health reports `ready=true` with
+`schemaVersion=3`.
 
 ## Public cutover record
 
-The production alias [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app) now targets V7
-while retaining V6 legacy recovery. The verified code artifact immediately before this evidence-only
-documentation refresh is:
+The production alias [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app) targets V7
+while retaining V6 legacy recovery. The current production artifact is:
 
-- source commit: `45be825084cce9e97579ca42266e318e2e97fe17`;
-- CI run: `32299866117`, with browser/operator job `96219707620` and intelligent-contracts job
-  `96219707869` both successful;
-- deployment: `dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3`, status READY;
+- Vercel source anchor: merged receipt-proof commit
+  `e5627ebd270a7c6d5291151795b0af6442eba0a6`; metadata also records `gitDirty=1`, so this is an
+  anchor rather than a byte-identical source claim;
+- CI run: `32308815377`, with browser/operator job `96247333491` and intelligent-contracts job
+  `96247333299` both successful;
+- deployment: `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi`, production target, status READY;
 - immutable URL:
-  [liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app](https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app);
-- browser bundle: `market-DECrh0Dy.js`, SHA-256
-  `d82c6975f0275add1e355a3d298a0170aae483f26788d4e9431a2a259cfe85ac`;
+  [liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app](https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app);
+- browser bundle: `market-BHlwjm1W.js`, SHA-256
+  `c0be752a9a1407e76a1f417256f220f068969fdcf80f88872683e33f2c96e79e`;
 - `/healthz`, `/readyz`, and `/api/history-health`: `200`;
 - readiness: exact V7 contract/roles/policy, two covered future epochs, five feeds, and readable V6
   with zero known player liability.
 
 The previous V6 artifact `dpl_DQEvnGup417wvTxuxzeNfJvySiM5` remains a READY rollback reference. Any
 rollback must preserve V6 new-write disabling. Continue browser/wallet soak, outage tests, external
-review, and proof backfill. The later evidence-only documentation commit is intentionally not claimed
-as the source of the code artifact above.
+review, and broader proof coverage. The new proof view is unmerged and undeployed in
+[open PR #6](https://github.com/Leokings/liquidity-arena/pull/6) at commit
+[`2f52f6e`](https://github.com/Leokings/liquidity-arena/commit/2f52f6e); it is not present in the
+verified production artifact above.

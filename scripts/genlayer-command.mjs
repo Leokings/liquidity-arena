@@ -11,9 +11,14 @@ const STUDIO_SUCCESS_CONSENSUS_RESULT = 'MAJORITY_AGREE';
 const STUDIO_SUCCESS_CONSENSUS_RESULT_CODE = 6;
 const STUDIO_SUCCESS_EXECUTION_RESULT = 'SUCCESS';
 const STUDIO_SUCCESS_RETURN_STATUS = 'RETURN';
+const GENLAYER_TRANSACTION_STATUSES = new Set([
+  'UNKNOWN', 'PENDING', 'PROPOSING', 'COMMITTING', 'REVEALING',
+  'ACCEPTED', 'FINALIZED',
+]);
 
 export const GENLAYER_FINALIZED_STATUS = 'FINALIZED';
 export const GENLAYER_SUCCESS_RESULT = 'FINISHED_WITH_RETURN';
+export const GENLAYER_STUDIONET_RPC_URL = 'https://studio.genlayer.com/api';
 
 function asText(value) {
   if (value === undefined || value === null) return '';
@@ -562,6 +567,65 @@ export function assertFinalizedGenlayerExecution(receipt) {
   return receipt;
 }
 
+export async function getGenlayerTransactionStatus({
+  rpcUrl,
+  transactionHash,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 8_000,
+} = {}) {
+  const url = new URL(String(rpcUrl || ''));
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash) {
+    throw new Error('GenLayer status RPC must be an HTTPS URL without credentials or a fragment.');
+  }
+  if (!/^0x[\da-f]{64}$/i.test(String(transactionHash || ''))) {
+    throw new Error('GenLayer status lookup requires an exact transaction hash.');
+  }
+  if (typeof fetchImpl !== 'function') throw new Error('GenLayer status lookup requires fetch.');
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) {
+    throw new Error('GenLayer status timeout is invalid.');
+  }
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'gen_getTransactionStatus',
+        params: [String(transactionHash).toLowerCase()],
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    throw new GenlayerCommandError('GenLayer transaction status request failed.', { cause: error });
+  }
+  const text = await response.text();
+  if (!response.ok) {
+    throw new GenlayerCommandError(
+      `GenLayer transaction status RPC returned HTTP ${response.status}.`,
+      { status: response.status, stderr: text.slice(0, 4_096) },
+    );
+  }
+  if (text.length > 16 * 1024) throw new Error('GenLayer transaction status response is too large.');
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error('GenLayer transaction status response is not valid JSON.');
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+    || payload.jsonrpc !== '2.0' || payload.id !== 1 || payload.error !== undefined
+    || typeof payload.result !== 'string') {
+    throw new Error('GenLayer transaction status response is malformed.');
+  }
+  const status = payload.result.trim().toUpperCase();
+  if (!GENLAYER_TRANSACTION_STATUSES.has(status)) {
+    throw new Error(`GenLayer transaction status is unknown: ${status || '(empty)'}.`);
+  }
+  return status;
+}
+
 /**
  * Validate the receipt printed by `genlayer write`.
  *
@@ -591,8 +655,9 @@ export function parseGenlayerWriteOutput(output) {
 
 /**
  * Run a CLI command while preserving argument boundaries and exposing a write
- * hash as soon as the CLI prints it. `onTransactionHash` must be synchronous;
- * keeper callers use it to journal the hash before the CLI's receipt wait.
+ * hash as soon as the CLI prints it. The command does not resolve or stop the
+ * child until a Promise returned by `onTransactionHash` settles, allowing a
+ * keeper to durably bind the hash before this wrapper can exit.
  */
 export function runGenlayerStreamingCommand({
   invocation,
@@ -626,8 +691,59 @@ export function runGenlayerStreamingCommand({
     let stderr = '';
     let transactionHash;
     let callbackError;
+    let callbackPromise;
+    let callbackSettled = false;
+    let closeResult;
+    let processError;
+    let settled = false;
+
+    const finish = () => {
+      if (settled || (callbackPromise && !callbackSettled)) return;
+      if (callbackError) {
+        settled = true;
+        reject(new GenlayerCommandError('Failed to persist the GenLayer transaction hash.', {
+          code: 'HASH_PERSIST_FAILED',
+          cause: callbackError,
+          stdout,
+          stderr,
+          status: closeResult?.status,
+          signal: closeResult?.signal,
+          transactionHash,
+        }));
+        return;
+      }
+      if (processError) {
+        settled = true;
+        reject(new GenlayerCommandError(processError.message, {
+          cause: processError,
+          stdout,
+          stderr,
+          transactionHash,
+        }));
+        return;
+      }
+      if (!closeResult) return;
+      const result = Object.freeze({
+        status: closeResult.status,
+        signal: closeResult.signal,
+        stdout,
+        stderr,
+        output: `${stdout}\n${stderr}`,
+        transactionHash,
+      });
+      settled = true;
+      if (closeResult.status !== 0) {
+        reject(new GenlayerCommandError(
+          `GenLayer ${command} process exited with status ${closeResult.status ?? 'unknown'}.`,
+          result,
+        ));
+        return;
+      }
+      resolve(result);
+    };
+
     const inspectHash = () => {
-      if (transactionHash || callbackError) return;
+      if (transactionHash || callbackError || callbackPromise) return;
       // stdout/stderr ordering is not defined; never synthesize a hash by
       // joining a label from one stream with bytes from the other.
       const detected = extractGenlayerTransactionHash(stdout)
@@ -635,13 +751,25 @@ export function runGenlayerStreamingCommand({
       if (!detected) return;
       transactionHash = detected;
       try {
-        onTransactionHash(detected);
-        // The CLI's write action waits for ACCEPTED after broadcasting. The
-        // keeper owns receipt polling, so it can stop this wrapper process as
-        // soon as the durable callback has recorded the authoritative hash.
-        if (stopAfterTransactionHash) child.kill?.();
+        callbackPromise = Promise.resolve(onTransactionHash(detected));
+        callbackPromise.then(
+          () => {
+            callbackSettled = true;
+            // The CLI's write action waits for ACCEPTED after broadcasting.
+            // Stop it only after the durable callback has bound the hash.
+            if (stopAfterTransactionHash && !closeResult) child.kill?.();
+            finish();
+          },
+          (error) => {
+            callbackError = error;
+            callbackSettled = true;
+            if (!closeResult) child.kill?.();
+            finish();
+          },
+        );
       } catch (error) {
         callbackError = error;
+        callbackSettled = true;
         child.kill?.();
       }
     };
@@ -659,43 +787,13 @@ export function runGenlayerStreamingCommand({
       inspectHash();
     });
     child.once('error', (error) => {
-      reject(new GenlayerCommandError(error.message, {
-        cause: error,
-        stdout,
-        stderr,
-        transactionHash,
-      }));
+      processError = error;
+      finish();
     });
     child.once('close', (status, signal) => {
       inspectHash();
-      if (callbackError) {
-        reject(new GenlayerCommandError('Failed to persist the GenLayer transaction hash.', {
-          code: 'HASH_PERSIST_FAILED',
-          cause: callbackError,
-          stdout,
-          stderr,
-          status,
-          signal,
-          transactionHash,
-        }));
-        return;
-      }
-      const result = Object.freeze({
-        status,
-        signal,
-        stdout,
-        stderr,
-        output: `${stdout}\n${stderr}`,
-        transactionHash,
-      });
-      if (status !== 0) {
-        reject(new GenlayerCommandError(
-          `GenLayer ${command} process exited with status ${status ?? 'unknown'}.`,
-          result,
-        ));
-        return;
-      }
-      resolve(result);
+      closeResult = { status, signal };
+      finish();
     });
   });
 }

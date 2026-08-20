@@ -238,7 +238,9 @@ export function createPublicHistoryHandler({ repository }) {
       const query = parsePublicHistoryQuery(new URL(req.url || '/api/history', 'http://localhost'));
       const rows = query.view === 'deployments'
         ? await repository.listDeployments(query)
-        : await repository.listEpochs(query);
+        : query.view === 'proofs'
+          ? await repository.listProofs(query)
+          : await repository.listEpochs(query);
       const hasMore = rows.length > query.limit;
       const items = rows.slice(0, query.limit);
       const last = items.at(-1);
@@ -247,7 +249,7 @@ export function createPublicHistoryHandler({ repository }) {
         : null;
       return jsonResponse(res, 200, {
         status: 'ok',
-        dataScope: 'HOURLY_CONTRACT_EPOCHS',
+        dataScope: query.view === 'proofs' ? 'VERIFIED_TRANSACTION_PROOFS' : 'HOURLY_CONTRACT_EPOCHS',
         continuousVisualizationTicksStored: false,
         view: query.view,
         deployment: query.deployment,

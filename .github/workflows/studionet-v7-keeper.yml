@@ -1,10 +1,8 @@
 name: StudioNet V7 Keeper
 
 on:
-  schedule:
-    # StudioNet resolves no earlier than E+120s. The second run is a delayed
-    # watchdog because GitHub schedules are best-effort, not an exact clock.
-    - cron: '3,13 * * * *'
+  # Re-enable the schedule only after the Neon journal migration, secret, and
+  # one action-bearing recovery run have been proven end to end.
   workflow_dispatch:
 
 permissions:
@@ -28,8 +26,10 @@ jobs:
           V7_TREASURY_ADDRESS: ${{ vars.V7_TREASURY_ADDRESS }}
           V7_KEEPER_KEYSTORE_B64: ${{ secrets.V7_KEEPER_KEYSTORE_B64 }}
           V7_KEEPER_KEYSTORE_PASSWORD: ${{ secrets.V7_KEEPER_KEYSTORE_PASSWORD }}
+          KEEPER_JOURNAL_URL: ${{ vars.KEEPER_JOURNAL_URL }}
+          KEEPER_JOURNAL_SECRET: ${{ secrets.KEEPER_JOURNAL_SECRET }}
         run: |
-          if [[ -z "$V7_CONTRACT_ADDRESS" || -z "$V7_OWNER_ADDRESS" || -z "$V7_KEEPER_ADDRESS" || -z "$V7_TREASURY_ADDRESS" || -z "$V7_KEEPER_KEYSTORE_B64" || -z "$V7_KEEPER_KEYSTORE_PASSWORD" ]]; then
+          if [[ -z "$V7_CONTRACT_ADDRESS" || -z "$V7_OWNER_ADDRESS" || -z "$V7_KEEPER_ADDRESS" || -z "$V7_TREASURY_ADDRESS" || -z "$V7_KEEPER_KEYSTORE_B64" || -z "$V7_KEEPER_KEYSTORE_PASSWORD" || -z "$KEEPER_JOURNAL_URL" || -z "$KEEPER_JOURNAL_SECRET" ]]; then
             echo "::error::StudioNet V7 keeper variables or secrets are missing."
             exit 1
           fi
@@ -76,6 +76,8 @@ jobs:
           V7_KEEPER_ADDRESS: ${{ vars.V7_KEEPER_ADDRESS }}
           V7_TREASURY_ADDRESS: ${{ vars.V7_TREASURY_ADDRESS }}
           GENLAYER_KEYSTORE_PASSWORD: ${{ secrets.V7_KEEPER_KEYSTORE_PASSWORD }}
+          KEEPER_JOURNAL_URL: ${{ vars.KEEPER_JOURNAL_URL }}
+          KEEPER_JOURNAL_SECRET: ${{ secrets.KEEPER_JOURNAL_SECRET }}
         run: node scripts/v7-keeper.mjs --config scripts/examples/v7-keeper.example.json --execute
 
       - name: Remove temporary keystore

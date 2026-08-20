@@ -341,7 +341,20 @@
     "runId": "32297047031",
     "event": "schedule",
     "status": "SUCCESS",
-    "createEpochCapabilityUsed": false
+    "createEpochCapabilityUsed": false,
+    "recurringScheduleEnabled": false,
+    "liveWorkflowId": 338089016,
+    "liveWorkflowState": "disabled_manually",
+    "remoteMainSourceTriggerMode": "HISTORICAL_CRON_STILL_PRESENT_PENDING_RELEASE_MERGE",
+    "releaseCandidateSourceTriggerMode": "WORKFLOW_DISPATCH_ONLY",
+    "disableReason": "LIVE_ZERO_STATE_AND_ZERO_PLAYER_LIABILITY",
+    "liveTerminalEpochCount": 5,
+    "liveEpochStatus": "ALL_RESOLVED_DETERMINED",
+    "playerLiabilityAtto": "0",
+    "latestDrainDryRun": {
+      "actions": [],
+      "deferredEpochReadCount": 0
+    }
   },
   "vercel": {
     "target": "production",
@@ -380,11 +393,13 @@
   "currentPublicCompatibility": {
     "recordedOn": "2026-08-19",
     "productionAlias": "https://liquidity-arena.vercel.app",
-    "deploymentId": "dpl_HZ4iAxBgnzotYUBQVXWxS8uDguW3",
-    "deploymentUrl": "https://liquidity-arena-etugq1wnj-leokings588-5902s-projects.vercel.app",
-    "sourceCommit": "45be825084cce9e97579ca42266e318e2e97fe17",
-    "bundleFile": "market-DECrh0Dy.js",
-    "bundleSha256": "d82c6975f0275add1e355a3d298a0170aae483f26788d4e9431a2a259cfe85ac",
+    "deploymentId": "dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi",
+    "deploymentUrl": "https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app",
+    "sourceAnchorCommit": "e5627ebd270a7c6d5291151795b0af6442eba0a6",
+    "sourceAnchorGitDirty": true,
+    "sourceAnchorScope": "Vercel CLI metadata records this merged commit and gitDirty=1; the bundle hash identifies the exact deployed browser artifact.",
+    "bundleFile": "market-BHlwjm1W.js",
+    "bundleSha256": "c0be752a9a1407e76a1f417256f220f068969fdcf80f88872683e33f2c96e79e",
     "activeDeployment": "v7",
     "intendedMode": "CLAIM_ONLY",
     "modeMeaning": "PUBLIC_APP_NEW_WAGERS_DISABLED_WITH_LEGACY_READ_RESOLVE_TIMEOUT_CLAIM_RECOVERY",
@@ -401,7 +416,7 @@
     "retiredOlderDeploymentCount": 6,
     "knownUnsafeImmutableDeploymentStatus": "REMOVED_404_VERIFIED",
     "readinessStatus": "PASS_200_V7_READY_LEGACY_V6_READABLE_ZERO_LIABILITY",
-    "artifactScopeNote": "Verified code artifact before the evidence-only documentation refresh.",
+    "artifactScopeNote": "Current READY V7 production artifact with V6 legacy recovery preserved.",
     "previousV6CompatibilityArtifact": {
       "deploymentId": "dpl_DQEvnGup417wvTxuxzeNfJvySiM5",
       "deploymentUrl": "https://liquidity-arena-2qlh5a5kn-leokings588-5902s-projects.vercel.app",
@@ -412,7 +427,7 @@
   "remainingLiveEvidence": [
     "24-hour timeout refund path; the unbacked-winner refund path is proven",
     "claim-child failure recovery or a documented protocol delivery guarantee",
-    "long-run scheduled keeper/drain monitoring and alerting; initial V7 and V6 scheduled runs are proven",
+    "matching keeper-journal API deployment, authenticated schema-v3 health, and a successful action-bearing V7 journal run; migration 003 is applied and V6 workflow 338089016 is disabled_manually at zero player liability",
     "durable server-side market telemetry",
     "provider data-use and legal review",
     "independent security review"

@@ -8,6 +8,9 @@
     },
     "api/history-sync.mjs": {
       "maxDuration": 120
+    },
+    "api/keeper-journal.mjs": {
+      "maxDuration": 15
     }
   },
   "rewrites": [

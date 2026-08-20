@@ -241,70 +241,9 @@ test('exact resolution and timeout boundaries never overlap', () => {
   assert.equal(classifyOpenEpoch({ ...epoch, status: 'RESOLVED' }, epochEnd + 90_000), null);
 });
 
-test('existing exact epochs and terminal settlements prevent duplicate writes', async () => {
+test('legacy V6 scheduler rejects execution before any write', async () => {
   const keeperConfig = config();
-  const targets = plannedFutureEpochEnds(keeperConfig, NOW);
-  const dueEnd = NOW - 3_600;
-  const fake = fakeOperator({
-    keeperConfig,
-    epochs: [
-      ...targets.map((value) => epochRecord(value)),
-      epochRecord(dueEnd, {
-        status: 'RESOLVED',
-        result_status: 'DETERMINED',
-        resolution_digest: 'already-final',
-      }),
-    ],
-  });
-  const result = await runV6KeeperOnce({
-    config: keeperConfig,
-    operator: fake.operator,
-    execute: true,
-    nowEpochSeconds: NOW,
-    logger: silentLogger,
-    sleep: noSleep,
-  });
-
-  assert.deepEqual(result.actions, []);
-  assert.deepEqual(fake.calls.submits, []);
-});
-
-test('serialized execution creates ahead, times out only expired OPEN, and resolves due OPEN', async () => {
-  const keeperConfig = config();
-  const expiredEnd = NOW - 90_000;
-  const resolvableEnd = NOW - 3_600;
-  const fake = fakeOperator({
-    keeperConfig,
-    epochs: [epochRecord(expiredEnd), epochRecord(resolvableEnd)],
-  });
-  const result = await runV6KeeperOnce({
-    config: keeperConfig,
-    operator: fake.operator,
-    execute: true,
-    nowEpochSeconds: NOW,
-    logger: silentLogger,
-    sleep: noSleep,
-  });
-
-  assert.deepEqual(fake.calls.submits.map(({ method }) => method), [
-    'create_epoch', 'create_epoch', 'create_epoch',
-    'activate_timeout_refund', 'resolve_epoch',
-  ]);
-  assert.equal(fake.maximumWritesInFlight(), 1);
-  assert.equal(result.completed.length, 5);
-  assert.equal(fake.state.get(String(expiredEnd)).status, 'TIMED_OUT');
-  assert.equal(fake.state.get(String(resolvableEnd)).status, 'RESOLVED');
-  assert.equal(fake.calls.waits.length, 5);
-});
-
-test('ACCEPTED lifecycle is never treated as execution success even when state appears changed', async () => {
-  const keeperConfig = config();
-  const fake = fakeOperator({
-    keeperConfig,
-    receiptOverride: ({ hash, method, args }) => finalizedReceipt(hash, method, args, {
-      statusName: 'ACCEPTED',
-    }),
-  });
+  const fake = fakeOperator({ keeperConfig });
 
   await assert.rejects(() => runV6KeeperOnce({
     config: keeperConfig,
@@ -315,64 +254,11 @@ test('ACCEPTED lifecycle is never treated as execution success even when state a
     sleep: noSleep,
   }), (error) => {
     assert.ok(error instanceof V6KeeperError);
-    assert.equal(error.code, 'ACTION_FAILURES');
-    assert.equal(error.details.summary.failures.length, 3);
-    assert.equal(error.details.summary.completed.length, 0);
+    assert.equal(error.code, 'V6_EXECUTION_DISABLED');
     return true;
   });
-});
-
-test('FINALIZED execution errors are rejected and the same action is left for the next run', async () => {
-  const keeperConfig = config({ epochs: { futureHours: 1 } });
-  const fake = fakeOperator({
-    keeperConfig,
-    mutateWrite: async () => {},
-    receiptOverride: ({ hash, method, args }) => finalizedReceipt(hash, method, args, {
-      txExecutionResultName: 'FINISHED_WITH_ERROR',
-    }),
-  });
-
-  await assert.rejects(() => runV6KeeperOnce({
-    config: keeperConfig,
-    operator: fake.operator,
-    execute: true,
-    nowEpochSeconds: NOW,
-    logger: silentLogger,
-    sleep: noSleep,
-  }), /keeper action\(s\) failed/);
-  assert.equal(fake.calls.submits.length, 1);
-  assert.equal(fake.calls.waits.length, 1);
-  assert.equal(fake.state.size, 0);
-});
-
-test('FINALIZED polling retries the same recorded hash without resubmitting the write', async () => {
-  const keeperConfig = config({
-    epochs: { futureHours: 1 },
-    operator: { finalityWaitAttempts: 7 },
-  });
-  const fake = fakeOperator({ keeperConfig });
-  const originalWait = fake.operator.waitFinalized;
-  let waitAttempts = 0;
-  const retryDelays = [];
-  fake.operator.waitFinalized = async (hash, policy) => {
-    waitAttempts += 1;
-    if (waitAttempts <= 6) throw new Error('transaction not found');
-    return originalWait(hash, policy);
-  };
-
-  const result = await runV6KeeperOnce({
-    config: keeperConfig,
-    operator: fake.operator,
-    execute: true,
-    nowEpochSeconds: NOW,
-    logger: silentLogger,
-    sleep: async (delayMs) => retryDelays.push(delayMs),
-  });
-  assert.equal(result.completed.length, 1);
-  assert.equal(waitAttempts, 7);
-  assert.deepEqual(retryDelays, [100, 200, 400, 800, 1_600, 3_200]);
-  assert.equal(fake.calls.submits.length, 1);
-  assert.equal(fake.calls.submits[0].hash, result.completed[0].transactionHash);
+  assert.deepEqual(fake.calls.submits, []);
+  assert.deepEqual(fake.calls.waits, []);
 });
 
 test('receipt identity must prove FINALIZED success for the exact contract method and arguments', () => {
@@ -391,39 +277,6 @@ test('receipt identity must prove FINALIZED success for the exact contract metho
     'activate_timeout_refund',
     [String(NOW)],
   ), /does not prove activate_timeout_refund/);
-});
-
-test('post-state reads retry after FINALIZED and require the intended terminal state', async () => {
-  const keeperConfig = config({ epochs: { futureHours: 1 } });
-  let postReadsRemaining = 2;
-  const fake = fakeOperator({
-    keeperConfig,
-    mutateWrite: async ({ method, args, state, defaultMutation }) => {
-      if (method === 'create_epoch') {
-        const finalRecord = epochRecord(Number(args[0]));
-        state.set(String(args[0]), { ...finalRecord, status: 'UNEXPECTED_INDEXER_VALUE' });
-        fake.operator.getEpoch = async (epochEndTimestamp) => {
-          if (postReadsRemaining > 0) {
-            postReadsRemaining -= 1;
-            return { ...finalRecord, status: 'UNEXPECTED_INDEXER_VALUE' };
-          }
-          state.set(String(epochEndTimestamp), finalRecord);
-          return structuredClone(finalRecord);
-        };
-      } else defaultMutation(method, args);
-    },
-  });
-
-  const result = await runV6KeeperOnce({
-    config: keeperConfig,
-    operator: fake.operator,
-    execute: true,
-    nowEpochSeconds: NOW,
-    logger: silentLogger,
-    sleep: noSleep,
-  });
-  assert.equal(result.completed.length, 1);
-  assert.equal(postReadsRemaining, 0);
 });
 
 test('transient read failures retry, while a policy mismatch fails before any write', async () => {
@@ -495,8 +348,8 @@ test('complete paginated history scanning reconciles OPEN epochs older than 30 h
   assert.equal(result.knownEpochCount, 8);
   assert.deepEqual(fake.calls.pages, [[0, 2], [2, 2], [4, 2], [6, 2]]);
   assert.deepEqual(result.actions, [
-    { type: 'CREATE', epochEndTimestamp: plannedFutureEpochEnds(keeperConfig, NOW)[0] },
     { type: 'TIMEOUT', epochEndTimestamp: oldOpenEnd },
+    { type: 'CREATE', epochEndTimestamp: plannedFutureEpochEnds(keeperConfig, NOW)[0] },
   ]);
 });
 

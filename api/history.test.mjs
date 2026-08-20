@@ -76,6 +76,77 @@ test('public history endpoint uses keyset pagination and never exposes repositor
   assert.equal(invalid.statusCode, 400);
 });
 
+test('public proof view paginates the live V7 fee parent without claiming treasury child credit', async () => {
+  const feeParent = '0x3df8d942bd9c5d699ee0d7816761ec5fd6264108d3a3e8bf3486c2c4f4fbb01f';
+  const treasuryChild = '0x566082ceef10482356f7aeac310098b7ece8f9c0a7e054eb1db718623602470e';
+  const deploymentId = `studionet:0x${'7'.repeat(40)}`;
+  const feeProof = {
+    transactionHash: feeParent,
+    deploymentId,
+    deploymentAlias: 'v7',
+    epochEndTimestamp: null,
+    kind: 'FEE_WITHDRAWAL',
+    method: 'withdraw_accrued_fees',
+    status: 'FINALIZED',
+    valueAtto: '0',
+    valueCredited: null,
+    parentTransactionHash: null,
+    childTransactionHashes: [],
+    verifiedAt: '2026-08-19T22:42:37.000Z',
+  };
+  const olderProof = {
+    ...feeProof,
+    transactionHash: `0x${'2'.repeat(64)}`,
+    epochEndTimestamp: '1787166000',
+    kind: 'RESOLVE_EPOCH',
+    method: 'resolve_epoch',
+  };
+  let calls = 0;
+  const repository = {
+    configured: true,
+    async listProofs(query) {
+      calls += 1;
+      assert.equal(query.view, 'proofs');
+      assert.equal(query.deployment, 'v7');
+      assert.equal(query.limit, 1);
+      if (calls === 1) {
+        assert.equal(query.cursor, null);
+        return [feeProof, olderProof];
+      }
+      assert.equal(query.cursor.transactionHash, feeParent);
+      return [olderProof];
+    },
+  };
+  const handler = createPublicHistoryHandler({ repository });
+  const first = response();
+  await handler(request({ url: '/api/history?view=proofs&deployment=v7&limit=1' }), first);
+  assert.equal(first.statusCode, 200);
+  const firstPayload = JSON.parse(first.body);
+  assert.equal(firstPayload.dataScope, 'VERIFIED_TRANSACTION_PROOFS');
+  assert.equal(firstPayload.view, 'proofs');
+  assert.equal(firstPayload.deployment, 'v7');
+  assert.equal(firstPayload.items[0].transactionHash, feeParent);
+  assert.equal(firstPayload.items[0].epochEndTimestamp, null);
+  assert.equal(firstPayload.items[0].valueCredited, null);
+  assert.deepEqual(firstPayload.items[0].childTransactionHashes, []);
+  assert.equal(firstPayload.items[0].childTransactionHashes.includes(treasuryChild), false);
+  assert.ok(firstPayload.page.nextCursor);
+
+  const second = response();
+  await handler(request({
+    url: `/api/history?view=proofs&deployment=v7&limit=1&cursor=${firstPayload.page.nextCursor}`,
+  }), second);
+  assert.equal(second.statusCode, 200);
+  const secondPayload = JSON.parse(second.body);
+  assert.equal(secondPayload.items[0].transactionHash, olderProof.transactionHash);
+  assert.equal(secondPayload.page.nextCursor, null);
+
+  const missingDeployment = response();
+  await handler(request({ url: '/api/history?view=proofs' }), missingDeployment);
+  assert.equal(missingDeployment.statusCode, 400);
+  assert.equal(calls, 2);
+});
+
 test('history sync authenticates before service work and rejects duplicate JSON keys', async () => {
   const secret = 's'.repeat(32);
   let calls = 0;

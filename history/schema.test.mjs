@@ -43,6 +43,28 @@ test('public history query is exact, bounded, keyset-cursor scoped, and rejects 
   );
 });
 
+test('public proof history requires a deployment and scopes its transaction-hash cursor', () => {
+  const feeParent = '0x3df8d942bd9c5d699ee0d7816761ec5fd6264108d3a3e8bf3486c2c4f4fbb01f';
+  const cursor = encodeHistoryCursor({ transactionHash: feeParent }, 'proofs', 'v7');
+  const parsed = parsePublicHistoryQuery(
+    new URL(`https://example.test/api/history?view=proofs&deployment=v7&limit=25&cursor=${cursor}`),
+  );
+  assert.equal(parsed.view, 'proofs');
+  assert.equal(parsed.deployment, 'v7');
+  assert.equal(parsed.cursor.transactionHash, feeParent);
+  assert.equal(parsed.cursor.deploymentFilter, 'v7');
+  assert.throws(
+    () => parsePublicHistoryQuery(new URL('https://example.test/api/history?view=proofs')),
+    /requires a deployment filter/,
+  );
+  assert.throws(
+    () => parsePublicHistoryQuery(
+      new URL(`https://example.test/api/history?view=proofs&deployment=v6&cursor=${cursor}`),
+    ),
+    /does not match/,
+  );
+});
+
 test('sync request accepts selection only and rejects outcomes, oversize work, duplicates, and standalone children', () => {
   assert.equal(parseHistorySyncBody({}).maxEpochs, 10);
   const parsed = parseHistorySyncBody({

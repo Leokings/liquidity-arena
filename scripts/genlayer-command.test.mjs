@@ -6,6 +6,7 @@ import test from 'node:test';
 import {
   assertFinalizedGenlayerExecution,
   categorizeGenlayerFailure,
+  getGenlayerTransactionStatus,
   parseGenlayerCallOutput,
   parseGenlayerReceiptOutput,
   parseGenlayerWriteOutput,
@@ -162,6 +163,42 @@ test('Studio validator timeout configuration is not misclassified as a receipt t
   assert.equal(categorizeGenlayerFailure('RPC 503 unavailable'), 'RETRYABLE_TRANSPORT');
 });
 
+test('lightweight transaction status uses the exact StudioNet JSON-RPC method', async () => {
+  let request;
+  const status = await getGenlayerTransactionStatus({
+    rpcUrl: 'https://studio.genlayer.com/api',
+    transactionHash: TRANSACTION_HASH,
+    fetchImpl: async (url, options) => {
+      request = { url: String(url), options };
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: 'FINALIZED' }), {
+        status: 200,
+      });
+    },
+  });
+  assert.equal(status, 'FINALIZED');
+  assert.equal(request.url, 'https://studio.genlayer.com/api');
+  assert.deepEqual(JSON.parse(request.options.body), {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'gen_getTransactionStatus',
+    params: [TRANSACTION_HASH],
+  });
+});
+
+test('lightweight transaction status rejects malformed or unrecognized results', async () => {
+  for (const payload of [
+    { jsonrpc: '2.0', id: 1, result: 'SOMETHING_NEW' },
+    { jsonrpc: '2.0', id: 1, result: 6 },
+    { jsonrpc: '2.0', id: 1, error: { code: -1 } },
+  ]) {
+    await assert.rejects(() => getGenlayerTransactionStatus({
+      rpcUrl: 'https://studio.genlayer.com/api',
+      transactionHash: TRANSACTION_HASH,
+      fetchImpl: async () => new Response(JSON.stringify(payload), { status: 200 }),
+    }), /status/);
+  }
+});
+
 function streamingChild({ stdout = [], stderr = [], status = 0 } = {}) {
   const child = new EventEmitter();
   child.stdout = new PassThrough();
@@ -244,6 +281,53 @@ test('hash persistence failure is never swallowed as a successful submission', a
     }),
     /Failed to persist/,
   );
+});
+
+test('stream wrapper waits for asynchronous durable hash binding even if the child closes first', async () => {
+  let releaseBinding;
+  let commandSettled = false;
+  const binding = new Promise((resolve) => { releaseBinding = resolve; });
+  const command = runGenlayerStreamingCommand({
+    invocation: { executable: 'genlayer', prefixArgs: [] },
+    command: 'write',
+    spawnImpl: () => streamingChild({
+      stdout: [`Write Transaction Hash: ${TRANSACTION_HASH}\n`],
+    }),
+    onTransactionHash: () => binding,
+    writeStdout: () => {},
+    writeStderr: () => {},
+  });
+  command.finally(() => { commandSettled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(commandSettled, false);
+
+  releaseBinding();
+  const result = await command;
+  assert.equal(result.transactionHash, TRANSACTION_HASH);
+});
+
+test('asynchronous hash binding rejection wins a close race and fails closed', async () => {
+  let rejectBinding;
+  const binding = new Promise((_resolve, reject) => { rejectBinding = reject; });
+  const command = submitGenlayerWrite({
+    invocation: { executable: 'genlayer', prefixArgs: [] },
+    args: ['contract', 'method'],
+    spawnImpl: () => streamingChild({
+      stdout: [`Write Transaction Hash: ${TRANSACTION_HASH}\n`],
+    }),
+    onTransactionHash: () => binding,
+    writeStdout: () => {},
+    writeStderr: () => {},
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  rejectBinding(new Error('Neon unavailable'));
+  await assert.rejects(command, (error) => {
+    assert.equal(error.code, 'HASH_PERSIST_FAILED');
+    assert.equal(error.transactionHash, TRANSACTION_HASH);
+    return true;
+  });
 });
 
 test('call parser safely handles the util.inspect object subset emitted by CLI 0.39.2', () => {

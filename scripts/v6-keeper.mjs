@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 import {
   assertFinalizedGenlayerExecution,
+  GENLAYER_STUDIONET_RPC_URL,
+  getGenlayerTransactionStatus,
   parseGenlayerCallOutput,
   resolveGenlayerCommand,
   runGenlayerCall,
@@ -35,7 +37,6 @@ import {
 } from './v6-keeper-config.mjs';
 
 const TERMINAL_EPOCH_STATUSES = new Set(['RESOLVED', 'UNDETERMINED', 'TIMED_OUT']);
-const RESOLUTION_TERMINAL_STATUSES = new Set(['RESOLVED', 'UNDETERMINED']);
 const EXPECTED_SETTLEMENT_MODES = Object.freeze([
   'PENDING',
   'PARIMUTUEL',
@@ -248,26 +249,6 @@ function assertNetwork(networkInfo) {
   }
 }
 
-function assertSigningAccount(accountInfo, owner, canSignLockedAccount) {
-  const activeAddress = String(accountInfo?.address ?? '').toLowerCase();
-  if (!/^0x[\da-f]{40}$/.test(activeAddress) || accountInfo?.active !== true) {
-    fail('ACCOUNT_INACTIVE', 'An active GenLayer keeper account is required for --execute');
-  }
-  if (activeAddress !== owner) {
-    fail('OWNER_MISMATCH', 'The active GenLayer keeper account is not the V6 arena owner', {
-      activeAddress,
-      owner,
-    });
-  }
-  const status = String(accountInfo?.status ?? '').toLowerCase();
-  if (status !== 'unlocked' && !canSignLockedAccount) {
-    fail(
-      'ACCOUNT_LOCKED',
-      'The keeper account is locked and GENLAYER_KEYSTORE_PASSWORD was not supplied',
-    );
-  }
-}
-
 async function withRetries(task, {
   attempts,
   baseMs,
@@ -463,7 +444,7 @@ export async function planV6KeeperRun(context) {
     }
   }
 
-  const priority = { CREATE: 0, TIMEOUT: 1, RESOLVE: 2 };
+  const priority = { TIMEOUT: 0, RESOLVE: 1, CREATE: 2 };
   actions.sort((left, right) => priority[left.type] - priority[right.type]
     || left.epochEndTimestamp - right.epochEndTimestamp);
   const selected = actions.slice(0, config.operator.maxWritesPerRun);
@@ -496,130 +477,6 @@ export function validateReceiptIdentity(receipt, contractAddress, method, args) 
   return receipt;
 }
 
-async function waitForFinalizedReceipt(context, transactionHash) {
-  const { config, operator, sleep } = context;
-  const receipt = await withRetries(
-    () => operator.waitFinalized(transactionHash, {
-      retries: config.operator.finalityRetries,
-      intervalMs: config.operator.finalityIntervalMs,
-    }),
-    {
-      attempts: config.operator.finalityWaitAttempts,
-      baseMs: Math.max(
-        config.operator.retryBaseMs,
-        config.operator.finalityIntervalMs,
-      ),
-      sleep,
-      label: `FINALIZED receipt ${transactionHash}`,
-    },
-  );
-  return receipt;
-}
-
-function assertPostState(action, epoch) {
-  const status = String(epoch?.status ?? '');
-  if (action.type === 'CREATE') {
-    if (status !== 'OPEN') fail('POST_STATE_MISMATCH', 'Created epoch is not OPEN');
-    return;
-  }
-  if (action.type === 'RESOLVE') {
-    if (!RESOLUTION_TERMINAL_STATUSES.has(status)) {
-      fail('POST_STATE_MISMATCH', `Resolved epoch remains ${status || '(missing)'}`);
-    }
-    const resultStatus = String(
-      chainField(epoch, 'result_status', 'resultStatus') ?? '',
-    );
-    if (!['DETERMINED', 'UNDETERMINED'].includes(resultStatus)) {
-      fail('POST_STATE_MISMATCH', `Resolved epoch result is ${resultStatus || '(missing)'}`);
-    }
-    const digest = String(chainField(epoch, 'resolution_digest', 'resolutionDigest') ?? '');
-    if (digest === '') fail('POST_STATE_MISMATCH', 'Resolved epoch has no resolution digest');
-    return;
-  }
-  if (status !== 'TIMED_OUT') fail('POST_STATE_MISMATCH', `Timed-out epoch remains ${status}`);
-  exactText(
-    chainField(epoch, 'result_status', 'resultStatus'),
-    'TIMEOUT',
-    'timeout result_status',
-  );
-  exactText(
-    epoch?.high?.settlement_mode ?? epoch?.high?.settlementMode,
-    'REFUND_TIMEOUT',
-    'timeout HIGH settlement_mode',
-  );
-  exactText(
-    epoch?.low?.settlement_mode ?? epoch?.low?.settlementMode,
-    'REFUND_TIMEOUT',
-    'timeout LOW settlement_mode',
-  );
-}
-
-function actionCall(config, action) {
-  if (action.type === 'CREATE') {
-    return Object.freeze({
-      method: 'create_epoch',
-      args: Object.freeze([
-        String(action.epochEndTimestamp),
-        config.epochs.minStakeAtto,
-        config.epochs.maxStakePerWalletAtto,
-      ]),
-    });
-  }
-  return Object.freeze({
-    method: action.type === 'RESOLVE' ? 'resolve_epoch' : 'activate_timeout_refund',
-    args: Object.freeze([String(action.epochEndTimestamp)]),
-  });
-}
-
-async function executeAction(context, action) {
-  const { config, operator, logger, sleep } = context;
-  const call = actionCall(config, action);
-  let transactionHash;
-  const submission = await operator.submitWrite(call.method, call.args, (hash) => {
-    transactionHash = hash;
-    logger({
-      event: 'V6_KEEPER_TRANSACTION_SUBMITTED',
-      action: action.type,
-      epochEndTimestamp: action.epochEndTimestamp,
-      transactionHash: hash,
-    });
-  });
-  transactionHash = transactionHash || submission?.transactionHash;
-  if (!/^0x[\da-f]{64}$/i.test(String(transactionHash ?? ''))) {
-    fail('TRANSACTION_HASH_MISSING', `${call.method} did not report a transaction hash`);
-  }
-  const receipt = await waitForFinalizedReceipt(context, transactionHash);
-  validateReceiptIdentity(receipt, config.contractAddress, call.method, call.args);
-
-  const epoch = await withRetries(async () => {
-    const current = await operator.getEpoch(action.epochEndTimestamp);
-    assertEpochMatchesConfiguration(config, current, action.epochEndTimestamp);
-    assertPostState(action, current);
-    return current;
-  }, {
-    attempts: config.operator.postStateAttempts,
-    baseMs: config.operator.postStateIntervalMs,
-    sleep,
-    label: `post-state ${action.type} ${action.epochEndTimestamp}`,
-  });
-  logger({
-    event: 'V6_KEEPER_ACTION_VERIFIED',
-    action: action.type,
-    epochEndTimestamp: action.epochEndTimestamp,
-    transactionHash,
-    status: epoch.status,
-  });
-  return Object.freeze({ ...action, transactionHash, status: epoch.status });
-}
-
-async function revalidateSettlementAction(context, action) {
-  if (action.type === 'CREATE') return action;
-  const epoch = await fetchEpoch(context, action.epochEndTimestamp);
-  const currentType = classifyOpenEpoch(epoch, context.nowEpochSeconds);
-  if (currentType === null) return null;
-  return Object.freeze({ ...action, type: currentType });
-}
-
 export async function runV6KeeperOnce({
   config,
   execute = false,
@@ -639,61 +496,35 @@ export async function runV6KeeperOnce({
     readChain(context, 'get_asset_catalog', () => operator.getAssetCatalog()),
     readChain(context, 'get_venue_catalog', () => operator.getVenueCatalog()),
   ]);
-  const verified = assertV6ContractConfiguration(
+  assertV6ContractConfiguration(
     config,
     contractConfig,
     assetCatalog,
     venueCatalog,
   );
   if (execute) {
-    const accountInfo = await readChain(context, 'account info', () => operator.getAccountInfo());
-    assertSigningAccount(accountInfo, verified.owner, operator.canSignLockedAccount === true);
+    fail(
+      'V6_EXECUTION_DISABLED',
+      'The legacy V6 keeper is read-only. Use the manual V6 drain for settlement recovery; V6 epoch creation is permanently disabled.',
+    );
   }
 
   const plan = await planV6KeeperRun(context);
   logger({
-    event: execute ? 'V6_KEEPER_EXECUTION_PLAN' : 'V6_KEEPER_DRY_RUN_PLAN',
+    event: 'V6_KEEPER_DRY_RUN_PLAN',
     nowEpochSeconds: now,
     actions: plan.actions,
     deferredActionCount: plan.deferredActionCount,
   });
-  if (!execute) return Object.freeze({ ...plan, execute: false, completed: [], skipped: [], failures: [] });
-
-  const completed = [];
-  const skipped = [];
-  const failures = [];
-  for (const plannedAction of plan.actions) {
-    try {
-      const action = await revalidateSettlementAction(context, plannedAction);
-      if (!action) {
-        skipped.push(Object.freeze({ ...plannedAction, reason: 'NO_LONGER_ACTIONABLE' }));
-        continue;
-      }
-      completed.push(await executeAction(context, action));
-    } catch (error) {
-      failures.push(Object.freeze({
-        ...plannedAction,
-        code: error?.code || 'ACTION_FAILED',
-        message: error instanceof Error ? error.message : String(error),
-      }));
-      logger({
-        event: 'V6_KEEPER_ACTION_FAILED',
-        action: plannedAction.type,
-        epochEndTimestamp: plannedAction.epochEndTimestamp,
-        code: error?.code || 'ACTION_FAILED',
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  const summary = Object.freeze({ ...plan, execute: true, completed, skipped, failures });
-  if (failures.length > 0) {
-    throw new V6KeeperError(
-      'ACTION_FAILURES',
-      `${failures.length} V6 keeper action(s) failed; successful actions remain verified`,
-      { summary },
-    );
-  }
-  return summary;
+  return Object.freeze({
+    ...plan,
+    execute: false,
+    recovered: [],
+    completed: [],
+    pending: [],
+    skipped: [],
+    failures: [],
+  });
 }
 
 function passwordWritingSpawn(password) {
@@ -734,6 +565,10 @@ export function createCliV6KeeperOperator({ config, environment = process.env } 
     getEpochCount: () => call('get_epoch_count'),
     getEpochPage: (offset, limit) => call('get_epoch_page', [offset, limit]),
     getEpoch: (epochEndTimestamp) => call('get_epoch', [epochEndTimestamp]),
+    getTransactionStatus: (transactionHash) => getGenlayerTransactionStatus({
+      rpcUrl: GENLAYER_STUDIONET_RPC_URL,
+      transactionHash,
+    }),
     submitWrite: (method, args, onTransactionHash) => submitGenlayerWrite({
       invocation,
       args: [config.contractAddress, method, '--args', ...args.map(String)],
@@ -753,7 +588,7 @@ export function createCliV6KeeperOperator({ config, environment = process.env } 
 }
 
 function usage() {
-  return `Reconcile exact-hour Liquidity Arena V6 epochs on StudioNet.\n\nUsage:\n  node scripts/v6-keeper.mjs --config <file> [--execute]\n\nOptions:\n  --config <file>  V6 keeper JSON configuration (required)\n  --execute        Submit serialized writes; the default is a read-only dry run\n  --help           Show this help\n\nThe selected GenLayer network must already be studionet. Set V6_CONTRACT_ADDRESS when the config uses the environment placeholder. Locked CI keystores use GENLAYER_KEYSTORE_PASSWORD via stdin; the value is never logged.`;
+  return `Inspect the retired Liquidity Arena V6 scheduler on StudioNet.\n\nUsage:\n  node scripts/v6-keeper.mjs --config <file>\n\nOptions:\n  --config <file>  V6 keeper JSON configuration (required)\n  --execute        Rejected: V6 creation is permanently disabled\n  --help           Show this help\n\nUse scripts/v6-drain.mjs manually for permissionless settlement recovery. This legacy scheduler is read-only.`;
 }
 
 function parseArguments(argv) {

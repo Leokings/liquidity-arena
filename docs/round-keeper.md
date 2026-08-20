@@ -7,6 +7,9 @@ of exact-hour targets, scans the on-chain open index, plans missing creates and 
 resolve/timeout actions, optionally submits serialized writes, verifies them, and exits. It is dry-run
 by default and does not need an open browser.
 
+Execution additionally requires the authoritative Neon keeper journal. The database is the durable
+operation/hash authority; local files, workflow artifacts, and caches are not recovery authority.
+
 The keeper's only privileged contract method is `create_epoch(E)`. Resolution and timeout are public
 methods available to every account after their gates. The owner key must never be used as the routine
 workflow signer.
@@ -38,8 +41,11 @@ node scripts/v7-keeper.mjs --config scripts/examples/v7-keeper.example.json
 ```
 
 Execution adds `--execute` and requires the configured dedicated keeper account to be selected and
-unlocked. Before each submitted action the script re-reads the active account and rejects a signer
-that no longer matches `V7_KEEPER_ADDRESS`.
+unlocked, plus `KEEPER_JOURNAL_URL` and the separate `KEEPER_JOURNAL_SECRET`. Before each submitted
+action the script re-reads the active account and rejects a signer that no longer matches
+`V7_KEEPER_ADDRESS`. Before lease acquisition it also requires authenticated journal health with
+`ready=true` and `schemaVersion=3`. If Neon is unavailable or stale before PREPARE, execution
+performs zero writes.
 
 ```powershell
 node scripts/v7-keeper.mjs --config scripts/examples/v7-keeper.example.json --execute
@@ -122,15 +128,19 @@ Every invocation:
 1. requires StudioNet and the exact V7 address;
 2. validates protocol, policy, owner, keeper, treasury, fee, stake limits, timing, precision, assets,
    venues, and resolution rules;
-3. reads the bounded open-epoch index in pages of at most 50;
-4. derives 24 exact-hour targets with sufficient creation lead;
-5. plans missing `CREATE` actions;
-6. plans `RESOLVE` for open epochs after `E+120s` and before `E+24h`;
-7. plans `TIMEOUT` after `E+24h`;
-8. caps and serializes writes;
-9. rechecks signer identity immediately before every write;
-10. captures each hash immediately and requires exact recipient/method/arguments, `FINALIZED`,
-    successful execution, and matching post-state.
+3. requires authenticated journal health on schema version 3, acquires the fenced global signer
+   lease, and recovers every nonterminal journal operation before any chain plan;
+4. stops all writes if recovery is unknown, pending, ambiguous, or otherwise unverified;
+5. reads the bounded open-epoch index in pages of at most 50 and derives 24 exact-hour targets;
+6. plans work in safety order: eligible `TIMEOUT`, due `RESOLVE`, then missing `CREATE`;
+7. caps and serializes writes and rechecks signer identity before every write;
+8. commits the exact canonical operation as `PREPARED` before broadcast;
+9. captures and remotely binds the exact transaction hash before the write wrapper may exit;
+10. permits a retry after an exact receipt-verified `FINALIZED_FAILURE` only by appending a new
+    deterministic numbered attempt, without clearing or overwriting the previous hash;
+11. uses raw lifecycle status only for liveness, then requires the full exact
+    hash/recipient/method/arguments, successful `FINALIZED` execution, and matching post-state before
+    VERIFIED.
 
 Terminal epochs leave the open index, so the normal run does not repeatedly scan all historical
 epochs. Contract guards and exact post-state checks make repeat invocations fail safely.
@@ -141,10 +151,12 @@ zero-fee fallback for an epoch that remains open.
 
 ## GitHub Actions
 
-`.github/workflows/studionet-v7-keeper.yml` is scheduled at minute 3 and minute 13 of every hour. The
-second run is a watchdog; GitHub schedules are best-effort and do not define contract time. Workflow
-writer concurrency prevents the V6 and V7 signer jobs from overlapping, and all action revisions are
-pinned. The separate read/project history job intentionally uses its own concurrency group.
+Live GitHub workflow `338089019` is `disabled_manually`. The release-candidate
+`.github/workflows/studionet-v7-keeper.yml` removes the cron and retains only `workflow_dispatch`,
+but remote `main` still has the historical minute-3/minute-13 source until merge. Historical
+activation remains evidence, not the live trigger state, and no cron restoration is claimed.
+Contract time still defines every gate. The separate read/project history job has its own
+concurrency group, but it must not run after a blocked keeper CLI result.
 
 Environment: `studionet-keeper`
 
@@ -156,6 +168,7 @@ V7_OWNER_ADDRESS
 V7_KEEPER_ADDRESS
 V7_TREASURY_ADDRESS
 V6_CONTRACT_ADDRESS
+KEEPER_JOURNAL_URL
 HISTORY_SYNC_URL (optional projection job)
 ```
 
@@ -164,6 +177,7 @@ Encrypted environment secrets:
 ```text
 V7_KEEPER_KEYSTORE_B64
 V7_KEEPER_KEYSTORE_PASSWORD
+KEEPER_JOURNAL_SECRET
 HISTORY_INGEST_SECRET (optional projection job)
 ```
 
@@ -179,23 +193,63 @@ and public repository variable `V7_KEEPER_ADDRESS` is
 
 Durable-history ingestion runs in a separate dependent job with its own concurrency group. Missing
 history configuration skips only that projection job; a configured sync failure is reported as a
-history failure after reconciliation has already completed. Database availability or an ingest
-credential can therefore never prevent epoch creation, resolution, or timeout recovery.
+history failure after reconciliation has already completed. History-projection availability never
+authorizes or blocks settlement. Keeper-journal availability is intentionally different: an outage
+before PREPARE permits zero writes, and an unresolved durable operation blocks later writes. A
+blocked keeper CLI result must be nonzero so the dependent history job does not conceal it behind a
+green workflow.
 
 Scheduled V7 run `32298454771` proved default-branch activation and reconciliation; its separate
 history job failed on the StudioNet provider quota. That projection incident did not invalidate the
 successful reconcile and was superseded by workflow-dispatch run `32299468899`: reconcile job
 `96218469576` passed exact profile/runtime-signer preflight with no actions required, and history job
 `96218806119` completed the bounded sync. Activation is proven; long-run scheduling/alert monitoring
-remains a release obligation. Final observed workflow-dispatch run `32300282482` on code commit
+remains a release obligation. Later verified workflow-dispatch run `32300282482` on code commit
 `45be825084cce9e97579ca42266e318e2e97fe17` also passed reconcile job `96221017562` and history job
 `96221327115`.
 
+Scheduled action-bearing runs later exposed a StudioNet gateway interval in which a submitted hash
+was authoritative but its receipt was not yet indexed. Main commit
+`958e51743a821606ca78881e6bcc8fb0a34a8e8f` (PR #5) now performs seven finality lookups against that
+same recorded hash, with 5/10/20/40/80/160-second outer delays (315 seconds total), and never
+resubmits the write. CI run `32310160397` passed both jobs. The first live scheduled use is now
+captured: run `32312864108`, reconcile job `96259232716`, on head `958e517`. It exhausted all seven
+lookups for CREATE `0xe6af5cd917427b5f5dadcbb77a56dc5c529a3b844a26008165c0e2c9f8d83574`
+and RESOLVE `0x0850dfa1098ce773b20c9407d602592eada74cc36004333dc3ec011930d71c7e`.
+Both exact hashes were later observed `FINALIZED`, and epoch `1787274000` was OPEN while
+`1787180400` was RESOLVED/DETERMINED. Recorded coverage is therefore at least 31 epochs, four of them
+workflow-created. The failure was receipt-index visibility beyond 315 seconds, not failed execution.
+
+The replacement safety architecture uses the authoritative Neon journal. Its migration-002
+foundation is applied to production branch
+`br-calm-fire-aup0rw0r` with checksum
+`d2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266`.
+Production read-back preserved history v1, found four journal tables and the trigger, and contained
+zero operations. Migration 003 `keeper_transaction_journal_attempts` was then applied to project
+`steep-hat-04600004`, parent branch `br-calm-fire-aup0rw0r`, as migration
+`14160d53-a2a3-43ab-a762-6bb7e54a95e8` through temporary branch
+`br-polished-shape-aund54y0`, which was deleted. Checksum
+`9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70` read back with exact versions
+1/2/3, zero operations, four attempt-lineage columns, `QUARANTINED` in the unresolved unique index,
+and the parent-freeze trigger. Do not run with `--execute` until the matching API is deployed and
+authenticated health returns `ready=true` with `schemaVersion=3`; a successful manual action-bearing
+canary is required after that.
+
 ## Monitoring and recovery
 
-- A known transaction hash is the recovery key. Inspect that exact hash and post-state before
-  considering another action.
-- Never treat `ACCEPTED` as complete; wait for `FINALIZED` and successful execution.
+- A fenced global signer lease is required across V7 and manual V6 recovery.
+- Commit an exact canonical operation as `PREPARED` in Neon before broadcast, then bind the captured
+  transaction hash immediately; a workflow artifact or cache is never authority.
+- Preserve and review `logicalOperationId`, `attemptNumber`, attempt-specific `operationId`,
+  `retryOfOperationId`, and the exact bound hash in action-bearing run evidence.
+- Recover every nonterminal operation before planning. Unknown, pending, ambiguous, quarantined, or
+  otherwise unverified evidence blocks all later writes. Only exact receipt-verified
+  `FINALIZED_FAILURE` may append a new numbered attempt; the original attempt/hash is immutable.
+- `gen_getTransactionStatus` is a bounded liveness lane only. `FINALIZED` there is not proof; require
+  the full exact hash/contract/method/arguments, successful execution, and matching post-state before
+  VERIFIED.
+- Never submit a second write merely because StudioNet returns `transaction not found`.
+- Never treat `ACCEPTED` as complete.
 - Epoch creation is idempotently rejected if already present. Resolve/timeout are rejected once the
   epoch is terminal.
 - One epoch failure must not move later exact-hour boundaries.
@@ -222,11 +276,13 @@ capability, but operational policy forbids using it. The V6 drain process:
 - verifies every exact receipt and post-state;
 - leaves claim handling to participants.
 
-`.github/workflows/studionet-v6-keeper.yml` runs this bounded drain every five minutes and shares
-the exact `studionet-liquidity-arena-writer` concurrency group with the V7 reconciler, so the common
-keeper signer cannot race its nonce across workflows. Retire the V6 workflow only after every V6
-epoch is terminal, player liability is zero, and all legacy claims/timeouts remain independently
-discoverable and callable.
+Live GitHub workflow `338089016` is `disabled_manually`. Release-candidate
+`.github/workflows/studionet-v6-keeper.yml` retains only `workflow_dispatch`, but remote `main`
+still contains the old cron until merge. The live audit found exactly five V6 epochs, all
+RESOLVED/DETERMINED, with zero remaining payout/unclaimed winning stake, zero player liability, and
+an empty drain plan. Recurring drain execution is therefore retired. If manual recovery is ever
+needed after schema-v3 readiness, it shares the authoritative fenced signer lease with V7.
+Legacy claims/timeouts remain independently discoverable and callable.
 
 Scheduled V6 drain run `32297047031` completed successfully. It used the limited signer and the
 drain-only path; it did not create a V6 epoch.
@@ -244,9 +300,11 @@ discoverable.
 
 - StudioNet and GitHub Actions have no exact availability or finality SLA.
 - The hosted RPC budget may change; reads are paged/paced and writes serialized.
-- Workflow concurrency is repository-scoped, not a distributed cross-provider lease.
+- GitHub concurrency is not a distributed lease; the Neon fenced signer lease is the write boundary.
 - External alert delivery and long-run soak evidence remain release work.
 - The Neon production schema and repeated V7/V6 snapshot ingestion are complete. Public rows cover
-  V7 E20/E19 and V6 E19 without a duplicate overlapping V6 row. Outage evidence remains pending,
-  and empty public `verifiedProofs` arrays mean transaction-proof backfill is not yet established.
-  The projection improves discovery but does not replace on-chain reconciliation.
+  V7 E20/E19 and V6 E19 without a duplicate overlapping V6 row. Protected run `32309637237` verified
+  one deployment proof, nine V7 E19 epoch proofs, and the epochless fee-withdrawal parent with zero
+  rejected requests. V7 E20 and V6 E19 remain at zero selected epoch proofs. Outage evidence and
+  broader proof coverage remain pending; the projection improves discovery but does not replace
+  on-chain reconciliation.

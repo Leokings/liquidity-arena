@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import {
   planV6DrainRun,
+  runV6DrainCli,
   runV6DrainOnce,
   V6DrainError,
 } from './v6-drain.mjs';
@@ -14,6 +15,7 @@ import {
   V6_PROTOCOL_VERSION,
   V6_VENUES,
 } from './v6-keeper-config.mjs';
+import { createMemoryAuthoritativeKeeperJournalClient } from './authoritative-keeper-journal.test-helper.mjs';
 
 const CONTRACT = '0x1111111111111111111111111111111111111111';
 const OWNER = '0x2222222222222222222222222222222222222222';
@@ -117,6 +119,7 @@ function fakeOperator({
   account = { address: PERMISSIONLESS_SIGNER, active: true, status: 'locked' },
   canSignLockedAccount = true,
   pageOverride,
+  journalHarness = createMemoryAuthoritativeKeeperJournalClient(),
 } = {}) {
   const state = new Map(epochs.map((record) => [String(record.epoch_end_timestamp), structuredClone(record)]));
   const calls = { submits: [], waits: [], pages: [], epochReads: [], sequence: [] };
@@ -126,6 +129,7 @@ function fakeOperator({
   let maximumWritesInFlight = 0;
 
   const operator = {
+    journalClient: journalHarness.client,
     canSignLockedAccount,
     getNetworkInfo: async () => ({ alias: 'studionet' }),
     getAccountInfo: async () => account,
@@ -167,7 +171,7 @@ function fakeOperator({
       const hash = `0x${(++hashIndex).toString(16).padStart(64, '0')}`;
       calls.submits.push({ method, args: [...args], hash });
       transactions.set(hash, { method, args: [...args] });
-      onTransactionHash(hash);
+      await onTransactionHash(hash);
       const epochEnd = Number(args[0]);
       if (method === 'resolve_epoch') {
         state.set(String(epochEnd), {
@@ -201,8 +205,15 @@ function fakeOperator({
         ? receiptOverride({ hash, ...transaction })
         : finalizedReceipt(hash, transaction.method, transaction.args);
     },
+    getTransactionStatus: async () => 'FINALIZED',
   };
-  return { operator, calls, state, maximumWritesInFlight: () => maximumWritesInFlight };
+  return {
+    operator,
+    calls,
+    state,
+    journalHarness,
+    maximumWritesInFlight: () => maximumWritesInFlight,
+  };
 }
 
 const noSleep = async () => {};
@@ -240,6 +251,7 @@ test('drain scans the complete paged V6 snapshot and only plans timeout/resolve 
     { type: 'TIMEOUT', epochEndTimestamp: NOW - 2 * 86_400 },
     { type: 'RESOLVE', epochEndTimestamp: NOW - 3_600 },
   ]);
+  assert.equal(result.blocked, undefined);
   assert.deepEqual(fake.calls.pages, [[0, 2], [2, 2]]);
   assert.deepEqual(fake.calls.submits, []);
 });
@@ -270,19 +282,17 @@ test('any active StudioNet signer can execute and each exact write finalizes bef
   assert.deepEqual(result.completed.map(({ status }) => status), ['TIMED_OUT', 'RESOLVED']);
 });
 
-test('receipt propagation retries the recorded hash with finality-paced backoff', async () => {
+test('lightweight lifecycle polling retries the recorded hash with finality-paced backoff', async () => {
   const fake = fakeOperator({ epochs: [epochRecord(NOW - 3_600)] });
-  const originalWait = fake.operator.waitFinalized;
   const retryDelays = [];
-  let waitAttempts = 0;
-  fake.operator.waitFinalized = async (hash, policy) => {
-    waitAttempts += 1;
-    if (waitAttempts === 1) throw new Error('transaction not found');
-    return originalWait(hash, policy);
+  let statusAttempts = 0;
+  fake.operator.getTransactionStatus = async () => {
+    statusAttempts += 1;
+    return statusAttempts === 1 ? 'PENDING' : 'FINALIZED';
   };
 
   const result = await runV6DrainOnce({
-    config: config(),
+    config: config({ operator: { finalityRetries: 2 } }),
     operator: fake.operator,
     execute: true,
     nowEpochSeconds: NOW,
@@ -291,7 +301,7 @@ test('receipt propagation retries the recorded hash with finality-paced backoff'
   });
 
   assert.equal(result.completed.length, 1);
-  assert.equal(waitAttempts, 2);
+  assert.equal(statusAttempts, 2);
   assert.deepEqual(retryDelays, [100]);
   assert.equal(fake.calls.submits.length, 1);
 });
@@ -315,29 +325,24 @@ test('locked signer without a password is rejected even though owner identity is
   assert.equal(fake.calls.submits.length, 0);
 });
 
-test('a mismatched FINALIZED receipt fails closed before post-state can certify the action', async () => {
+test('a mismatched FINALIZED contract is quarantined before post-state certification', async () => {
   const fake = fakeOperator({
     epochs: [epochRecord(NOW - 3_600)],
     receiptOverride: ({ hash, method, args }) => finalizedReceipt(hash, method, args, {
       recipient: OWNER,
     }),
   });
-  await assert.rejects(
-    runV6DrainOnce({
-      config: config(),
-      operator: fake.operator,
-      execute: true,
-      nowEpochSeconds: NOW,
-      sleep: noSleep,
-      logger: silentLogger,
-    }),
-    (error) => {
-      assert.equal(error.code, 'ACTION_FAILURES');
-      assert.equal(error.details.summary.failures.length, 1);
-      assert.match(error.details.summary.failures[0].message, /does not prove resolve_epoch/);
-      return true;
-    },
-  );
+  const result = await runV6DrainOnce({
+    config: config(),
+    operator: fake.operator,
+    execute: true,
+    nowEpochSeconds: NOW,
+    sleep: noSleep,
+    logger: silentLogger,
+  });
+  assert.equal(result.completed.length, 0);
+  assert.equal(result.pending[0].reason, 'RECEIPT_CONTRACT_MISMATCH');
+  assert.equal([...fake.journalHarness.operations.values()][0].state, 'QUARANTINED');
 });
 
 test('pagination ambiguity is rejected and the drain source has no epoch-creation call', async () => {
@@ -355,4 +360,54 @@ test('pagination ambiguity is rejected and the drain source has no epoch-creatio
 
   const source = readFileSync(new URL('./v6-drain.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /create_epoch/);
+});
+
+test('V6 drain CLI rejects a blocked summary only after the drain run has emitted it', async () => {
+  const blockedSummary = Object.freeze({
+    execute: true,
+    blocked: true,
+    pending: Object.freeze([{ reason: 'AUTHORITATIVE_OPERATION_PENDING' }]),
+    failures: Object.freeze([]),
+  });
+  const order = [];
+  const environment = Object.freeze({ KEEPER_JOURNAL_SECRET: 'test-secret' });
+  const drainConfig = Object.freeze({ network: 'studionet' });
+  const operator = Object.freeze({});
+  const journalClient = Object.freeze({});
+
+  await assert.rejects(
+    () => runV6DrainCli(['--config', 'unused.json', '--execute'], {
+      environment,
+      loadConfig: (path) => {
+        assert.equal(path, 'unused.json');
+        return drainConfig;
+      },
+      createOperator: (options) => {
+        assert.deepEqual(options, { config: drainConfig, environment });
+        return operator;
+      },
+      createJournalClient: (receivedEnvironment) => {
+        assert.equal(receivedEnvironment, environment);
+        return journalClient;
+      },
+      runOnce: async (options) => {
+        assert.deepEqual(options, {
+          config: drainConfig,
+          execute: true,
+          operator,
+          journalClient,
+        });
+        order.push('blocked-summary-emitted');
+        return blockedSummary;
+      },
+    }),
+    (error) => {
+      order.push('cli-rejected');
+      assert.ok(error instanceof V6DrainError);
+      assert.equal(error.code, 'RUN_BLOCKED');
+      assert.equal(error.details.summary, blockedSummary);
+      return true;
+    },
+  );
+  assert.deepEqual(order, ['blocked-summary-emitted', 'cli-rejected']);
 });
