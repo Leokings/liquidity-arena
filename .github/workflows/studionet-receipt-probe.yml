@@ -32,11 +32,23 @@ jobs:
           fi
       - name: Select StudioNet
         run: ./node_modules/.bin/genlayer network set studionet
+      - name: Create unfunded ephemeral read account
+        run: |
+          probe_password="$(openssl rand -hex 32)"
+          ./node_modules/.bin/genlayer account create \
+            --name receipt-probe \
+            --password "$probe_password" \
+            --overwrite >/dev/null
       - name: Print public finalized receipt
         env:
           TRANSACTION_HASH: ${{ inputs.transaction_hash }}
         run: |
-          ./node_modules/.bin/genlayer receipt "$TRANSACTION_HASH" \
+          receipt_output="$(./node_modules/.bin/genlayer receipt "$TRANSACTION_HASH" \
             --status FINALIZED \
             --retries 1 \
-            --interval 5000
+            --interval 5000 2>&1)"
+          printf '%s\n' "$receipt_output"
+          if ! grep -q 'status_name\|status:' <<<"$receipt_output"; then
+            echo "::error::StudioNet did not return receipt lifecycle evidence."
+            exit 1
+          fi
