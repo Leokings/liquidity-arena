@@ -345,8 +345,8 @@
     "recurringScheduleEnabled": false,
     "liveWorkflowId": 338089016,
     "liveWorkflowState": "disabled_manually",
-    "remoteMainSourceTriggerMode": "HISTORICAL_CRON_STILL_PRESENT_PENDING_RELEASE_MERGE",
-    "releaseCandidateSourceTriggerMode": "WORKFLOW_DISPATCH_ONLY",
+    "remoteMainSourceTriggerMode": "WORKFLOW_DISPATCH_ONLY",
+    "releaseCandidateSourceTriggerMode": "MERGED_TO_MAIN_WORKFLOW_DISPATCH_ONLY",
     "disableReason": "LIVE_ZERO_STATE_AND_ZERO_PLAYER_LIABILITY",
     "liveTerminalEpochCount": 5,
     "liveEpochStatus": "ALL_RESOLVED_DETERMINED",
@@ -354,6 +354,44 @@
     "latestDrainDryRun": {
       "actions": [],
       "deferredEpochReadCount": 0
+    }
+  },
+  "v7JournalCanaryEvidence": {
+    "sourceCommit": "f937b95a108dddd84e4fda3149452a2c22dd8f84",
+    "manualRunId": "32325583494",
+    "event": "workflow_dispatch",
+    "status": "SUCCESS",
+    "reconcileJobId": "96296050506",
+    "historyJobId": "96297112208",
+    "authenticatedJournalApiHealth": {
+      "ready": true,
+      "schemaVersion": 3
+    },
+    "verifiedOperationCount": 6,
+    "resolveOperationCount": 3,
+    "createOperationCount": 3,
+    "crossRunRecoveredOperationCount": 1,
+    "newlySubmittedAndVerifiedOperationCount": 5,
+    "evidencedEpochCountAfterManualCanary": 34,
+    "workflowCreatedEpochCountAfterManualCanary": 7,
+    "evidencedEpochCountAfterFirstRestoredScheduledRun": 35,
+    "workflowCreatedEpochCountAfterFirstRestoredScheduledRun": 8,
+    "proofViewPullRequest": 6,
+    "proofViewStatus": "MERGED_AND_DEPLOYED",
+    "v7CronRestoration": {
+      "pullRequest": 11,
+      "mergeCommit": "81850e3c814cd541d392fdeecf4dacca753d25e6",
+      "firstScheduledRunEvidence": {
+        "workflowRunId": "32329108358",
+        "event": "schedule",
+        "status": "SUCCESS",
+        "reconcileJobId": "96306191739",
+        "historyJobId": "96306791996",
+        "verifiedOperationCount": 2,
+        "postRunJournalOperationCount": 8,
+        "postRunVerifiedOperationCount": 8,
+        "postRunUnresolvedOperationCount": 0
+      }
     }
   },
   "vercel": {
@@ -392,6 +430,8 @@
   },
   "currentPublicCompatibility": {
     "recordedOn": "2026-08-19",
+    "historicalSnapshot": true,
+    "supersededByProofViewDeployment": true,
     "productionAlias": "https://liquidity-arena.vercel.app",
     "deploymentId": "dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi",
     "deploymentUrl": "https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app",
@@ -416,7 +456,20 @@
     "retiredOlderDeploymentCount": 6,
     "knownUnsafeImmutableDeploymentStatus": "REMOVED_404_VERIFIED",
     "readinessStatus": "PASS_200_V7_READY_LEGACY_V6_READABLE_ZERO_LIABILITY",
-    "artifactScopeNote": "Current READY V7 production artifact with V6 legacy recovery preserved.",
+    "artifactScopeNote": "Historical verified READY V7 artifact with V6 legacy recovery preserved; proof-view PR #6 is merged and deployed.",
+    "currentScheduleRestorationProductionArtifact": {
+      "sourceCommit": "81850e3c814cd541d392fdeecf4dacca753d25e6",
+      "githubDeploymentId": "5994871034",
+      "githubDeploymentStatus": "success",
+      "vercelDeploymentId": "dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ",
+      "vercelDeploymentUrl": "https://liquidity-arena-dz2a8196a-leokings588-5902s-projects.vercel.app",
+      "status": "READY",
+      "bundleFile": "/assets/market-BQWvq82y.js",
+      "bundleBytes": 188376,
+      "bundleSha256": "37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba",
+      "evidenceScope": "CURRENT_PRODUCTION_ARTIFACT_THAT_EXECUTED_SUCCESSFUL_V7_SCHEDULED_RUN_32329108358",
+      "postEvidenceArtifactPolicy": "VERIFY_SUCCESSOR_AFTER_COMBINED_EVIDENCE_CHANGE_MERGES"
+    },
     "previousV6CompatibilityArtifact": {
       "deploymentId": "dpl_DQEvnGup417wvTxuxzeNfJvySiM5",
       "deploymentUrl": "https://liquidity-arena-2qlh5a5kn-leokings588-5902s-projects.vercel.app",
@@ -427,7 +480,7 @@
   "remainingLiveEvidence": [
     "24-hour timeout refund path; the unbacked-winner refund path is proven",
     "claim-child failure recovery or a documented protocol delivery guarantee",
-    "matching keeper-journal API deployment, authenticated schema-v3 health, and a successful action-bearing V7 journal run; migration 003 is applied and V6 workflow 338089016 is disabled_manually at zero player liability",
+    "extended V7 scheduled-run soak and external alert delivery; manual run 32325583494 and first restored scheduled run 32329108358 are successful, while V6 workflow 338089016 remains disabled_manually at zero player liability",
     "durable server-side market telemetry",
     "provider data-use and legal review",
     "independent security review"

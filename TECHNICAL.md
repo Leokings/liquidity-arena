@@ -161,11 +161,16 @@ workflow operation.
 Historical minute-3/minute-13 activation produced scheduled run `32298454771`; reconciliation passed
 while its independent history job hit the provider quota. Later workflow-dispatch run `32299468899`
 passed exact-profile/runtime-signer reconciliation with no actions and completed bounded history
-sync. Live GitHub workflows `338089016` (V6) and `338089019` (V7) are now `disabled_manually`.
-Release-candidate YAML removes both cron schedules and retains `workflow_dispatch`, but remote
-`main` still contains the historical schedule source until merge. Contract time defines every gate.
-`resolve_epoch` and `activate_timeout_refund` remain permissionless, so scheduler loss cannot create
-an exclusive operator deadlock.
+sync. The authoritative-journal canary then completed successfully in manual run `32325583494` on
+commit `f937b95a108dddd84e4fda3149452a2c22dd8f84`: reconcile job `96296050506` verified six operations
+(three resolves and three creates), recovering one exact operation across runs and submitting and
+verifying five new operations; history job `96297112208` also succeeded. Authenticated journal API
+health was active at `ready=true`, `schemaVersion=3`. V6 workflow `338089016` remains
+`disabled_manually`, and its `main` YAML is `workflow_dispatch`-only. PR #11 merged as `81850e3` and
+restored the V7 cron source. Scheduled run `32329108358` passed reconcile job `96306191739` and
+history job `96306791996`, verifying one resolve and one create. Contract time defines
+every gate. `resolve_epoch` and `activate_timeout_refund` remain permissionless, so scheduler loss
+cannot create an exclusive operator deadlock.
 
 Readiness shares the same deployment configuration as the server. For V7 it checks chain, contract
 identity, roles, stake and fee policy, exact-hour coverage, and all five live feeds. A V6 legacy
@@ -196,16 +201,17 @@ prepared as migration `1e440327-2e66-403d-934d-c302790ac775` on temporary branch
 `br-sweet-frost-auakkl85`, applied identically to Neon production branch
 `br-calm-fire-aup0rw0r`, and the temporary branch was deleted. Final checksum
 `d2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266`
-read back with unchanged history v1, four journal tables, the trigger, and zero operations.
+read back with unchanged history v1, four journal tables, the trigger, and zero operations at that
+migration-time read-back.
 Migration 003 `keeper_transaction_journal_attempts` was then applied to project
 `steep-hat-04600004`, parent branch `br-calm-fire-aup0rw0r`, as migration
 `14160d53-a2a3-43ab-a762-6bb7e54a95e8` through temporary branch
 `br-polished-shape-aund54y0`, which was deleted. Checksum
 `9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70` read back with exact versions
-1/2/3, zero operations, four attempt-lineage columns, `QUARANTINED` in the unresolved unique index,
-and the parent-freeze trigger. The database schema is ready, but execution stays disabled until the
-matching API is deployed and authenticated journal health returns `ready=true` with
-`schemaVersion=3`.
+1/2/3, zero operations at that migration-time read-back, four attempt-lineage columns,
+`QUARANTINED` in the unresolved unique index, and the parent-freeze trigger. The matching API is now
+deployed, authenticated health reports `ready=true` with `schemaVersion=3`, and manual run
+`32325583494` proved the schema under six VERIFIED live operations.
 
 ## V6 compatibility boundary
 
@@ -217,8 +223,8 @@ used. An earlier pre-resolution observation left epochs `1787162400` and `178716
 (RESOLVABLE and SCHEDULED); later drains resolved them with `0x03f2ac80…0399` and
 `0x7e8030f0…27bb`. A final live audit found exactly five epochs, all RESOLVED/DETERMINED,
 zero remaining payout/unclaimed winning stake, zero player liability, and no drain action. Recurring
-drain execution is retired; live workflow `338089016` is `disabled_manually`, while the
-`workflow_dispatch`-only source change remains pending merge. The browser
+drain execution is retired; live workflow `338089016` is `disabled_manually`, and its merged `main`
+source is `workflow_dispatch`-only. The browser
 deployment registry must enforce:
 
 - V7 only for new epoch discovery and new wagers after cutover;
@@ -240,8 +246,9 @@ scheduled workflow is continuously active. Two additional exact-hour epochs, `17
 `1787259600`, were then created and OPEN-state verified through the dedicated keeper transactions
 recorded above.
 
-The later workflow-created epoch `1787274000` raises the evidenced total to at least 31 exact-hour
-epochs: 25 seeded, two local dedicated-keeper creates, and four workflow-created epochs.
+The manual canary and first restored scheduled run raise the live read-back total to 35 exact-hour
+epochs: 25 seeded, two local dedicated-keeper creates, and eight workflow-created epochs. Neon held
+eight journal operations, all VERIFIED, with zero unresolved after the scheduled run.
 
 The funded canary resolved with transaction
 `0xc2c86fdb37da9569e67eae00a15b6864ddab05364e92f4d6c0c4c75d6a4aab66` from four qualified venues.
@@ -252,7 +259,7 @@ remaining 0.002 GEN to treasury. Balances moved from 0.700/0.648/0.400 GEN befor
 0.800/0.946/0.002 after claims, to 0.802/0.946/0 after fee withdrawal; 1.748 GEN was conserved at
 each checkpoint.
 
-The current production artifact is Vercel deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi`, READY at
+Historical verified production artifact `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` was READY at
 `https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app` and serving the production
 alias. Vercel metadata anchors it to receipt-proof commit
 `e5627ebd270a7c6d5291151795b0af6442eba0a6` while recording `gitDirty=1`; exact browser artifact
@@ -261,17 +268,23 @@ identity is bundle `market-BHlwjm1W.js` with SHA-256
 passed browser/operator job `96247333491` and intelligent-contracts job `96247333299`. Health,
 readiness, and history
 health returned `200`. Readiness identified V7, two covered epochs, five feeds, and readable V6 with
-zero known player liability.
+zero known player liability. Proof view PR #6 has since merged and is deployed. The current
+schedule-restoration production artifact that executed run `32329108358` is READY Vercel deployment
+`dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, GitHub deployment `5994871034`, source
+`81850e3c814cd541d392fdeecf4dacca753d25e6`. Bundle `/assets/market-BQWvq82y.js` is 188376 bytes with
+SHA-256 `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`.
 
 Main commit `958e51743a821606ca78881e6bcc8fb0a34a8e8f` separately extends keeper receipt propagation to
 seven attempts on the same hash, using 315 seconds of outer backoff and no write resubmission; CI run
 `32310160397` passed. Scheduled run `32312864108`, job `96259232716`, on that exact head then
 exhausted all seven lookups for CREATE `0xe6af…3574` and RESOLVE `0x0850…c7e`. Both exact writes
 later reached `FINALIZED` and applied their OPEN/RESOLVED post-states. This proves receipt indexing
-can lag beyond 315 seconds; it is not a successful journal-backed action run. The new proof view is
-unmerged and undeployed in [open PR #6](https://github.com/Leokings/liquidity-arena/pull/6) at
-commit [`2f52f6e`](https://github.com/Leokings/liquidity-arena/commit/2f52f6e), so it is not part of
-the verified production bundle.
+can lag beyond 315 seconds; it is not a successful journal-backed action run. Proof view PR #6 later
+merged and was deployed. Manual run `32325583494` subsequently proved the authoritative recovery
+path by recovering one exact operation across runs and ending with six VERIFIED operations without
+duplicate submission. Restored scheduled run `32329108358` then verified RESOLVE `1787194800` and
+CREATE `1787288400`; post-run journal read-back was 8/8 VERIFIED with zero unresolved, and dependent
+history synchronization passed.
 
 Observed StudioNet finality has been in the tens-of-seconds range, and an earlier V6 funded resolver
 was observed at 53.38 seconds record-to-finalized. These are samples for UX design only, not a bound
@@ -280,9 +293,8 @@ delivery.
 
 ## Current release gaps
 
-- matching journal-API deployment and authenticated schema-v3 health;
-- a successful manual action-bearing journal run and reviewed V7 monitoring/alerting before any
-  schedule restoration; live V6 workflow remains disabled at zero player liability;
+- extended scheduled-run soak and external alert delivery; live V6 workflow remains disabled at zero
+  player liability;
 - database-outage recovery and proof coverage beyond the selected V7 deployment/canary/fee set;
 - continued public browser/wallet soak plus a rollback rehearsal that never re-enables V6 writes;
 - live 24-hour timeout evidence and a documented safe boundary for asynchronous child failure;

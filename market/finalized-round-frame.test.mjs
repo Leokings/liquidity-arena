@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import { MARKET_ASSETS, createMarketFrame } from './index.js';
 import {
+  canReuseFinalizedRoundVector,
+  hasVerifiedFinalizedRoundVector,
   reconcileFinalizedRoundFrame,
   roundMatchesDisplayTarget,
   selectRoundTargets,
@@ -154,4 +156,24 @@ test('finalized reconstruction rejects incomplete or internally inconsistent vec
     ),
     /HIGH winner disagrees/,
   );
+});
+
+test('only a complete vector that agrees with the fresh terminal epoch is reusable', () => {
+  const round = finalRound();
+  assert.equal(hasVerifiedFinalizedRoundVector(round, finalAssets), true);
+  assert.equal(canReuseFinalizedRoundVector(round, finalAssets, round), true);
+  assert.equal(canReuseFinalizedRoundVector(
+    round,
+    finalAssets,
+    finalRound({ epochEndTimestamp: round.epochEndTimestamp + 3_600 }),
+  ), false);
+  assert.equal(hasVerifiedFinalizedRoundVector(round, finalAssets.slice(0, 4)), false);
+  assert.equal(hasVerifiedFinalizedRoundVector(
+    finalRound({ epoch: { ...round.epoch, highWinnerAssetId: 'BTC' } }),
+    finalAssets,
+  ), false);
+  assert.equal(hasVerifiedFinalizedRoundVector(
+    finalRound({ status: 'OPEN' }),
+    finalAssets,
+  ), false);
 });

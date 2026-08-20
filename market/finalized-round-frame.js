@@ -111,6 +111,25 @@ function normalizedFinalVector(round, assetRecords) {
 }
 
 /**
+ * Returns true only when a cached finalized vector is complete and still
+ * agrees with a freshly-read terminal epoch. Callers can then reuse the
+ * immutable five-asset return records without suppressing the epoch read
+ * that detects an unexpected settlement change.
+ */
+export function hasVerifiedFinalizedRoundVector(round, assetRecords) {
+  try {
+    return normalizedFinalVector(round, assetRecords) !== null;
+  } catch {
+    return false;
+  }
+}
+
+export function canReuseFinalizedRoundVector(cachedRound, cachedAssetRecords, freshRound) {
+  return Number(cachedRound?.epochEndTimestamp) === Number(freshRound?.epochEndTimestamp)
+    && hasVerifiedFinalizedRoundVector(freshRound, cachedAssetRecords);
+}
+
+/**
  * Rebuild only a ROUND frame from the selected deployment's FINALIZED return vector.
  * Prices remain live display quotes, momentum still controls flow, and
  * volatility still controls turbulence; settlement returns alone control
