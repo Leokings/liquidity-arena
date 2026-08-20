@@ -1,0 +1,42 @@
+name: StudioNet Receipt Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      transaction_hash:
+        description: Public StudioNet transaction hash to inspect
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Validate public transaction hash
+        env:
+          TRANSACTION_HASH: ${{ inputs.transaction_hash }}
+        run: |
+          if [[ ! "$TRANSACTION_HASH" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::Expected an exact StudioNet transaction hash."
+            exit 1
+          fi
+      - name: Select StudioNet
+        run: ./node_modules/.bin/genlayer network set studionet
+      - name: Print public finalized receipt
+        env:
+          TRANSACTION_HASH: ${{ inputs.transaction_hash }}
+        run: |
+          ./node_modules/.bin/genlayer receipt "$TRANSACTION_HASH" \
+            --status FINALIZED \
+            --retries 1 \
+            --interval 5000
