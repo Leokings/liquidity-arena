@@ -21,7 +21,21 @@ pari-mutuel objectives: highest return (`HIGH`) and lowest return (`LOW`).
 | Operator | Limited epoch-creation keeper; permissionless resolve/timeout; V7 workflow `338089019` active at minute 27 with durable writer queue, V6 workflow `338089016` disabled |
 | Keeper write authority | Active authoritative Neon journal: 64/64 operations VERIFIED, 0 unresolved after the 24-hour checkpoint and post-merge run |
 | Public host | [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app), V7 active/READY; runtime guarantees last changed at source `a1c773a`, while later docs-only publication deployments may own the alias; V6 legacy recovery remains readable |
-| Operations health | Projection integrity 32/32 with zero gaps; GitHub-native synthetic issue delivery/recovery passes; independent pager optional |
+| Operations health | Projection integrity 32/32 with zero gaps; live Cloudflare keeper dispatch, downstream watchdog success, and conditional-skip paths pass; independent pager optional |
+
+As of 2026-08-21, the current claim/refund UX fix is a release candidate, not the public artifact
+described in this table. Its prominent pre-modal CTA exposes a truth-labeled aggregate or check
+state; it preserves same-deployment wallet sessions, labels cross-deployment reload/reconnect, and
+carries nonsecret exact claim intent through reload. The pre-write quote is intent: immediately
+before writing, the runtime rechecks exact quote identity, wallet account, and StudioNet. Finalized
+actual proceeds must be at least the quote; the exact child plus persisted activity/recovery use that
+actual amount.
+Aggregates are verified-current only after all known rows load and all deployment reads succeed;
+failed or refreshing cached deployments remain neutral `LAST VERIFIED`/`PARTIAL` evidence with
+retry controls and no false `≥` lower bound. Local evidence is 208/208 market tests, 80/80 focused
+claim tests, 22/22 Playwright cases (11 journeys across `chromium`/`mobile-chromium`, Desktop
+Chrome/Pixel 7, one worker), 432/432 full tests, a 477-module build, and audit 0. PR/merge,
+deployment, and live-wallet proof remain required.
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is retained for historical reads, eligible
 resolves/timeouts, and claims. Its due epochs `1787155200` and `1787158800` were resolved on
@@ -220,10 +234,17 @@ production-safety claim:
   and workflow `338089019` is active, while V6 workflow `338089016` remains disabled. Restored
   scheduled runs `32329108358` and `32332196428` each passed with two VERIFIED operations and green
   history. The later 24-hour delivered-run audit, projection repair/integrity gate, and GitHub-native
-  watchdog delivery/recovery are complete. GitHub schedule delivery (25/52 nominal records), live
-  timeout evidence, and rollback rehearsal remain; independent third-party paging is optional;
+  watchdog delivery/recovery are complete. Cloudflare Worker version `536e6476…cea7` subsequently
+  dispatched keeper run `32473485508` (VERIFIED RESOLVE `0x62331f…c746`, CREATE
+  `0x310fc6…5445`, and 3/3 history); downstream `workflow_run` watchdog `32473776356` succeeded;
+  the Worker then logged
+  `CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded` at minute 57. GitHub schedule delivery
+  (25/52 nominal records), live timeout evidence, and rollback rehearsal remain; independent
+  third-party paging is optional;
 - active V7 player liability is 2 GEN across two eligible unclaimed refunds; it is an outstanding
   participant obligation and intentionally does not fail service readiness;
+- ambiguous V7 child-transfer recovery is an unresolved protocol P1. V7 is immutable; the proposed
+  V8 state machine is documented in [`V8-PAYOUT-RECOVERY.md`](V8-PAYOUT-RECOVERY.md);
 - independent security and provider data-use/legal review remain.
 
 Observed StudioNet finalization has commonly been under one minute, but this is not an SLA. Reviewers
@@ -235,10 +256,13 @@ must be told that StudioNet is temporary test infrastructure and faucet GEN has 
    recovery.
 2. Continue public browser/wallet soak and prove that V6 recovery stays accessible while the app
    routes no new V6 writes; monitor that the retained owner creation capability remains unused.
-3. Monitor minute-27 GitHub delivery and preserve scheduled journal/coverage/finality/role checks
-   while V6 remains disabled at zero liability; optionally add an independent third-party pager.
-4. Record a 24-hour timeout proof or clearly retain it as a known demo limitation.
-5. Complete independent security and provider/legal review, screenshots, demo video, repository
+3. Monitor minute-27 GitHub and the live Cloudflare backup while preserving scheduled
+   journal/coverage/finality/role checks and V6's disabled zero-liability posture; optionally add an
+   independent third-party pager.
+4. Merge/deploy the claim/refund UX candidate and record a live StudioNet wallet journey.
+5. Record a 24-hour timeout proof or clearly retain it as a known demo limitation.
+6. Resolve or formally accept the V7 child-recovery P1 before any real-value claim.
+7. Complete independent security and provider/legal review, screenshots, demo video, repository
    cleanup, and rollback evidence.
 
 Until those gates pass, the correct claim is “public V7 StudioNet test-token release with V6 recovery

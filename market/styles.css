@@ -1421,32 +1421,57 @@ input:focus-visible {
   background: rgba(80, 230, 179, 0.035);
 }
 
-.claim-wager {
+.claim-wager,
+.claim-reconnect,
+.position-refresh {
   width: 100%;
-  min-height: 34px;
+  min-height: 44px;
   margin-top: 10px;
   border: 1px solid rgba(80, 230, 179, 0.32);
   border-radius: 4px;
   color: #bff9e2;
   background: rgba(80, 230, 179, 0.08);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 1px;
   cursor: pointer;
 }
 
 .claim-wager:disabled { border-color: var(--line); color: #59675f; background: transparent; cursor: not-allowed; }
+.claim-reconnect {
+  border-color: rgba(185, 243, 90, 0.55);
+  color: #e9ffc5;
+  background: rgba(185, 243, 90, 0.12);
+}
+.position-refresh {
+  border-color: rgba(255, 187, 92, 0.46);
+  color: #ffe1b7;
+  background: rgba(255, 187, 92, 0.1);
+}
+.position-refresh:disabled { cursor: wait; opacity: .6; }
+.claim-reconnect[hidden],
+.position-refresh[hidden] { display: none; }
+.claim-reconnect:hover { border-color: var(--lime); background: rgba(185, 243, 90, 0.18); }
+.claim-reconnect:focus-visible,
+.position-refresh:focus-visible,
+.claim-wager:focus-visible,
+.unlock-refund:focus-visible,
+.claim-summary-action:focus-visible,
+.wallet-history-errors button:focus-visible {
+  outline: 2px solid #e9ffc5;
+  outline-offset: 2px;
+}
 
 .unlock-refund {
   width: 100%;
-  min-height: 34px;
+  min-height: 44px;
   margin-top: 8px;
   padding: 7px 10px;
   border: 1px solid rgba(255, 187, 92, 0.38);
   border-radius: 4px;
   color: #ffe1b7;
   background: rgba(255, 187, 92, 0.08);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1.35;
   letter-spacing: 1px;
@@ -1476,6 +1501,73 @@ input:focus-visible {
 }
 
 .activity-heading strong { color: var(--faint); font-size: 5.5px; }
+.claim-summary {
+  margin-top: 11px;
+  padding: 12px;
+  border: 1px solid rgba(80, 230, 179, 0.42);
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(80, 230, 179, 0.12), rgba(185, 243, 90, 0.04));
+}
+.claim-summary[hidden] { display: none; }
+.claim-summary > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: #bff9e2;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.claim-summary > div:first-child strong { color: #efffd4; font: 700 13px/1.2 var(--mono); }
+.claim-summary > p { margin: 7px 0 0; color: #a7c8ba; font-size: 8px; line-height: 1.45; }
+.claim-summary-actions { display: grid; gap: 8px; margin-top: 10px; }
+.claim-summary-actions > div { display: grid; gap: 4px; }
+.claim-summary-actions > div > span { color: #83a093; font-size: 8px; line-height: 1.35; }
+.claim-summary-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 9px 12px;
+  border: 1px solid rgba(80, 230, 179, 0.48);
+  border-radius: 5px;
+  color: #efffd4;
+  background: rgba(80, 230, 179, 0.13);
+  font: 700 10px/1.35 var(--mono);
+  letter-spacing: .8px;
+  text-align: center;
+  text-decoration: none;
+}
+.claim-summary-action:hover { border-color: #8ff1ce; background: rgba(80, 230, 179, 0.2); }
+.wallet-history-errors { display: grid; gap: 7px; margin-top: 9px; }
+.wallet-history-errors[hidden] { display: none; }
+.wallet-history-errors p {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid rgba(243, 152, 142, 0.3);
+  border-radius: 5px;
+  color: #f3b2aa;
+  background: rgba(243, 152, 142, 0.06);
+  font-size: 8px;
+  line-height: 1.4;
+}
+.wallet-history-errors button {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 1px solid rgba(243, 152, 142, 0.4);
+  border-radius: 4px;
+  color: #ffd1ca;
+  background: rgba(243, 152, 142, 0.08);
+  font: 700 8px/1.2 var(--mono);
+  cursor: pointer;
+}
+.wallet-history-errors button:disabled { cursor: wait; opacity: .6; }
 .activity-empty,
 .claim-reminder { margin: 9px 0 0; color: var(--faint); font-size: 6.5px; line-height: 1.45; }
 .claim-reminder { color: #8ff1ce; }
@@ -1493,6 +1585,17 @@ input:focus-visible {
 .wallet-activity li[data-status="finalized"] a { color: #8ff1ce; }
 .wallet-activity li[data-status="review"] a { color: #f3988e; }
 .wallet-activity li a:hover { text-decoration: underline; }
+.wallet-activity li a.wallet-position-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 6px 9px;
+  border: 1px solid rgba(80, 230, 179, 0.3);
+  border-radius: 4px;
+  color: #bff9e2;
+  background: rgba(80, 230, 179, 0.08);
+  text-decoration: none;
+}
 .load-more-positions {
   width: 100%;
   margin-top: 10px;
@@ -1716,7 +1819,7 @@ input:focus-visible {
     margin: 0;
     font-size: 6px;
   }
-  .prediction-cta { grid-row: 3; grid-column: 1 / -1; min-height: 38px; margin-top: 2px; }
+  .prediction-cta { grid-row: 3; grid-column: 1 / -1; min-height: 44px; margin-top: 2px; }
   .prediction-cta strong { font-size: 11px; }
 
   .mobile-asset-strip {
@@ -1779,6 +1882,13 @@ input:focus-visible {
   .stake-input-row { align-items: stretch; flex-direction: column; }
   .stake-presets button { flex: 1 1 0; }
   .stake-presets { width: 100%; }
+  .claim-wager,
+  .claim-reconnect,
+  .position-refresh,
+  .unlock-refund,
+  .claim-summary-action { min-height: 48px; font-size: 11px; }
+  .wallet-history-errors p { align-items: stretch; flex-direction: column; }
+  .wallet-history-errors button { min-height: 44px; }
 }
 
 @media (max-width: 420px) {

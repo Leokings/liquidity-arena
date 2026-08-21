@@ -173,8 +173,13 @@ successful `main` keeper run before conditionally dispatching `studionet-v7-keep
 does the same for `studionet-ops-watchdog.yml`. Use a new fine-grained GitHub token limited to this
 repository with Actions read/write, stored only through Wrangler's hidden Cloudflare-secret prompt.
 Never provide Cloudflare with the keeper keystore/password, journal secret, Neon URL, owner key, or
-treasury key. Production activation requires Worker deployment, exact Cron Trigger readback, one
-observed `:37`/`:57` cycle, and downstream workflow/journal/history/issue verification.
+treasury key. Production activation is now evidenced for Worker version
+`536e6476-3c4e-4b93-a454-700f55d6cea7`. Minute-37 dispatch produced successful keeper run
+[`32473485508`](https://github.com/Leokings/liquidity-arena/actions/runs/32473485508), including
+VERIFIED RESOLVE `0x62331f…c746`, CREATE `0x310fc6…5445`, and 3/3 history projection. Watchdog run
+[`32473776356`](https://github.com/Leokings/liquidity-arena/actions/runs/32473776356) succeeded. The
+following minute-57 Worker log emitted `CLOUDFLARE_BACKUP_SKIPPED` with reason
+`current_hour_run_succeeded`, proving that an already healthy current-hour run is not duplicated.
 
 Environment: `studionet-keeper`
 
@@ -441,6 +446,18 @@ The V7 profile is implemented and tested. Canary epoch `1787166000` proved three
 claim parent/child deliveries. `scripts/fee-delivery-monitor.mjs` independently proved the 0.002 GEN
 fee-withdrawal parent `0x3df8d942…bb01f` and child `0x566082ce…470e`. Both monitors remain read-only;
 healthy delivery evidence does not provide a safe retry for an ambiguous failed/delayed child.
+V7 has no upgrader or payout-retry state, so this is an unresolved protocol P1; the current 2 GEN
+across two eligible unclaimed refunds remains participant liability. See
+[`V8-PAYOUT-RECOVERY.md`](V8-PAYOUT-RECOVERY.md) for the fresh-contract/idempotent-escrow proposal.
+As of 2026-08-21, the local claim/refund UI candidate improves pre-modal discovery, fail-closed
+quote selection, cross-deployment reconnect, and validated retryable reads. Failed or refreshing
+cached deployment results remain neutral `LAST VERIFIED`/`PARTIAL` evidence and never a false `≥`
+lower bound. The pre-write quote is intent; wallet account and StudioNet are rechecked immediately
+before writing; finalized actual proceeds must be at least the quote; and exact child delivery plus
+activity/recovery use the actual amount. The candidate passes 208/208 market, 80/80 focused claim,
+22/22 Playwright cases across 11 `chromium`/`mobile-chromium` journeys, and 432/432 full tests, plus
+a 477-module build and audit 0, but remains unmerged, undeployed, and not live-wallet tested; it does
+not change keeper or delivery authority.
 
 ## V6 legacy drain
 
@@ -479,7 +496,8 @@ discoverable.
 - The hosted RPC budget may change; reads are paged/paced and writes serialized.
 - GitHub concurrency is not a distributed lease; the Neon fenced signer lease is the write boundary.
 - The 24-hour delivered-run audit is complete, but GitHub emitted only 25 of 52 nominal schedule
-  records; minute-27 delivery must continue to be measured.
+  records; minute-27 delivery must continue to be measured. The independent Cloudflare backup is
+  live, with successful keeper dispatch, downstream watchdog success, and conditional-skip evidence.
 - The schema-v3 journal/API/action-bearing gate, 64/64 VERIFIED read-back, integrity repair, and
   GitHub-native watchdog delivery/recovery are complete; independent third-party alerting is optional.
 - The Neon production schema and repeated V7/V6 snapshot ingestion are complete. Public rows cover

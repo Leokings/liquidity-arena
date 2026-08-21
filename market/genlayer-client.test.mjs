@@ -742,7 +742,7 @@ test('claim delivery validation fails closed for acceptance-time or malformed va
       ...base,
       messages: [{ ...base.messages[0], value: '201' }],
     }, account, 200n),
-    /does not exactly match the quoted payout/,
+    /does not exactly match the verified claimed amount/,
   );
   assert.throws(
     () => verifyClaimTransferMessage({
@@ -955,7 +955,7 @@ test('raw child proof requires an exact finalized credited transfer from the cla
   );
 });
 
-test('claim delivery rejects an exposed child value above the exact quoted payout', async () => {
+test('claim delivery rejects an exposed child value above the exact verified claimed amount', async () => {
   const account = '0x2222222222222222222222222222222222222222';
   const gateway = new GenLayerGateway({ contractAddress: CONTRACT, network: 'studionet' });
   gateway.client = {
@@ -1006,7 +1006,7 @@ test('claim delivery rejects an exposed child value above the exact quoted payou
     (error) => error?.deliveryStatus === 'REVIEW'
       && error?.hash === CLAIM_PARENT_HASH
       && error?.childHash === CLAIM_CHILD_HASH
-      && /does not exactly match the quoted payout/.test(error.message),
+      && /does not exactly match the verified claimed amount/.test(error.message),
   );
 });
 
@@ -1208,6 +1208,86 @@ test('V6 placeEpochWager sends objective, asset, and exact native StudioNet GEN 
   assert.equal(write.value, amount);
 });
 
+test('wager and timeout-refund writes fail closed on immediate wallet context drift', async (t) => {
+  const account = '0x2222222222222222222222222222222222222222';
+  const otherAccount = '0x3333333333333333333333333333333333333333';
+  const amount = 500_000_000_000_000_000n;
+  const operations = [
+    {
+      name: 'active wager',
+      gatewayOptions: {},
+      invoke: (gateway) => gateway.placeEpochWager(1_787_162_400, 'HIGH', 'BTC', amount),
+      readResult: { choice_asset_id: '', stake_atto: '0' },
+    },
+    {
+      name: 'timeout refund',
+      gatewayOptions: {
+        deploymentAlias: 'v6',
+        protocolVersion: 'LIQUIDITY_ARENA_V6',
+        newWagersEnabled: false,
+      },
+      invoke: (gateway) => gateway.activateTimeoutRefund(1_787_162_400),
+      readResult: { status: 'TIMED_OUT', result_status: 'TIMEOUT' },
+    },
+  ];
+  const drifts = [
+    { name: 'network', error: /network changed before signing/ },
+    { name: 'account', error: /account changed before signing/ },
+    { name: 'client', error: /changed before signing/ },
+  ];
+
+  for (const operation of operations) {
+    for (const drift of drifts) {
+      await t.test(`${operation.name}: ${drift.name} drift`, async () => {
+        let gateway;
+        let chainReads = 0;
+        let accountReads = 0;
+        let writeCount = 0;
+        const replacementClient = {
+          async writeContract() {
+            writeCount += 1;
+            return CLAIM_PARENT_HASH;
+          },
+        };
+        const provider = { async request({ method }) {
+          if (method === 'eth_chainId') {
+            chainReads += 1;
+            if (chainReads === 2 && drift.name === 'client') gateway.client = replacementClient;
+            return chainReads === 2 && drift.name === 'network' ? '0x1' : '0xf22f';
+          }
+          if (method === 'eth_accounts') {
+            accountReads += 1;
+            return [accountReads === 2 && drift.name === 'account' ? otherAccount : account];
+          }
+          if (method === 'eth_getBalance') return `0x${amount.toString(16)}`;
+          throw new Error(`Unexpected ${method}`);
+        } };
+        gateway = new GenLayerGateway({
+          contractAddress: CONTRACT,
+          network: 'studionet',
+          provider,
+          ...operation.gatewayOptions,
+        });
+        gateway.account = account;
+        gateway.walletVerified = true;
+        gateway.client = {
+          async readContract() { return operation.readResult; },
+          async writeContract() {
+            writeCount += 1;
+            return CLAIM_PARENT_HASH;
+          },
+        };
+
+        await assert.rejects(operation.invoke(gateway), drift.error);
+        assert.equal(writeCount, 0, `${operation.name} must not write after ${drift.name} drift`);
+        assert.equal(chainReads, 2);
+        assert.equal(accountReads, 2);
+        assert.equal(gateway.connected, false);
+      });
+    }
+  }
+});
+
 test('legacy deployment gateway rejects new wagers before wallet or contract access', async () => {
   const gateway = new GenLayerGateway({
     contractAddress: CONTRACT,
@@ -1280,7 +1360,7 @@ test('gateway rejects arbitrary or protocol-conflicting deployment identities', 
 });
 
 test('V6 claimEpoch is nonpayable and verifies the objective-specific claim and delivery', async () => {
-  const account = '0x2222222222222222222222222222222222222222';
+  const account = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
   const amount = 750_000_000_000_000_000n;
   const provider = { async request({ method }) {
     if (method === 'eth_chainId') return '0xf22f';
@@ -1303,7 +1383,14 @@ test('V6 claimEpoch is nonpayable and verifies the objective-specific claim and 
     async readContract(call) {
       calls.push({ type: 'read', call });
       if (call.functionName === 'get_claim_quote') {
-        return { eligible: true, claimed: false, claim_amount_atto: amount.toString() };
+        return {
+          epoch_end_timestamp: 1_787_162_400,
+          objective: 'LOW',
+          account: account.toUpperCase().replace('0X', '0x'),
+          eligible: true,
+          claimed: false,
+          claim_amount_atto: amount.toString(),
+        };
       }
       return { claimed: true, claimed_amount_atto: amount.toString() };
     },
@@ -1332,17 +1419,220 @@ test('V6 claimEpoch is nonpayable and verifies the objective-specific claim and 
       contractAddress: CONTRACT,
       epochEndTimestamp: '1787162400',
       objective: 'LOW',
+      quotedAmountAtto: amount.toString(),
     },
   }]);
+  assert.equal(result.quotedAmount, amount);
+  assert.equal(result.quotedAmountAtto, amount.toString());
+  assert.equal(result.actualAmount, amount);
+  assert.equal(result.actualAmountAtto, amount.toString());
   const write = calls.find(({ type }) => type === 'write').call;
   assert.equal(write.functionName, 'claim');
   assert.deepEqual(write.args, [1_787_162_400n, 'LOW']);
   assert.equal(write.value, 0n);
 });
 
-test('V6 claimEpoch rejects a finalized claimed amount above the exact quote', async () => {
+test('V6 claimEpoch preserves recovery metadata when the submission observer throws after broadcast', async () => {
   const account = '0x2222222222222222222222222222222222222222';
+  const quotedAmount = 750_000_000_000_000_000n;
+  const provider = { async request({ method }) {
+    if (method === 'eth_chainId') return '0xf22f';
+    if (method === 'eth_accounts') return [account];
+    throw new Error(`Unexpected ${method}`);
+  } };
+  let writeCount = 0;
+  let finalizationWaited = false;
+  const gateway = new GenLayerGateway({
+    contractAddress: CONTRACT,
+    network: 'studionet',
+    deploymentAlias: 'v6',
+    protocolVersion: 'LIQUIDITY_ARENA_V6',
+    newWagersEnabled: false,
+    provider,
+  });
+  gateway.account = account;
+  gateway.walletVerified = true;
+  gateway.client = {
+    async readContract({ functionName }) {
+      assert.equal(functionName, 'get_claim_quote');
+      return {
+        epoch_end_timestamp: 1_787_162_400,
+        objective: 'LOW',
+        account,
+        eligible: true,
+        claimed: false,
+        amount_atto: quotedAmount.toString(),
+      };
+    },
+    async writeContract() {
+      writeCount += 1;
+      return CLAIM_PARENT_HASH;
+    },
+    async waitForTransactionReceipt() {
+      finalizationWaited = true;
+      return studioFinalizedReceipt();
+    },
+  };
+
+  await assert.rejects(
+    gateway.claimEpoch(1_787_162_400, 'low', {
+      onSubmitted() { throw new Error('journal observer failed'); },
+    }),
+    (error) => error?.hash === CLAIM_PARENT_HASH
+      && error?.quotedAmount === quotedAmount
+      && error?.quotedAmountAtto === quotedAmount.toString()
+      && /journal observer failed/.test(error.message),
+  );
+  assert.equal(writeCount, 1);
+  assert.equal(finalizationWaited, false);
+});
+
+test('V6 claimEpoch rejects mismatched authoritative quote identity before writing', async (t) => {
+  const account = '0x2222222222222222222222222222222222222222';
+  const otherAccount = '0x3333333333333333333333333333333333333333';
   const amount = 750_000_000_000_000_000n;
+  const cases = [
+    {
+      name: 'epoch mismatch',
+      quote: { epoch_end_timestamp: 1_787_162_401, objective: 'LOW', account },
+      error: /different epoch/,
+    },
+    {
+      name: 'objective mismatch',
+      quote: { epoch_end_timestamp: 1_787_162_400, objective: 'HIGH', account },
+      error: /different objective/,
+    },
+    {
+      name: 'account mismatch',
+      quote: { epoch_end_timestamp: 1_787_162_400, objective: 'LOW', account: otherAccount },
+      error: /different wallet account/,
+    },
+    {
+      name: 'non-canonical account',
+      quote: { epoch_end_timestamp: 1_787_162_400, objective: 'LOW', account: ` ${account}` },
+      error: /invalid wallet account identity/,
+    },
+    {
+      name: 'zero account',
+      quote: { epoch_end_timestamp: 1_787_162_400, objective: 'LOW', account: `0x${'0'.repeat(40)}` },
+      error: /invalid wallet account identity/,
+    },
+  ];
+
+  for (const claimCase of cases) {
+    await t.test(claimCase.name, async () => {
+      const provider = { async request({ method }) {
+        if (method === 'eth_chainId') return '0xf22f';
+        if (method === 'eth_accounts') return [account];
+        throw new Error(`Unexpected ${method}`);
+      } };
+      let writeCount = 0;
+      const gateway = new GenLayerGateway({
+        contractAddress: CONTRACT,
+        network: 'studionet',
+        deploymentAlias: 'v6',
+        protocolVersion: 'LIQUIDITY_ARENA_V6',
+        newWagersEnabled: false,
+        provider,
+      });
+      gateway.account = account;
+      gateway.walletVerified = true;
+      gateway.client = {
+        async readContract({ functionName }) {
+          assert.equal(functionName, 'get_claim_quote');
+          return {
+            ...claimCase.quote,
+            eligible: true,
+            claimed: false,
+            claim_amount_atto: amount.toString(),
+          };
+        },
+        async writeContract() {
+          writeCount += 1;
+          return CLAIM_PARENT_HASH;
+        },
+      };
+
+      await assert.rejects(
+        gateway.claimEpoch(1_787_162_400, 'low'),
+        claimCase.error,
+      );
+      assert.equal(writeCount, 0);
+    });
+  }
+});
+
+test('V6 claimEpoch rechecks the same account and StudioNet network immediately before writing', async (t) => {
+  const account = '0x2222222222222222222222222222222222222222';
+  const otherAccount = '0x3333333333333333333333333333333333333333';
+  const amount = 750_000_000_000_000_000n;
+  const cases = [
+    {
+      name: 'network drift',
+      chainId(readCount) { return readCount === 1 ? '0xf22f' : '0x1'; },
+      activeAccount() { return account; },
+      error: /network changed before signing/,
+    },
+    {
+      name: 'account drift',
+      chainId() { return '0xf22f'; },
+      activeAccount(readCount) { return readCount === 1 ? account : otherAccount; },
+      error: /account changed before signing/,
+    },
+  ];
+
+  for (const driftCase of cases) {
+    await t.test(driftCase.name, async () => {
+      let chainReads = 0;
+      let accountReads = 0;
+      const provider = { async request({ method }) {
+        if (method === 'eth_chainId') return driftCase.chainId(++chainReads);
+        if (method === 'eth_accounts') return [driftCase.activeAccount(++accountReads)];
+        throw new Error(`Unexpected ${method}`);
+      } };
+      let writeCount = 0;
+      const gateway = new GenLayerGateway({
+        contractAddress: CONTRACT,
+        network: 'studionet',
+        deploymentAlias: 'v6',
+        protocolVersion: 'LIQUIDITY_ARENA_V6',
+        newWagersEnabled: false,
+        provider,
+      });
+      gateway.account = account;
+      gateway.walletVerified = true;
+      gateway.client = {
+        async readContract({ functionName }) {
+          assert.equal(functionName, 'get_claim_quote');
+          return {
+            epoch_end_timestamp: 1_787_162_400,
+            objective: 'LOW',
+            account,
+            eligible: true,
+            claimed: false,
+            amount_atto: amount.toString(),
+          };
+        },
+        async writeContract() {
+          writeCount += 1;
+          return CLAIM_PARENT_HASH;
+        },
+      };
+
+      await assert.rejects(
+        gateway.claimEpoch(1_787_162_400, 'low'),
+        driftCase.error,
+      );
+      assert.equal(writeCount, 0);
+      assert.equal(gateway.connected, false);
+    });
+  }
+});
+
+test('V6 claimEpoch binds delivery to a finalized rounding remainder above the signing quote', async () => {
+  const account = '0x2222222222222222222222222222222222222222';
+  const quotedAmount = 750_000_000_000_000_000n;
+  const actualAmount = quotedAmount + 1n;
   const provider = { async request({ method }) {
     if (method === 'eth_chainId') return '0xf22f';
     if (method === 'eth_accounts') return [account];
@@ -1363,8 +1653,84 @@ test('V6 claimEpoch rejects a finalized claimed amount above the exact quote', a
     async readContract() {
       readCount += 1;
       return readCount === 1
-        ? { eligible: true, claimed: false, amount_atto: amount.toString() }
-        : { claimed: true, claimed_atto: (amount + 1n).toString() };
+        ? {
+            epoch_end_timestamp: 1_787_162_400,
+            objective: 'LOW',
+            account,
+            eligible: true,
+            claimed: false,
+            amount_atto: quotedAmount.toString(),
+          }
+        : { claimed: true, claimed_atto: actualAmount.toString() };
+    },
+    async writeContract() { return CLAIM_PARENT_HASH; },
+    async waitForTransactionReceipt() { return studioFinalizedReceipt(); },
+  };
+  const discovered = [];
+  gateway.verifyClaimDelivery = async (hash, options) => {
+    assert.equal(hash, CLAIM_PARENT_HASH);
+    assert.equal(options.recipient, account);
+    assert.equal(options.minimumValueAtto, actualAmount);
+    options.onChildDiscovered?.(CLAIM_CHILD_HASH, {
+      account,
+      contractAddress: CONTRACT,
+    });
+    return { status: 'DELIVERED', childHash: CLAIM_CHILD_HASH };
+  };
+
+  const result = await gateway.claimEpoch(1_787_162_400, 'low', {
+    onDeliveryDiscovered: (childHash, metadata) => discovered.push({ childHash, metadata }),
+  });
+
+  assert.equal(result.quotedAmount, quotedAmount);
+  assert.equal(result.quotedAmountAtto, quotedAmount.toString());
+  assert.equal(result.actualAmount, actualAmount);
+  assert.equal(result.actualAmountAtto, actualAmount.toString());
+  assert.equal(result.delivery.childHash, CLAIM_CHILD_HASH);
+  assert.deepEqual(discovered, [{
+    childHash: CLAIM_CHILD_HASH,
+    metadata: {
+      account,
+      contractAddress: CONTRACT,
+      quotedAmountAtto: quotedAmount.toString(),
+      actualAmountAtto: actualAmount.toString(),
+    },
+  }]);
+});
+
+test('V6 claimEpoch rejects a finalized amount below the signing quote before delivery verification', async () => {
+  const account = '0x2222222222222222222222222222222222222222';
+  const quotedAmount = 750_000_000_000_000_000n;
+  const actualAmount = quotedAmount - 1n;
+  const provider = { async request({ method }) {
+    if (method === 'eth_chainId') return '0xf22f';
+    if (method === 'eth_accounts') return [account];
+    throw new Error(`Unexpected ${method}`);
+  } };
+  const gateway = new GenLayerGateway({
+    contractAddress: CONTRACT,
+    network: 'studionet',
+    deploymentAlias: 'v6',
+    protocolVersion: 'LIQUIDITY_ARENA_V6',
+    newWagersEnabled: false,
+    provider,
+  });
+  gateway.account = account;
+  gateway.walletVerified = true;
+  let readCount = 0;
+  gateway.client = {
+    async readContract() {
+      readCount += 1;
+      return readCount === 1
+        ? {
+            epoch_end_timestamp: 1_787_162_400,
+            objective: 'LOW',
+            account,
+            eligible: true,
+            claimed: false,
+            amount_atto: quotedAmount.toString(),
+          }
+        : { claimed: true, claimed_atto: actualAmount.toString() };
     },
     async writeContract() { return CLAIM_PARENT_HASH; },
     async waitForTransactionReceipt() { return studioFinalizedReceipt(); },
@@ -1372,13 +1738,17 @@ test('V6 claimEpoch rejects a finalized claimed amount above the exact quote', a
   let deliveryChecked = false;
   gateway.verifyClaimDelivery = async () => {
     deliveryChecked = true;
-    throw new Error('Delivery verification should not run for inconsistent claim state.');
+    return { status: 'DELIVERED', childHash: CLAIM_CHILD_HASH };
   };
 
   await assert.rejects(
     gateway.claimEpoch(1_787_162_400, 'low'),
     (error) => error?.hash === CLAIM_PARENT_HASH
-      && /does not exactly match the quoted payout/.test(error.message),
+      && error?.quotedAmount === quotedAmount
+      && error?.quotedAmountAtto === quotedAmount.toString()
+      && error?.actualAmount === actualAmount
+      && error?.actualAmountAtto === actualAmount.toString()
+      && /below the amount verified immediately before signing/.test(error.message),
   );
   assert.equal(deliveryChecked, false);
 });

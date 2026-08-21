@@ -197,6 +197,15 @@
           <button type="button" data-objective="LOW" aria-pressed="false">LOWEST RETURN</button>
         </div>
 
+        <section class="claim-summary" id="claim-summary" aria-labelledby="claim-summary-title" hidden>
+          <div>
+            <span id="claim-summary-title">REFUNDS &amp; PAYOUTS READY</span>
+            <strong id="claim-summary-total">— GEN</strong>
+          </div>
+          <p id="claim-summary-copy"></p>
+          <div class="claim-summary-actions" id="claim-summary-actions" role="list"></div>
+        </section>
+
         <div class="round-meta">
           <div><span>ROUND</span><strong id="round-id">LOADING</strong></div>
           <div><span>ENTRY CLOSES</span><strong id="round-entry-deadline">—</strong></div>
@@ -235,7 +244,7 @@
           <p class="estimate-note">PARIMUTUEL ESTIMATE · PAYOUT CHANGES AS WAGERS ENTER UNTIL CLOSE</p>
         </section>
 
-        <section class="wallet-position" id="wallet-position" data-state="empty" aria-labelledby="position-title">
+        <section class="wallet-position" id="wallet-position" data-state="empty" aria-labelledby="position-title" tabindex="-1">
           <div class="position-heading">
             <span id="position-title">YOUR ON-CHAIN POSITION</span>
             <strong id="position-state">CONNECT WALLET</strong>
@@ -245,6 +254,12 @@
             <div><dt>STAKED</dt><dd id="position-stake">— GEN</dd></div>
             <div><dt>CLAIMABLE</dt><dd id="position-claimable">— GEN</dd></div>
           </dl>
+          <button class="claim-reconnect" id="claim-reconnect" type="button" hidden>
+            RECONNECT WALLET TO VERIFY &amp; CLAIM
+          </button>
+          <button class="position-refresh" id="position-refresh" type="button" hidden>
+            RETRY POSITION VERIFICATION
+          </button>
           <button class="claim-wager" id="claim-wager" type="button" disabled>CLAIM UNAVAILABLE</button>
           <button class="unlock-refund" id="unlock-refund" type="button" hidden disabled>
             EMERGENCY PRINCIPAL UNLOCK UNAVAILABLE
@@ -257,6 +272,7 @@
             <strong>ON-CHAIN + THIS BROWSER</strong>
           </div>
           <p class="claim-reminder" id="claim-reminder" hidden></p>
+          <div class="wallet-history-errors" id="wallet-history-errors" role="region" aria-live="polite" aria-label="Wallet position history status" hidden></div>
           <p class="activity-empty" id="activity-empty">Transaction hashes will remain here after a refresh.</p>
           <ol id="activity-list"></ol>
           <button class="load-more-positions" id="load-more-positions" type="button" hidden>

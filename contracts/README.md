@@ -17,6 +17,25 @@ This is an operational retirement, not an immutable V6 contract revocation. The 
 epoch during its window. Supported app and automation paths expose neither operation; the owner must
 not call V6 `create_epoch` again.
 
+## V7 immutability and payout-recovery boundary
+
+V7 registers no upgrader and exposes no upgrade method, so the deployed contract cannot receive an
+in-place payout-recovery patch. Its `claim()` state/accounting effects occur before the independent
+native value-transfer child is emitted. A delayed or ambiguous child therefore cannot be retried
+safely: it might later credit and turn a second payment into a double payment. The delivery monitors
+remain read-only, and this is an unresolved protocol P1 rather than a browser-only defect.
+
+The active V7 deployment currently reports 2 GEN across two eligible unclaimed refunds. Those are
+participant obligations and remain claimable on V7. A fresh-deployment V8 state machine,
+delivery-loss reserve, and idempotent payout-escrow proposal are documented in
+[`../docs/V8-PAYOUT-RECOVERY.md`](../docs/V8-PAYOUT-RECOVERY.md). The local claim/refund UX release
+candidate improves discovery and reconnection but does not change this contract boundary. Its
+pre-write quote is intent; wallet account and StudioNet are rechecked immediately before writing;
+finalized actual proceeds must be at least that quote; and delivery plus activity/recovery use the
+actual amount. Its 2026-08-21 local evidence—208/208 market, 80/80 focused claim, 22/22 browser cases
+across 11 `chromium`/`mobile-chromium` journeys, and 432/432 full tests, plus a 477-module build and
+audit 0—is not deployment or live-wallet evidence.
+
 ## V7 contract boundary
 
 V7 owns:

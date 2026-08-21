@@ -20,6 +20,21 @@ now recorded as receipt-index failure evidence, not pending success evidence. De
 rotation, default-branch signer/profile preflight, repeated history projection, selected proof
 backfill, and public V7 cutover are complete.
 
+The independent Cloudflare backup is no longer pending activation: Worker version `536e6476…cea7`
+dispatched successful keeper run `32473485508` (VERIFIED RESOLVE `0x62331f…c746`, CREATE
+`0x310fc6…5445`, and 3/3 history projection), successful watchdog run `32473776356`, and later
+logged a minute-57 `CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded` decision. As of
+2026-08-21, the claim/refund UX release candidate passes 208/208 market tests, 80/80 focused claim
+tests, 22/22 Playwright cases (11 journeys across `chromium`/`mobile-chromium`, Desktop Chrome/Pixel
+7, one worker), 432/432 full tests, a 477-module build, and audit 0. Cached failed/refreshing
+deployment rows remain neutral
+`LAST VERIFIED`/`PARTIAL` evidence and never a false `≥` lower bound. The candidate remains
+unmerged, undeployed, and not live-wallet tested.
+
+The claim money path treats its pre-write quote as intent. It rechecks exact quote identity, wallet
+account, and StudioNet immediately before writing. Finalized actual proceeds must be at least the
+quote; the exact child is verified against that actual amount, which activity/recovery persists.
+
 ## V7 deployment identity
 
 | Field | Recorded value |
@@ -203,7 +218,10 @@ an unbounded payout loop and duplicate economic claims.
 
 The remaining value-delivery concern is asynchronous EOA child failure. Because a delayed child can
 still finalize, automatically replaying a recorded claim is unsafe. The included monitor intentionally
-does not submit or retry transactions; it only proves delivery or reports an ambiguous state.
+does not submit or retry transactions; it only proves delivery or reports an ambiguous state. V7
+has no upgrader or delivery-retry state, so this remains a protocol P1. The current 2 GEN across two
+eligible unclaimed refunds remains participant liability. A fresh-deployment state machine and
+idempotent escrow are specified in [`V8-PAYOUT-RECOVERY.md`](V8-PAYOUT-RECOVERY.md).
 
 ## Legacy V6 evidence and drain
 
@@ -344,7 +362,10 @@ Before submission, record fresh results for:
 - V6 legacy liability/read/resolve/timeout/claim verification, public-write gating, and owner
   abstention monitoring, while preserving its zero-liability disabled-drain posture;
 - continued scheduled journal/coverage/role/finality monitoring and GitHub delivery evidence; the
-  repository-native alert path is proven, with optional independent paging as defense in depth;
+  repository-native alert path and Cloudflare keeper-dispatch/watchdog-skip paths are proven, with
+  optional independent paging as defense in depth;
+- merge/deploy evidence and a live StudioNet wallet journey for the claim/refund UX candidate;
+- explicit acceptance or resolution of the V7 asynchronous child-recovery P1 before real-value use;
 - Neon outage recovery and extended proof coverage against the migrated, repeatedly populated schema;
 - public Vercel health, readiness, same-origin RPC, exchange stream, CSP, console, wallet, history,
   and rollback checks;

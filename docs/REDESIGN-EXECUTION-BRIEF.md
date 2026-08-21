@@ -4,6 +4,27 @@ This brief turns [the V7 product specification](REDESIGN-SPEC.md) into a release
 what is deployed, what is verified, and what must still pass before any public-value readiness claim.
 A checked box must be backed by reproducible local output or immutable StudioNet/public evidence.
 
+## Release-candidate delta — 2026-08-21
+
+- [x] Cloudflare backup activation is publicly evidenced: Worker version `536e6476…cea7`, successful
+  keeper dispatch run `32473485508` with VERIFIED RESOLVE `0x62331f…c746`, CREATE
+  `0x310fc6…5445`, and 3/3 history projection; successful watchdog run `32473776356`; and an
+  observed minute-57 `CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded` decision.
+- [x] As of 2026-08-21, claim/refund UX changes pass 208/208 market tests, 80/80 focused
+  claim tests, 22/22 Playwright cases (11 journeys across `chromium`/`mobile-chromium`, Desktop
+  Chrome/Pixel 7, one worker), 432/432 full tests, a 477-module build, and audit 0.
+- [x] Claim aggregates are verified-current only after complete known pagination and successful
+  deployment reads. Failed or refreshing cached deployments remain neutral `LAST VERIFIED`/
+  `PARTIAL` evidence with `CHECK`/`RETRY`, never a false `≥` lower bound.
+- [x] The pre-write quote is intent; wallet account and StudioNet are rechecked immediately before
+  writing; finalized actual proceeds must be at least the quote; exact child delivery and persisted
+  activity/recovery use that actual amount.
+- [ ] Claim/refund UX changes are not yet merged, deployed, or verified with a live StudioNet wallet.
+- [ ] Active V7 liability remains 2 GEN across two eligible unclaimed refunds.
+- [ ] V7 ambiguous asynchronous-child recovery remains a protocol P1. V7 is immutable; the proposed
+  fresh V8 state machine and idempotent payout escrow are in
+  [`V8-PAYOUT-RECOVERY.md`](V8-PAYOUT-RECOVERY.md).
+
 ## 1. Frozen design
 
 | Decision | Value |
@@ -371,9 +392,11 @@ The V7 contract, initial full-day schedule, funded canary, dedicated keeper rota
 scheduler preflight, repeated Neon state projection, and public V7 promotion are complete. The
 selected proof backfill, proof-view deployment, authenticated schema-v3 journal API health, a
 successful six-operation authoritative-journal canary, the 24-hour delivered-run audit, projection
-repair/integrity gate, and end-to-end GitHub-native watchdog delivery are also complete. The release
-still needs outage/broader-proof evidence, timeout evidence, schedule-delivery monitoring, and
-independent reviews; a third-party pager remains optional. The post-soak manual keeper/projection run and current
+repair/integrity gate, end-to-end GitHub-native watchdog delivery, and independent Cloudflare
+keeper-dispatch/watchdog-skip evidence are also complete. The release still needs outage/broader-
+proof evidence, timeout evidence, schedule-delivery monitoring, claim UX merge/deploy/live-wallet
+proof, protocol child-recovery closure, and independent reviews; a third-party pager remains
+optional. The post-soak manual keeper/projection run and current
 production runtime are recorded. The prior
 seven-attempt live run remains recorded as a failed lookup despite both exact writes later
 finalizing/applying.
@@ -381,7 +404,10 @@ finalizing/applying.
 The next safe sequence is:
 
 1. extend transaction-proof coverage and rehearse database outage recovery;
-2. monitor minute-27 GitHub schedule delivery; optionally connect an independent third-party pager;
-3. continue public browser/wallet soak with V6 legacy recovery;
-4. rehearse rollback without re-enabling V6 writes;
-5. finish operational/external review and submission media.
+2. monitor minute-27 GitHub plus the live Cloudflare backup; optionally connect an independent
+   third-party pager;
+3. merge and deploy the claim/refund UX candidate, then verify its exact wallet journey on StudioNet;
+4. continue public browser/wallet soak with V6 legacy recovery;
+5. decide the V8 payout-recovery boundary before any real-value claim;
+6. rehearse rollback without re-enabling V6 writes;
+7. finish operational/external review and submission media.

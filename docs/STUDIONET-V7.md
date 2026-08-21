@@ -20,6 +20,34 @@ The machine-readable source of record is
 [`../deployments/studionet-v7.json`](../deployments/studionet-v7.json). This document adds operational
 context; it does not replace the JSON evidence.
 
+## 2026-08-21 release-candidate update
+
+Cloudflare backup activation is now evidenced, without changing the V7 contract identity or any
+recorded Vercel artifact ID. Worker version `536e6476-3c4e-4b93-a454-700f55d6cea7` dispatched keeper
+run `32473485508`; reconciliation VERIFIED RESOLVE `0x62331f…c746` and CREATE `0x310fc6…5445`, and
+history synchronized 3/3 epochs/snapshots. Watchdog run `32473776356` succeeded. A subsequent
+minute-57 Worker log emitted `CLOUDFLARE_BACKUP_SKIPPED` with
+`current_hour_run_succeeded`, proving the conditional skip path.
+
+Claim/refund UX hardening is local release-candidate code only. As of 2026-08-21, pre-modal
+aggregate eligibility, same-page route/session preservation, explicit cross-deployment reconnect,
+exact reload intent, fail-closed quote identity, last-good validated pagination, and accessible
+actions pass 208/208 market tests, 80/80 focused claim tests, 22/22 Playwright cases (11 journeys
+across `chromium`/`mobile-chromium`, Desktop Chrome/Pixel 7, one worker), 432/432 full tests, a
+477-module build, and audit 0. Verified-current aggregates require complete known pagination and
+successful deployment reads;
+failed or refreshing cached rows are neutral `LAST VERIFIED`/`PARTIAL` evidence with no false `≥`
+lower bound. The changes are not yet merged, deployed, or live-wallet tested.
+
+The pre-write quote is intent. The runtime rechecks exact quote identity, wallet account, and
+StudioNet immediately before writing; finalized actual proceeds must be at least the quote; exact
+child delivery is verified against the actual amount; and activity/recovery stores that actual.
+
+V7 still reports 2 GEN of active player liability across two eligible unclaimed refunds. Because V7
+has no upgrader and applies claim accounting before its independent transfer child, ambiguous-child
+recovery remains a protocol P1. The proposed fresh V8 state machine and idempotent escrow are in
+[`V8-PAYOUT-RECOVERY.md`](V8-PAYOUT-RECOVERY.md).
+
 ## Deployed policy
 
 - assets: BTC, ETH, BNB, SOL, XRP;

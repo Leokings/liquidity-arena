@@ -186,6 +186,38 @@ function contractAddressBytes(value) {
   return bytes;
 }
 
+function assertClaimQuoteIdentity(quote, { epochEndTimestamp, objective, account }) {
+  if (!quote || typeof quote !== 'object' || Array.isArray(quote)) {
+    throw new TypeError('Claim quote must be an object with verifiable identity fields.');
+  }
+
+  let quotedEpoch;
+  try {
+    quotedEpoch = epochEnd(quote.epoch_end_timestamp);
+  } catch {
+    throw new TypeError('Claim quote returned an invalid epoch identity.');
+  }
+  if (quotedEpoch !== epochEndTimestamp) {
+    throw new Error('Claim quote belongs to a different epoch.');
+  }
+
+  if (typeof quote.objective !== 'string' || quote.objective !== objective) {
+    throw new Error('Claim quote belongs to a different objective.');
+  }
+
+  if (typeof quote.account !== 'string'
+    || !ADDRESS_PATTERN.test(quote.account)
+    || ZERO_ADDRESS_PATTERN.test(quote.account)) {
+    throw new TypeError('Claim quote returned an invalid wallet account identity.');
+  }
+  if (typeof account !== 'string'
+    || !ADDRESS_PATTERN.test(account)
+    || ZERO_ADDRESS_PATTERN.test(account)
+    || quote.account.toLowerCase() !== account.toLowerCase()) {
+    throw new Error('Claim quote belongs to a different wallet account.');
+  }
+}
+
 function walletRpcCode(error) {
   const queue = [error];
   const seen = new Set();
@@ -899,7 +931,7 @@ export function verifyRawClaimChildTransaction(
     'Raw claim child value',
   );
   if (value !== expected) {
-    throw new Error('Raw claim child value does not exactly match the quoted payout.');
+    throw new Error('Raw claim child value does not exactly match the verified claimed amount.');
   }
   const valueCredited = singleRawField(
     transaction,
@@ -1017,7 +1049,7 @@ export function verifyClaimTransferMessage(transaction, recipient, minimumValueA
   }
   const valueAtto = messageInteger(message.value, 'Claim message value');
   if (valueAtto !== expected) {
-    throw new Error('The finalized claim message value does not exactly match the quoted payout.');
+    throw new Error('The finalized claim message value does not exactly match the verified claimed amount.');
   }
   if (!emptyMessageData(message.data)) {
     throw new Error('The finalized claim message contains call data and is not a plain value transfer.');
@@ -1240,6 +1272,53 @@ export class GenLayerGateway {
       throw new Error('The active wallet account changed. Reconnect before sending test GEN.');
     }
     return this.account;
+  }
+
+  async _assertWalletTransactionContext(expectedAccount) {
+    const expected = String(expectedAccount || '');
+    const provider = this._walletProvider();
+    const client = this.client;
+    if (!ADDRESS_PATTERN.test(expected)
+      || ZERO_ADDRESS_PATTERN.test(expected)
+      || !this.walletConfigured
+      || !this.connected
+      || !provider
+      || this.account.toLowerCase() !== expected.toLowerCase()) {
+      this._invalidateWallet('TRANSACTION_CONTEXT_CHANGED');
+      throw new Error('The wallet connection changed before signing. Reconnect and verify the claim again.');
+    }
+
+    const descriptor = walletNetworkDescriptor(this.networkDescriptor);
+    let chainId;
+    let accounts;
+    try {
+      [chainId, accounts] = await Promise.all([
+        provider.request({ method: 'eth_chainId' }),
+        provider.request({ method: 'eth_accounts' }),
+      ]);
+    } catch {
+      this._invalidateWallet('TRANSACTION_CONTEXT_UNVERIFIED');
+      throw new Error('The wallet account and StudioNet network could not be reverified before signing.');
+    }
+    if (chainIdNumber(chainId) !== descriptor.chainId) {
+      this._invalidateWallet('CHAIN_MISMATCH');
+      throw new Error(
+        `Wallet network changed before signing. Reconnect to ${descriptor.label} (chain ${descriptor.chainId}).`,
+      );
+    }
+    const activeAccount = accounts?.[0];
+    if (!activeAccount
+      || !ADDRESS_PATTERN.test(activeAccount)
+      || ZERO_ADDRESS_PATTERN.test(activeAccount)
+      || activeAccount.toLowerCase() !== expected.toLowerCase()
+      || !this.connected
+      || this.client !== client
+      || this._walletProvider() !== provider
+      || this.account.toLowerCase() !== expected.toLowerCase()) {
+      this._invalidateWallet('ACCOUNT_MISMATCH');
+      throw new Error('The active wallet account changed before signing. Reconnect and verify the claim again.');
+    }
+    return client;
   }
 
   async _readClient() {
@@ -1686,7 +1765,7 @@ export class GenLayerGateway {
         && !Number.isSafeInteger(child.value);
       if (!unsafeSdkInteger || !rawProofEndpoint) {
         if (messageInteger(child.value, 'Claim transfer child value') !== expected) {
-          throw claimDeliveryError('The finalized claim transfer child value does not exactly match the quoted payout.', {
+          throw claimDeliveryError('The finalized claim transfer child value does not exactly match the verified claimed amount.', {
             hash,
             childHash,
           });
@@ -1733,8 +1812,8 @@ export class GenLayerGateway {
     }
   }
 
-  async _waitForSuccessfulFinalization(hash) {
-    const receipt = await this.client.waitForTransactionReceipt({
+  async _waitForSuccessfulFinalization(hash, client = this.client) {
+    const receipt = await client.waitForTransactionReceipt({
       hash,
       status: FINALIZED_STATUS,
       interval: FINALITY_POLL_INTERVAL_MS,
@@ -1764,22 +1843,23 @@ export class GenLayerGateway {
     }
     const before = await this.readEpochEntry(epochTimestamp, normalizedObjective, account);
     const beforeStake = before ? atto(before.stake_atto ?? 0n, 'Existing stake') : 0n;
-    const hash = await this.client.writeContract({
+    const signingClient = await this._assertWalletTransactionContext(account);
+    const hash = await signingClient.writeContract({
       address: this.contractAddress,
       functionName: 'enter',
       args: [epochTimestamp, normalizedObjective, normalizedAsset],
       value: amount,
     });
-    if (typeof onSubmitted === 'function') {
-      onSubmitted(hash, Object.freeze({
-        account,
-        contractAddress: this.contractAddress,
-        epochEndTimestamp: epochTimestamp.toString(),
-        objective: normalizedObjective,
-      }));
-    }
     try {
-      const receipt = await this._waitForSuccessfulFinalization(hash);
+      if (typeof onSubmitted === 'function') {
+        onSubmitted(hash, Object.freeze({
+          account,
+          contractAddress: this.contractAddress,
+          epochEndTimestamp: epochTimestamp.toString(),
+          objective: normalizedObjective,
+        }));
+      }
+      const receipt = await this._waitForSuccessfulFinalization(hash, signingClient);
       const entry = await this.readEpochEntry(epochTimestamp, normalizedObjective, account);
       const verifiedStake = entry ? atto(entry.stake_atto ?? 0n, 'Verified stake') : 0n;
       if (!entry || verifiedStake < beforeStake + amount) {
@@ -1804,6 +1884,11 @@ export class GenLayerGateway {
     const normalizedObjective = v6Objective(requestedObjective);
     const account = await this._assertConfiguredWallet();
     const quote = await this.readEpochClaimQuote(epochTimestamp, normalizedObjective, account);
+    assertClaimQuoteIdentity(quote, {
+      epochEndTimestamp: epochTimestamp,
+      objective: normalizedObjective,
+      account,
+    });
     if (!quote || quote.eligible !== true || quote.claimed === true) {
       throw new Error('This wallet does not have an eligible unclaimed payout or refund.');
     }
@@ -1812,41 +1897,67 @@ export class GenLayerGateway {
       'Claim amount',
       { positive: true },
     );
-    const hash = await this.client.writeContract({
+    const signingClient = await this._assertWalletTransactionContext(account);
+    const hash = await signingClient.writeContract({
       address: this.contractAddress,
       functionName: 'claim',
       args: [epochTimestamp, normalizedObjective],
       value: 0n,
     });
-    if (typeof onSubmitted === 'function') {
-      onSubmitted(hash, Object.freeze({
-        account,
-        contractAddress: this.contractAddress,
-        epochEndTimestamp: epochTimestamp.toString(),
-        objective: normalizedObjective,
-      }));
-    }
+    let actualAmount = null;
     try {
-      const receipt = await this._waitForSuccessfulFinalization(hash);
+      if (typeof onSubmitted === 'function') {
+        onSubmitted(hash, Object.freeze({
+          account,
+          contractAddress: this.contractAddress,
+          epochEndTimestamp: epochTimestamp.toString(),
+          objective: normalizedObjective,
+          quotedAmountAtto: quotedAmount.toString(),
+        }));
+      }
+      const receipt = await this._waitForSuccessfulFinalization(hash, signingClient);
       const entry = await this.readEpochEntry(epochTimestamp, normalizedObjective, account);
-      const claimedAtto = entry
-        ? atto(entry.claimed_amount_atto ?? entry.claimed_atto ?? 0n, 'Claimed amount')
-        : 0n;
       if (!entry || entry.claimed !== true) {
         throw new Error('The finalized claim could not be verified in contract state.');
       }
-      if (claimedAtto !== quotedAmount) {
-        throw new Error('The finalized claimed amount does not exactly match the quoted payout.');
+      actualAmount = atto(
+        entry.claimed_amount_atto ?? entry.claimed_atto ?? 0n,
+        'Finalized claimed amount',
+        { positive: true },
+      );
+      if (actualAmount < quotedAmount) {
+        throw new Error('The finalized claimed amount is below the amount verified immediately before signing.');
       }
       const delivery = await this.verifyClaimDelivery(hash, {
         recipient: account,
-        minimumValueAtto: quotedAmount,
-        onChildDiscovered: onDeliveryDiscovered,
+        minimumValueAtto: actualAmount,
+        onChildDiscovered: typeof onDeliveryDiscovered === 'function'
+          ? (childHash, submission) => onDeliveryDiscovered(childHash, Object.freeze({
+              ...submission,
+              quotedAmountAtto: quotedAmount.toString(),
+              actualAmountAtto: actualAmount.toString(),
+            }))
+          : null,
       });
-      return { hash, receipt, entry, quotedAmount, delivery };
+      return {
+        hash,
+        receipt,
+        entry,
+        quotedAmount,
+        quotedAmountAtto: quotedAmount.toString(),
+        actualAmount,
+        actualAmountAtto: actualAmount.toString(),
+        delivery,
+      };
     } catch (error) {
       const failure = error instanceof Error ? error : new Error('StudioNet test-GEN claim failed safely.');
       failure.hash = hash;
+      failure.quotedAmount = quotedAmount;
+      failure.quotedAmountAtto = quotedAmount.toString();
+      if (actualAmount !== null) {
+        failure.actualAmount = actualAmount;
+        failure.actualAmountAtto = actualAmount.toString();
+      }
       throw failure;
     }
   }
@@ -1854,21 +1965,22 @@ export class GenLayerGateway {
   async activateTimeoutRefund(epochEndTimestamp, { onSubmitted } = {}) {
     const epochTimestamp = epochEnd(epochEndTimestamp);
     const account = await this._assertConfiguredWallet();
-    const hash = await this.client.writeContract({
+    const signingClient = await this._assertWalletTransactionContext(account);
+    const hash = await signingClient.writeContract({
       address: this.contractAddress,
       functionName: 'activate_timeout_refund',
       args: [epochTimestamp],
       value: 0n,
     });
-    if (typeof onSubmitted === 'function') {
-      onSubmitted(hash, Object.freeze({
-        account,
-        contractAddress: this.contractAddress,
-        epochEndTimestamp: epochTimestamp.toString(),
-      }));
-    }
     try {
-      const receipt = await this._waitForSuccessfulFinalization(hash);
+      if (typeof onSubmitted === 'function') {
+        onSubmitted(hash, Object.freeze({
+          account,
+          contractAddress: this.contractAddress,
+          epochEndTimestamp: epochTimestamp.toString(),
+        }));
+      }
+      const receipt = await this._waitForSuccessfulFinalization(hash, signingClient);
       const epoch = await this.readEpoch(epochTimestamp);
       if (String(epoch?.status || '').trim().toUpperCase() !== 'TIMED_OUT'
         || String(epoch?.result_status || '').trim().toUpperCase() !== 'TIMEOUT') {

@@ -1149,7 +1149,7 @@
     "liveOperationCountAfterPostSoakManualRun": 64,
     "liveVerifiedOperationCountAfterPostSoakManualRun": 64,
     "liveUnresolvedOperationCountAfterPostSoakManualRun": 0,
-    "rolloutStatus": "PASS_24_HOUR_DELIVERED_RUN_SOAK_POST_SOAK_HARDENING_REPAIR_MANUAL_KEEPER_AND_GITHUB_NATIVE_WATCHDOG_DELIVERY_SCHEDULE_DELIVERY_REMAINS_OPEN_THIRD_PARTY_PAGER_OPTIONAL",
+    "rolloutStatus": "PASS_24_HOUR_DELIVERED_RUN_SOAK_POST_SOAK_HARDENING_REPAIR_MANUAL_KEEPER_GITHUB_NATIVE_WATCHDOG_AND_CLOUDFLARE_KEEPER_DISPATCH_WATCHDOG_SKIP_PATHS_GITHUB_SCHEDULE_DELIVERY_REMAINS_DEGRADED_THIRD_PARTY_PAGER_OPTIONAL",
     "invariants": {
       "fencedGlobalSignerLeaseRequired": true,
       "prepareMustCommitBeforeBroadcast": true,
@@ -1356,6 +1356,131 @@
       "syntheticWatchdogDelivery": "PASS_ISSUE_17_OPEN_RECOVERY_COMMENT_AND_CLOSE",
       "evidenceScope": "LAST_RUNTIME_CHANGING_SYNTHETIC_WATCHDOG_EVIDENCE_CHECKPOINT",
       "productionAliasPolicy": "LATER_DOCS_ONLY_PUBLICATION_DEPLOYMENTS_MAY_SUPERSEDE_ALIAS_WITHOUT_CHANGING_RUNTIME_GUARANTEES"
+    }
+  },
+  "releaseCandidateUpdate20260821": {
+    "scope": "DOCUMENTATION_OF_LIVE_OPERATIONS_EVIDENCE_AND_LOCAL_CLAIM_UX_RELEASE_CANDIDATE",
+    "cloudflareBackup": {
+      "status": "LIVE_EVIDENCED",
+      "workerName": "liquidity-arena-backup-scheduler",
+      "workerVersionId": "536e6476-3c4e-4b93-a454-700f55d6cea7",
+      "keeperCron": "37 * * * *",
+      "watchdogCron": "57 * * * *",
+      "keeperWorkflowDispatchRun": {
+        "runId": "32473485508",
+        "url": "https://github.com/Leokings/liquidity-arena/actions/runs/32473485508",
+        "event": "workflow_dispatch",
+        "status": "SUCCESS",
+        "operations": [
+          {
+            "kind": "RESOLVE",
+            "operationId": "a5ec60bb9d5cd0fb6707afe91eeb018f2b25653abf1dbe87c21d060c05c02305",
+            "epochEndTimestamp": 1787306400,
+            "transactionHash": "0x62331f0c3fed0ed0a29322a97ea5961e1bb2ec61ce1fdf9e0b8b31acc658c746",
+            "journalState": "VERIFIED",
+            "postState": "RESOLVED"
+          },
+          {
+            "kind": "CREATE",
+            "operationId": "2a36be063b82a7fe521f53ad6e569892ead7696cff1fb84d389484ed8361020d",
+            "epochEndTimestamp": 1787400000,
+            "transactionHash": "0x310fc6d2f9ca262ae76b3f03971e078df2172001588645fdca3f480ad7e35445",
+            "journalState": "VERIFIED",
+            "postState": "OPEN"
+          }
+        ],
+        "historyProjection": {
+          "deploymentsSynced": 1,
+          "epochsSynced": 3,
+          "snapshotsSynced": 3,
+          "proofFailures": 0,
+          "requestedProofsRejected": 0
+        }
+      },
+      "watchdogRun": {
+        "runId": "32473776356",
+        "url": "https://github.com/Leokings/liquidity-arena/actions/runs/32473776356",
+        "event": "workflow_run",
+        "upstreamKeeperRunId": "32473485508",
+        "status": "SUCCESS"
+      },
+      "conditionalSkipEvidence": {
+        "cron": "57 * * * *",
+        "workerVersionId": "536e6476-3c4e-4b93-a454-700f55d6cea7",
+        "event": "CLOUDFLARE_BACKUP_SKIPPED",
+        "reason": "current_hour_run_succeeded"
+      },
+      "credentialBoundary": "CLOUDFLARE_HAS_ONLY_ONE_REPOSITORY_ACTIONS_READ_WRITE_DISPATCH_TOKEN_NO_GENLAYER_NEON_JOURNAL_OWNER_TREASURY_OR_KEEPER_SECRET"
+    },
+    "claimUx": {
+      "status": "LOCAL_TESTED_NOT_MERGED_NOT_DEPLOYED_NOT_LIVE_WALLET_TESTED",
+      "evidenceRecordedOn": "2026-08-21",
+      "marketTests": "208/208",
+      "focusedClaimTests": "80/80",
+      "playwrightCases": "22/22",
+      "playwrightJourneyCount": 11,
+      "playwrightWorkerCount": 1,
+      "playwrightProjects": ["chromium", "mobile-chromium"],
+      "playwrightDeviceProfiles": ["Desktop Chrome", "Pixel 7"],
+      "fullNpmTests": "432/432",
+      "buildModuleCount": 477,
+      "npmAuditFindings": 0,
+      "aggregateTruthModel": {
+        "verifiedCurrentRequiresAllKnownRowsLoaded": true,
+        "verifiedCurrentRequiresAllDeploymentReadsSuccessful": true,
+        "incompleteCurrentPaginationPresentation": "PARTIAL_LOWER_BOUND_WITH_LOAD_OLDER",
+        "cachedFailedOrRefreshingPresentation": "NEUTRAL_LAST_VERIFIED_OR_PARTIAL_NO_LOWER_BOUND",
+        "zeroKnownIncompletePresentation": "CHECK_OR_RETRY"
+      },
+      "moneyPath": {
+        "preWriteQuoteRole": "USER_INTENT_MINIMUM_NOT_FINAL_ACCOUNTING",
+        "immediatePreWriteRechecks": ["EXACT_QUOTE_IDENTITY", "WALLET_ACCOUNT", "STUDIONET_CHAIN_61999"],
+        "finalizedActualClaimedAmountRequirement": "GREATER_THAN_OR_EQUAL_TO_PREWRITE_QUOTE",
+        "belowQuoteBehavior": "FAIL_CLOSED",
+        "childDeliveryVerificationAmountSource": "FINALIZED_ACTUAL_CLAIMED_AMOUNT",
+        "activityAndRecoveryAmountSource": "FINALIZED_ACTUAL_CLAIMED_AMOUNT",
+        "observerFailureRetainsRecoveryMetadata": true,
+        "legacySigningQuoteSurvivesRecoveryReloads": true
+      },
+      "features": [
+        "PRE_MODAL_AGGREGATE_CLAIM_CTA_COUNT_TYPE_AND_GEN_AMOUNT",
+        "MOBILE_CLAIM_CONTROLS_MINIMUM_44_PX",
+        "SAME_PAGE_ROUTE_AND_WALLET_SESSION_PRESERVATION",
+        "CROSS_DEPLOYMENT_EXPLICIT_RELOAD_AND_RECONNECT",
+        "EXACT_DEPLOYMENT_EPOCH_AND_OBJECTIVE_CLAIM_INTENT",
+        "RELOAD_INTENT_WITH_RECONNECT_TO_CLAIM_ACTION",
+        "PROMINENT_AGGREGATE_ELIGIBLE_AMOUNT_AND_COUNT",
+        "EXACT_AGGREGATE_VERIFIED_CURRENT_ONLY_AFTER_ALL_KNOWN_ROWS_LOAD_AND_ALL_DEPLOYMENT_READS_SUCCEED",
+        "CURRENT_INCOMPLETE_PAGINATION_USES_EXPLICIT_PARTIAL_LOWER_BOUND_AND_LOAD_OLDER",
+        "CACHED_FAILED_OR_REFRESHING_DEPLOYMENTS_USE_NEUTRAL_LAST_VERIFIED_PARTIAL_WITHOUT_LOWER_BOUND",
+        "ZERO_KNOWN_CLAIM_USES_CHECK_OR_RETRY",
+        "LAST_GOOD_HISTORY_WITH_PER_DEPLOYMENT_RETRY",
+        "VALIDATED_PAGINATION_WITH_TRUTHFUL_CURRENT_OR_CACHED_LABELS",
+        "QUOTE_IDENTITY_MISMATCH_FAILS_CLOSED",
+        "DELAYED_QUOTE_SURVIVES_ASSET_SELECTION_RACE",
+        "GATEWAY_RECHECKS_EXACT_QUOTE_ACCOUNT_AND_NETWORK_IMMEDIATELY_BEFORE_WRITE",
+        "FINALIZED_ACTUAL_CLAIMED_AMOUNT_MAY_EXCEED_QUOTE_BUT_NOT_FALL_BELOW_IT",
+        "EXACT_CHILD_DELIVERY_VERIFIED_AGAINST_FINALIZED_ACTUAL_CLAIMED_AMOUNT",
+        "ASSET_OR_BALANCE_FAILURE_DOES_NOT_ERASE_VALID_CLAIM",
+        "GUARDED_WALLET_CONNECTION_CONTROLS",
+        "FINALIZED_ACTUAL_CLAIMED_AMOUNT_STORED_IN_ACTIVITY_AND_RECOVERY",
+        "ACCESSIBLE_LARGE_CLAIM_CONTROLS"
+      ],
+      "productionArtifactIdsChanged": false
+    },
+    "activeParticipantObligation": {
+      "deployment": "v7",
+      "playerLiabilityAtto": "2000000000000000000",
+      "eligibleUnclaimedRefundCount": 2,
+      "status": "OUTSTANDING_PARTICIPANT_OBLIGATION"
+    },
+    "payoutRecoveryRisk": {
+      "severity": "P1",
+      "status": "UNRESOLVED_PROTOCOL_LIMITATION",
+      "v7Upgradeable": false,
+      "v7HasPayoutRetryState": false,
+      "automaticRetryAllowedAfterAmbiguousChild": false,
+      "designDocument": "docs/V8-PAYOUT-RECOVERY.md"
     }
   },
   "verification": {

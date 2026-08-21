@@ -112,6 +112,94 @@ test('claim activity requires finalized child delivery and preserves its child h
   );
 });
 
+test('claim activity keeps the signing quote as intent metadata and persists the finalized amount', () => {
+  const storage = memoryStorage();
+  const store = createActivityStore({ storage, now: () => 10 });
+  const parent = hash(150);
+  const child = hash(151);
+  const base = {
+    hash: parent,
+    type: 'CLAIM',
+    account: ACCOUNT,
+    contractAddress: CONTRACT,
+    roundId: '1787162400',
+    objective: 'LOW',
+    quotedAmountAtto: '200',
+  };
+
+  store.upsert({
+    ...base,
+    status: 'SUBMITTED',
+    amountAtto: null,
+    deliveryStatus: 'PENDING',
+  });
+  assert.equal(store.list()[0].quotedAmountAtto, '200');
+  assert.equal(store.list()[0].amountAtto, null);
+
+  store.upsert({
+    ...base,
+    status: 'FINALIZED',
+    amountAtto: '201',
+    childHash: child,
+    deliveryStatus: 'DELIVERED',
+  });
+  const [record] = createActivityStore({ storage, now: () => 20 }).list();
+  assert.equal(record.quotedAmountAtto, '200');
+  assert.equal(record.amountAtto, '201');
+  assert.equal(record.status, 'FINALIZED');
+});
+
+test('legacy claim quote survives repeated below-quote recovery reloads', () => {
+  const storage = memoryStorage();
+  let timestamp = 10;
+  const parent = hash(175);
+  const legacyStore = createActivityStore({ storage, now: () => timestamp });
+  legacyStore.upsert({
+    hash: parent,
+    type: 'CLAIM',
+    status: 'REVIEW',
+    account: ACCOUNT,
+    contractAddress: CONTRACT,
+    deploymentAlias: 'v6',
+    roundId: '1787162400',
+    objective: 'LOW',
+    amountAtto: '200',
+    deliveryStatus: 'REVIEW',
+  });
+
+  const reconcileBelowQuote = (store) => {
+    const [record] = store.list();
+    const signingQuoteAtto = BigInt(record.quotedAmountAtto ?? record.amountAtto);
+    const claimedAtto = 199n;
+    assert.equal(claimedAtto >= signingQuoteAtto, false);
+    store.upsert({
+      ...record,
+      quotedAmountAtto: signingQuoteAtto.toString(),
+      amountAtto: claimedAtto.toString(),
+      deliveryStatus: 'REVIEW',
+      status: 'REVIEW',
+    });
+  };
+
+  reconcileBelowQuote(legacyStore);
+  timestamp = 20;
+  const firstReload = createActivityStore({ storage, now: () => timestamp });
+  assert.equal(firstReload.list()[0].quotedAmountAtto, '200');
+  assert.equal(firstReload.list()[0].amountAtto, '199');
+
+  reconcileBelowQuote(firstReload);
+  timestamp = 30;
+  const secondReload = createActivityStore({ storage, now: () => timestamp });
+  assert.equal(secondReload.list()[0].quotedAmountAtto, '200');
+  assert.equal(secondReload.list()[0].amountAtto, '199');
+  assert.equal(secondReload.list()[0].status, 'REVIEW');
+  assert.equal(secondReload.list()[0].deliveryStatus, 'REVIEW');
+  assert.throws(() => secondReload.upsert({
+    ...secondReload.list()[0],
+    quotedAmountAtto: '198',
+  }), /quote conflicts/i);
+});
+
 test('V6 timeout-refund activity and LOW objective survive reload recovery', () => {
   const storage = memoryStorage();
   const first = createActivityStore({ storage, now: () => 50 });

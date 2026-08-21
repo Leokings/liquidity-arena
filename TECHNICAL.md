@@ -193,13 +193,33 @@ successful run. Absence or failed runs trigger the existing workflow on `main`. 
 HTTP 429, or GitHub 5xx errs toward dispatch; HTTP 401/403/404 stops as a configuration fault. Any
 late duplicate is serialized by `queue: max`, fenced by the Neon journal, and revalidated against
 contract state.
-The Worker is a trigger only and cannot sign a transaction.
+The Worker is a trigger only and cannot sign a transaction. Production evidence now exists for
+Worker version `536e6476…cea7`: keeper workflow-dispatch run `32473485508` passed reconciliation
+and 3/3 history projection with VERIFIED RESOLVE `0x62331f…c746` and CREATE `0x310fc6…5445`;
+watchdog run `32473776356` passed; and the following minute-57 invocation logged
+`CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded` instead of duplicating the healthy run.
 
 Readiness shares the same deployment configuration as the server. For V7 it checks chain, contract
 identity, roles, stake and fee policy, exact-hour coverage, and all five live feeds. V6 legacy and
 active V7 player liability are reported separately and do not turn unreadable values into false
 zeros. The current V7 liability is 2 GEN across two eligible unclaimed refunds; this is a participant
 obligation and is deliberately non-blocking for service readiness.
+
+As of 2026-08-21, the claim/refund navigation changes in the current worktree are a release
+candidate, not deployed architecture. The pre-modal CTA exposes a truth-labeled aggregate or check
+state; same-deployment navigation remains inside the SPA; cross-deployment navigation explicitly
+reloads and reconnects; and reloads preserve nonsecret exact claim intent. The pre-write quote is
+intent: immediately before writing, the gateway rechecks exact quote identity, wallet account, and
+StudioNet. Finalized actual proceeds must be at least the quote; exact child delivery is verified
+against the actual amount, and activity/recovery stores that actual amount. Aggregates are verified-
+current only after all known rows load and every deployment read succeeds. Incomplete current
+pagination can show an explicit partial lower bound with `LOAD OLDER`;
+failed or refreshing cached deployments instead use neutral `LAST VERIFIED`/`PARTIAL` labels and
+retry controls, never a false `≥` lower bound; a zero-known incomplete result prompts `CHECK`/`RETRY`
+instead of asserting zero eligibility. Local evidence is 208/208 market tests, 80/80 focused claim
+tests, and 22/22 Playwright cases (11 journeys across `chromium`/`mobile-chromium`, Desktop Chrome/
+Pixel 7, one worker), plus 432/432 full tests, a 477-module build, and zero audit findings. PR/merge,
+deploy, and live-wallet evidence remain required.
 
 ## Visualization and history
 
@@ -377,11 +397,14 @@ delivery.
 ## Current release gaps
 
 - GitHub schedule delivery reliability after only 25 of 52 nominal slots emitted run records; the
-  GitHub-native alert path is proven and an independent third-party pager remains optional; live V6 workflow
-  remains disabled at zero player liability;
+  GitHub-native alert path and independent Cloudflare keeper-dispatch/watchdog-skip paths are proven,
+  while a third-party pager remains optional; live V6 workflow remains disabled at zero player liability;
 - database-outage recovery and proof coverage beyond the selected V7 deployment/canary/fee set;
-- continued public browser/wallet soak plus a rollback rehearsal that never re-enables V6 writes;
-- live 24-hour timeout evidence and a documented safe boundary for asynchronous child failure;
+- merge/deploy/live-wallet evidence for the claim/refund UX candidate, continued public
+  browser/wallet soak, and a rollback rehearsal that never re-enables V6 writes;
+- live 24-hour timeout evidence and safe asynchronous-child recovery. V7 has no upgrader and no
+  safe retry state; this protocol P1 and a proposed V8 idempotent-escrow state machine are documented
+  in [the payout-recovery design](docs/V8-PAYOUT-RECOVERY.md);
 - independent contract/web/operations review and provider data-use/legal review.
 
 See [the V7 deployment note](docs/STUDIONET-V7.md) for the current gate ledger.

@@ -128,7 +128,10 @@ The claim-delivery monitor is deliberately read-only. It may alert and preserve 
 must never automatically resubmit `claim` or re-emit value. Once V7 has effects-first marked a claim
 paid, an automatic retry without proof of child failure could double-pay if the original child later
 finalizes. A protocol-backed recoverable-transfer design or documented delivery guarantee is still
-required before real value.
+required before real value. V7 has no upgrader or safe retry state, so this remains a protocol P1;
+the proposed fresh-deployment state machine and idempotent escrow are specified in
+[`docs/V8-PAYOUT-RECOVERY.md`](docs/V8-PAYOUT-RECOVERY.md). The current 2 GEN across two eligible
+unclaimed refunds remains an active participant obligation, not available fee or operator funds.
 
 ## Keeper and availability threats
 
@@ -171,15 +174,34 @@ missing coverage, source quorum loss, finality lag, scheduler failure, and unexp
 changes. The GitHub-native watchdog checks readiness, durable-history integrity, authenticated
 journal health, keeper recency/conclusion, and opens a repository issue on failure. Its manual and
 automatic healthy-path runs pass, and synthetic failure/recovery runs prove repository issue
-open/comment/close delivery. The release candidate adds an independent Cron-only Cloudflare backup
-that checks for a current-hour GitHub reconciliation before using `workflow_dispatch`. Its only
+open/comment/close delivery. An independent Cron-only Cloudflare backup is now live and checks for a
+current-hour GitHub reconciliation before using `workflow_dispatch`. Its only
 runtime credential is a fine-grained token restricted to this repository with Actions read/write;
 the token is stored as a Cloudflare secret and must never enter source, logs, command arguments, or
 chat. Cloudflare receives no keeper keystore/password, Neon URL, journal secret, owner key, treasury
 key, or GenLayer write implementation. HTTP 401/403/404 authorization/configuration failures stop;
 network failures, HTTP 429, and GitHub 5xx responses err toward a dispatch, which remains serialized
-and journal-fenced. Production activation
-and first-trigger evidence are required before treating this mitigation as live.
+and journal-fenced. The mitigation is now live. Worker version `536e6476…cea7` dispatched successful
+keeper run `32473485508`, which reconciled and projected 3/3 history rows while verifying RESOLVE
+`0x62331f…c746` and CREATE `0x310fc6…5445`; watchdog run `32473776356` succeeded. A minute-57 log
+then emitted `CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded`, proving the safe no-duplicate
+branch.
+
+As of 2026-08-21, the claim/refund UX hardening is local release-candidate code, not a deployed
+security control. The pre-modal aggregate CTA and large in-modal actions are backed by exact quote
+identity checks; mismatched quotes fail closed, guarded connection controls prevent overlapping
+connect flows and unrelated asset/balance failures preserve a valid claim. The pre-write quote is
+intent: immediately before writing, the gateway rechecks exact quote identity, wallet account, and
+StudioNet. Finalized actual proceeds below the quote fail closed; exact child delivery is verified
+against the actual amount, which activity/recovery then stores. Aggregates are verified-current only
+after all known rows load and all deployment reads succeed. Failed or refreshing cached deployments
+use neutral `LAST VERIFIED`/
+`PARTIAL` labels and retry controls, never a false `≥` lower bound. Same-deployment routing preserves
+the wallet while a cross-deployment claim explicitly requires reload/reconnect. Local evidence is
+208/208 market tests, 80/80 focused claim tests, and 22/22 Playwright cases (11 journeys across
+`chromium`/`mobile-chromium`, Desktop Chrome/Pixel 7, one worker), plus 432/432 full tests, a
+477-module build, and zero audit findings.
+PR/merge, deployment, and a real StudioNet wallet journey remain.
 
 ## Web, history, and migration threats
 
@@ -245,8 +267,9 @@ After the V7 public cutover:
 2. complete an independent focused review of contract, evidence adapters, keeper, deployment
    registry, server boundary, and database ingestion;
 3. monitor the 25/52 nominal GitHub schedule-delivery finding and preserve the proven GitHub-native
-   watchdog; an independent third-party pager is an optional open enhancement. Keep live V6 workflow `338089016`
-   disabled at zero player liability and prove no owner material exists in automation;
+   watchdog and live Cloudflare backup; an independent third-party pager is an optional open
+   enhancement. Keep live V6 workflow `338089016` disabled at zero player liability and prove no
+   owner material exists in automation;
 4. independently review the recorded funded V7 canary, including its shared resolution, fee/refund
    math, loser rejection, conserved balances, and finalized parent/child deliveries;
 5. verify V6 legacy reads, resolve/timeout, and claims while proving public app/automation V6 writes
@@ -254,7 +277,9 @@ After the V7 public cutover:
 6. extend transaction-proof coverage beyond the selected V7 evidence and complete a rollback/outage
    rehearsal;
 7. test outage, delayed finality, restart, rate limit, and the independent 24-hour timeout path;
-8. finish provider data-use and applicable legal review.
+8. merge, deploy, and live-wallet test the claim/refund UX release candidate;
+9. resolve or explicitly accept the V7 asynchronous child-recovery P1 before any real-value use;
+10. finish provider data-use and applicable legal review.
 
 The earlier V6 funded round is valuable regression evidence, not a substitute for the V7 canary.
 Historical verified V7 production deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` was READY at
