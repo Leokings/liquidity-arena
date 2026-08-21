@@ -59,6 +59,137 @@ test('a claim deep link preserves intent and opens a visible reconnect path', as
   await expect(page.locator('#claim-reconnect')).toBeVisible();
   await expect(page.locator('#claim-reconnect')).toContainText('RECONNECT WALLET');
   await expect(page.locator('#position-state')).toContainText('RECONNECT TO CLAIM');
+  await expect(page.locator('#claim-reconnect')).toBeFocused();
+  await expect.poll(() => page.evaluate(() =>
+    document.querySelector('.prediction-modal').contains(document.activeElement))).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#prediction-modal')).toBeHidden();
+  await expect.poll(() => page.evaluate(() => ['prediction-button', 'selected-orb', 'wallet-button']
+    .includes(document.activeElement?.id))).toBe(true);
+});
+
+test('claim modal contains focus, isolates background, restores openers, and survives nested races', async ({ page }) => {
+  const pageErrors = [];
+  const consoleProblems = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    const text = message.text();
+    const expectedRpcOutage = text.includes(
+      'GenLayer RPC error (gen_call): StudioNet is intentionally unavailable in this UI test.',
+    );
+    if (['error', 'warning'].includes(message.type()) && !expectedRpcOutage) {
+      consoleProblems.push(text);
+    }
+  });
+  await failStudioNetReadsFast(page);
+  const response = await page.goto('/market.html?deployment=v7&feed=demo');
+  expect(response?.ok()).toBe(true);
+
+  const opener = page.locator('#selected-orb');
+  await opener.click();
+  await expect(page.locator('#prediction-modal')).toBeVisible();
+  await expect.poll(() => page.evaluate(() =>
+    document.querySelector('.prediction-modal').contains(document.activeElement))).toBe(true);
+
+  const isolation = await page.evaluate(() => Array.from(
+    document.querySelector('#market-app').children,
+    (element) => ({
+      id: element.id,
+      inert: element.hasAttribute('inert'),
+      ariaHidden: element.getAttribute('aria-hidden'),
+    }),
+  ));
+  expect(isolation.filter(({ id }) => id !== 'prediction-modal')
+    .every(({ inert, ariaHidden }) => inert && ariaHidden === 'true')).toBe(true);
+  expect(isolation.find(({ id }) => id === 'prediction-modal'))
+    .toEqual({ id: 'prediction-modal', inert: false, ariaHidden: null });
+
+  const focusEdges = await page.evaluate(() => {
+    const app = window.LIQUIDITY_ARENA;
+    const record = app._modalRecord('prediction-modal');
+    const focusable = app._focusableElements(record);
+    focusable.at(-1).focus();
+    return { last: focusable.at(-1).id || focusable.at(-1).className };
+  });
+  await page.keyboard.press('Tab');
+  await expect(page.locator('.prediction-modal .modal-close')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  expect(await page.evaluate(() => document.activeElement.id || document.activeElement.className))
+    .toBe(focusEdges.last);
+  for (let index = 0; index < 24; index += 1) {
+    await page.keyboard.press(index % 2 ? 'Shift+Tab' : 'Tab');
+    expect(await page.evaluate(() =>
+      document.querySelector('.prediction-modal').contains(document.activeElement))).toBe(true);
+  }
+
+  const backgroundGuard = await page.evaluate(() => {
+    const wallet = document.querySelector('#wallet-button');
+    let clicks = 0;
+    wallet.addEventListener('click', () => { clicks += 1; }, { once: true });
+    wallet.focus();
+    const focusStayedInside = document.querySelector('.prediction-modal').contains(document.activeElement);
+    wallet.click();
+    return { clicks, focusStayedInside, walletLabel: document.querySelector('#wallet-label').textContent };
+  });
+  expect(backgroundGuard).toEqual({ clicks: 0, focusStayedInside: true, walletLabel: 'CONNECT GENLAYER' });
+
+  const nestedOpener = page.locator('.prediction-modal .modal-close');
+  const nestedFocusedSynchronously = await page.evaluate(() => {
+    const nestedOpenerElement = document.querySelector('.prediction-modal .modal-close');
+    window.LIQUIDITY_ARENA.openHow(nestedOpenerElement);
+    return document.querySelector('.how-modal').contains(document.activeElement);
+  });
+  expect(nestedFocusedSynchronously).toBe(true);
+  await expect(page.locator('#how-modal')).toBeVisible();
+  await expect(page.locator('#prediction-modal')).toHaveAttribute('inert', '');
+  await expect(page.locator('.how-modal .modal-close')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  expect(await page.evaluate(() =>
+    document.querySelector('.how-modal').contains(document.activeElement))).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#how-modal')).toBeHidden();
+  await expect(page.locator('#prediction-modal')).toBeVisible();
+  await expect(nestedOpener).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#prediction-modal')).toBeHidden();
+  await expect(opener).toBeFocused();
+
+  await page.evaluate(() => {
+    const app = window.LIQUIDITY_ARENA;
+    app._loadRound = () => new Promise((resolve) => { window.__resolveNestedModalLoad = resolve; });
+    document.querySelector('#selected-orb').click();
+  });
+  await expect(page.locator('#prediction-modal')).toBeVisible();
+  await page.locator('#stake-amount').focus();
+  await page.evaluate(() => {
+    const stakeInput = document.querySelector('#stake-amount');
+    window.LIQUIDITY_ARENA.openHow(stakeInput);
+  });
+  await expect(page.locator('#how-modal')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#how-modal')).toBeHidden();
+  await expect(page.locator('#stake-amount')).toBeFocused();
+  await page.evaluate(() => window.__resolveNestedModalLoad());
+  await page.waitForTimeout(100);
+  await expect(page.locator('#stake-amount')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#prediction-modal')).toBeHidden();
+  await expect(opener).toBeFocused();
+
+  await page.evaluate(() => {
+    const app = window.LIQUIDITY_ARENA;
+    app._loadRound = () => new Promise((resolve) => { window.__resolveDelayedModalLoad = resolve; });
+    document.querySelector('#selected-orb').click();
+  });
+  await expect(page.locator('#prediction-modal')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#prediction-modal')).toBeHidden();
+  await page.evaluate(() => window.__resolveDelayedModalLoad());
+  await page.waitForTimeout(100);
+  await expect(page.locator('#prediction-modal')).toBeHidden();
+  await expect(opener).toBeFocused();
+  expect(pageErrors).toEqual([]);
+  expect(consoleProblems).toEqual([]);
 });
 
 test('connected OPEN & CLAIM keeps the wallet session and reveals the exact claim action', async ({ page }) => {

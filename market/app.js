@@ -83,6 +83,19 @@ const UNSUPPORTED_NETWORK_PRESENTATION = Object.freeze({
   finalityNotice: 'Success is shown only after FINALIZED contract execution and state verification.',
 });
 const TERMINAL_ROUND_STATUSES = new Set(['RESOLVED', 'UNDETERMINED', 'TIMED_OUT']);
+const MODAL_FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'area[href]',
+  'button:not([disabled])',
+  'input:not([disabled]):not([type="hidden"])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  'iframe',
+  'object',
+  'embed',
+  '[contenteditable="true"]',
+  '[tabindex]:not([tabindex^="-"])',
+].join(',');
 
 const numberFormatters = new Map();
 
@@ -495,9 +508,15 @@ class LiquidityArenaApp {
     this.arena = new LiquidArena($('#arena-canvas'), {
       onSelect: (assetId) => this.selectAsset(assetId),
     });
+    this.modalStack = [];
+    this.modalRecords = new Map();
+    this.modalIsolationSnapshot = null;
+    this.redirectingModalFocus = false;
 
     this._bindEvents();
-    if (this.pendingClaimIntent) $('#prediction-modal').hidden = false;
+    if (this.pendingClaimIntent) {
+      this._showModal('prediction-modal', { initialFocus: '#claim-reconnect' });
+    }
     this._applyNetworkPresentation();
     this._renderPredictionChoices();
     this._updateContractUi();
@@ -529,8 +548,12 @@ class LiquidityArenaApp {
 
     $('#play-button').addEventListener('click', () => this.togglePlayback());
     $('#timeline-slider').addEventListener('input', (event) => this.seek(Number(event.target.value) / 1000));
-    $('#prediction-button').addEventListener('click', () => this.openPrediction());
-    $('#selected-orb').addEventListener('click', () => this.openPrediction());
+    $('#prediction-button').addEventListener('click', (event) => {
+      void this.openPrediction(event.currentTarget);
+    });
+    $('#selected-orb').addEventListener('click', (event) => {
+      void this.openPrediction(event.currentTarget);
+    });
     $('#wallet-button').addEventListener('click', () => this.connectWallet());
     $('#submit-prediction').addEventListener('click', () => this.submitPrediction());
     $('#claim-wager').addEventListener('click', () => this.claimWager());
@@ -558,7 +581,7 @@ class LiquidityArenaApp {
       const retry = event.target.closest('button[data-retry-deployment]');
       if (retry) void this._loadWalletHistory({ deploymentAlias: retry.dataset.retryDeployment });
     });
-    $('#how-button').addEventListener('click', () => this.openHow());
+    $('#how-button').addEventListener('click', (event) => this.openHow(event.currentTarget));
     $('#battle-objective-controls')?.addEventListener('click', (event) => {
       const button = event.target.closest('button[data-objective]');
       if (button) void this.selectObjective(button.dataset.objective);
@@ -577,13 +600,221 @@ class LiquidityArenaApp {
     document.querySelectorAll('[data-close-how]').forEach((node) => {
       node.addEventListener('click', () => this.closeHow());
     });
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') {
-        this.closePrediction();
-        this.closeHow();
-      }
-    });
+    document.addEventListener('keydown', (event) => this._handleModalKeydown(event), true);
+    document.addEventListener('focusin', (event) => this._handleModalFocusIn(event), true);
+    document.addEventListener('click', (event) => this._guardModalBackgroundClick(event), true);
     window.addEventListener('popstate', () => this._restoreRouteClaimIntent());
+  }
+
+  _modalRecord(modalId) {
+    if (this.modalRecords.has(modalId)) return this.modalRecords.get(modalId);
+    const layer = document.getElementById(modalId);
+    const dialog = layer?.querySelector('[role="dialog"][aria-modal="true"]');
+    if (!layer || !dialog) throw new Error(`Accessible modal ${modalId} is not available.`);
+    const record = {
+      id: modalId,
+      layer,
+      dialog,
+      opener: null,
+      generation: 0,
+    };
+    this.modalRecords.set(modalId, record);
+    return record;
+  }
+
+  _activeModalRecord() {
+    const modalId = this.modalStack.at(-1);
+    if (!modalId) return null;
+    const record = this._modalRecord(modalId);
+    return record.layer.hidden ? null : record;
+  }
+
+  _setElementInert(element, inert) {
+    element.toggleAttribute('inert', inert);
+    if ('inert' in element) element.inert = inert;
+  }
+
+  _restoreAttribute(element, name, value) {
+    if (value === null) element.removeAttribute(name);
+    else element.setAttribute(name, value);
+  }
+
+  _applyModalIsolation() {
+    const root = $('#market-app');
+    const active = this._activeModalRecord();
+    if (!root) return;
+    if (active && !this.modalIsolationSnapshot) {
+      this.modalIsolationSnapshot = Array.from(root.children, (element) => ({
+        element,
+        inert: element.hasAttribute('inert') || Boolean(element.inert),
+        ariaHidden: element.getAttribute('aria-hidden'),
+      }));
+    }
+    if (!this.modalIsolationSnapshot) return;
+
+    for (const original of this.modalIsolationSnapshot) {
+      if (active) {
+        const isolate = original.element !== active.layer;
+        this._setElementInert(original.element, original.inert || isolate);
+        if (isolate) original.element.setAttribute('aria-hidden', 'true');
+        else this._restoreAttribute(original.element, 'aria-hidden', original.ariaHidden);
+      } else {
+        this._setElementInert(original.element, original.inert);
+        this._restoreAttribute(original.element, 'aria-hidden', original.ariaHidden);
+      }
+    }
+    if (!active) this.modalIsolationSnapshot = null;
+  }
+
+  _isElementVisible(element) {
+    if (!(element instanceof HTMLElement) || !element.isConnected) return false;
+    if (element.hidden || element.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+    const style = getComputedStyle(element);
+    return style.display !== 'none' && style.visibility !== 'hidden'
+      && element.getClientRects().length > 0;
+  }
+
+  _focusableElements(record) {
+    const candidates = Array.from(record.dialog.querySelectorAll(MODAL_FOCUSABLE_SELECTOR))
+      .filter((element) => !element.matches(':disabled')
+        && element.tabIndex >= 0
+        && this._isElementVisible(element));
+    return candidates.filter((element) => {
+      if (!(element instanceof HTMLInputElement)
+        || element.type !== 'radio'
+        || !element.name) return true;
+      const group = candidates.filter((candidate) => candidate instanceof HTMLInputElement
+        && candidate.type === 'radio'
+        && candidate.name === element.name);
+      return element === (group.find((candidate) => candidate.checked) || group[0]);
+    });
+  }
+
+  _focusModal(record, preferredTarget = null) {
+    if (record !== this._activeModalRecord()) return;
+    let target = preferredTarget;
+    if (typeof target === 'string') target = record.layer.querySelector(target);
+    if (!this._isElementVisible(target) || target.matches?.(':disabled')) {
+      [target] = this._focusableElements(record);
+    }
+    if (!target) target = record.dialog;
+    this.redirectingModalFocus = true;
+    try {
+      target.focus({ preventScroll: true });
+    } finally {
+      this.redirectingModalFocus = false;
+    }
+  }
+
+  _queueModalFocus(record, preferredTarget = null) {
+    const generation = record.generation;
+    requestAnimationFrame(() => {
+      if (record.generation !== generation || record !== this._activeModalRecord()) return;
+      this._focusModal(record, preferredTarget);
+    });
+  }
+
+  _showModal(modalId, { opener = null, initialFocus = null } = {}) {
+    const record = this._modalRecord(modalId);
+    const wasOpen = !record.layer.hidden && this.modalStack.includes(modalId);
+    if (!wasOpen) {
+      const candidate = opener || document.activeElement;
+      record.opener = candidate instanceof HTMLElement
+        && candidate !== document.body
+        && candidate.isConnected
+        && !record.layer.contains(candidate)
+        ? candidate
+        : null;
+    }
+    record.layer.hidden = false;
+    record.generation += 1;
+    const originalLayerState = this.modalIsolationSnapshot
+      ?.find(({ element }) => element === record.layer);
+    if (originalLayerState) {
+      this._setElementInert(record.layer, originalLayerState.inert);
+      this._restoreAttribute(record.layer, 'aria-hidden', originalLayerState.ariaHidden);
+    }
+    this.modalStack = this.modalStack.filter((id) => id !== modalId);
+    this.modalStack.push(modalId);
+    // Move focus before hiding the opener's branch from assistive technology;
+    // Chromium otherwise rejects aria-hidden when that branch still owns focus.
+    this._focusModal(record, initialFocus);
+    this._applyModalIsolation();
+    this._queueModalFocus(record, initialFocus);
+    return record.generation;
+  }
+
+  _fallbackModalOpener(modalId) {
+    const selectors = modalId === 'how-modal'
+      ? ['#how-button', '#prediction-button', '#wallet-button']
+      : ['#prediction-button', '#selected-orb', '#wallet-button'];
+    return selectors.map((selector) => $(selector)).find((element) =>
+      this._isElementVisible(element) && !element.matches(':disabled')) || null;
+  }
+
+  _hideModal(modalId) {
+    const record = this._modalRecord(modalId);
+    if (record.layer.hidden && !this.modalStack.includes(modalId)) return false;
+    const opener = record.opener;
+    record.opener = null;
+    record.generation += 1;
+    const closeGeneration = record.generation;
+    record.layer.hidden = true;
+    this.modalStack = this.modalStack.filter((id) => id !== modalId);
+    this._applyModalIsolation();
+    const underlying = this._activeModalRecord();
+
+    requestAnimationFrame(() => {
+      if (record.generation !== closeGeneration || !record.layer.hidden) return;
+      if (underlying && underlying === this._activeModalRecord()) {
+        if (this._isElementVisible(opener) && underlying.dialog.contains(opener)) {
+          opener.focus({ preventScroll: true });
+        } else {
+          this._focusModal(underlying);
+        }
+        return;
+      }
+      const target = this._isElementVisible(opener) && !opener.matches(':disabled')
+        ? opener
+        : this._fallbackModalOpener(modalId);
+      target?.focus({ preventScroll: true });
+    });
+    return true;
+  }
+
+  _handleModalKeydown(event) {
+    const record = this._activeModalRecord();
+    if (!record) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (record.id === 'prediction-modal') this.closePrediction();
+      else if (record.id === 'how-modal') this.closeHow();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+
+    const focusable = this._focusableElements(record);
+    const currentIndex = focusable.indexOf(document.activeElement);
+    const nextIndex = currentIndex < 0
+      ? event.shiftKey ? focusable.length - 1 : 0
+      : (currentIndex + (event.shiftKey ? -1 : 1) + focusable.length) % focusable.length;
+    event.preventDefault();
+    event.stopPropagation();
+    this._focusModal(record, focusable[nextIndex] || record.dialog);
+  }
+
+  _handleModalFocusIn(event) {
+    const record = this._activeModalRecord();
+    if (!record || this.redirectingModalFocus || record.dialog.contains(event.target)) return;
+    this._focusModal(record);
+  }
+
+  _guardModalBackgroundClick(event) {
+    const record = this._activeModalRecord();
+    if (!record || record.layer.contains(event.target)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
   }
 
   _updateClock() {
@@ -1188,7 +1419,9 @@ class LiquidityArenaApp {
     this.pendingClaimIntent = normalizedIntent;
     this.explicitEpochEndTimestamp = normalizedIntent.epochEndTimestamp;
     this.objectiveSelector = normalizedIntent.objective;
-    $('#prediction-modal').hidden = false;
+    if (modalWasHidden) {
+      this._showModal('prediction-modal', { initialFocus: '#claim-reconnect' });
+    }
     // Replace the current route so browser Back never revives stale in-memory
     // epoch/objective state while the wallet session remains on this page.
     if (updateRoute && url.href !== location.href) history.replaceState(null, '', url);
@@ -1261,7 +1494,10 @@ class LiquidityArenaApp {
   }
 
   _focusClaimSection() {
+    const record = this._modalRecord('prediction-modal');
+    const modalGeneration = record.generation;
     requestAnimationFrame(() => {
+      if (record.generation !== modalGeneration || record !== this._activeModalRecord()) return;
       const section = $('#wallet-position');
       const reconnect = $('#claim-reconnect');
       const claim = $('#claim-wager');
@@ -2423,26 +2659,31 @@ class LiquidityArenaApp {
     });
   }
 
-  async openPrediction() {
+  async openPrediction(opener = null) {
     if (this.deploymentSelectionError) {
       this.toast(this.deploymentSelectionError);
       return;
     }
-    $('#prediction-modal').hidden = false;
+    const modalGeneration = this._showModal('prediction-modal', {
+      opener,
+      initialFocus: '.prediction-modal .modal-close',
+    });
     if (!this.selectedPrediction) this.selectedPrediction = this.selectedId;
     const input = document.querySelector(`input[name="prediction-asset"][value="${this.selectedPrediction}"]`);
     if (input) input.checked = true;
     await this._loadRound();
+    const record = this._modalRecord('prediction-modal');
+    if (record.generation !== modalGeneration || record.layer.hidden) return;
     this._renderPredictionState();
-    $('.prediction-modal .modal-close')?.focus();
   }
 
   closePrediction() {
-    $('#prediction-modal').hidden = true;
-    this._clearClaimIntentRoute();
+    if (this._hideModal('prediction-modal')) this._clearClaimIntentRoute();
   }
-  openHow() { $('#how-modal').hidden = false; $('.how-modal .modal-close').focus(); }
-  closeHow() { $('#how-modal').hidden = true; }
+  openHow(opener = null) {
+    this._showModal('how-modal', { opener, initialFocus: '.how-modal .modal-close' });
+  }
+  closeHow() { this._hideModal('how-modal'); }
 
   _updateSubmitButton() {
     this.modalNotice = null;
