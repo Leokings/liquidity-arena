@@ -1329,7 +1329,7 @@
       },
       "evidenceScope": "HISTORICAL_INITIAL_POST_SOAK_PRODUCTION_RUNTIME_ARTIFACT"
     },
-    "lastRuntimeChangingProductionArtifact": {
+    "previousRuntimeChangingProductionArtifact": {
       "sourceCommit": "a1c773ae36a882c043c6b167a1324d1d558ac60f",
       "githubDeploymentId": "6017754639",
       "githubDeploymentStatus": "success",
@@ -1354,12 +1354,235 @@
       "bundleEtag": "\"fa10949a324593024ea6c209eb3a0cc3\"",
       "bundleSha256": "82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa",
       "syntheticWatchdogDelivery": "PASS_ISSUE_17_OPEN_RECOVERY_COMMENT_AND_CLOSE",
-      "evidenceScope": "LAST_RUNTIME_CHANGING_SYNTHETIC_WATCHDOG_EVIDENCE_CHECKPOINT",
-      "productionAliasPolicy": "LATER_DOCS_ONLY_PUBLICATION_DEPLOYMENTS_MAY_SUPERSEDE_ALIAS_WITHOUT_CHANGING_RUNTIME_GUARANTEES"
+      "evidenceScope": "PREVIOUS_RUNTIME_CHANGING_SYNTHETIC_WATCHDOG_EVIDENCE_CHECKPOINT",
+      "productionAliasPolicy": "LATER_EVIDENCE_PUBLICATION_DEPLOYMENTS_MAY_SUPERSEDE_ALIAS_AND_CHANGE_ARTIFACT_BYTES_BECAUSE_REGISTRIES_ARE_SERVERLESS_BUILD_INPUTS_CHECKPOINT_REMAINS_HISTORICAL_BEHAVIOR_AFFECTING_CONSUMED_FIELDS_REQUIRE_REVALIDATION"
+    },
+    "previousCoreClaimProductionArtifact": {
+      "sourceCommit": "5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475",
+      "githubDeploymentId": "6022675081",
+      "githubDeploymentStatus": "success",
+      "vercelDeploymentId": "dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx",
+      "vercelDeploymentUrl": "https://liquidity-arena-eujqytbxd-leokings588-5902s-projects.vercel.app",
+      "productionAliasAtVerification": "https://liquidity-arena.vercel.app",
+      "vercelStatusAtVerification": "READY_PROMOTED",
+      "bundleFile": "/assets/market-CfuCPKfs.js",
+      "bundleBytes": 219197,
+      "bundleEtag": "W/\"830736d362d152a9ebb18e01b9b268a1\"",
+      "bundleSha256": "de89b5ae0947c35f384e5de0ff806b774947cf416f5e9dd9c0f7b51848232f87",
+      "aliasAndImmutableBundleIdentity": "PASS_EXACT_FILE_SIZE_ETAG_AND_SHA256",
+      "evidenceScope": "MERGED_CORE_CLAIM_UX_RUNTIME_PRODUCTION_ARTIFACT_BROWSER_VERIFIED_NO_LIVE_WALLET_SIGNATURE_OR_CLAIM_TRANSACTION",
+      "modalAccessibilityFixIncluded": false,
+      "modalAccessibilityReplacementArtifact": "dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr"
+    },
+    "lastRuntimeChangingProductionArtifact": {
+      "sourceCommit": "881e74895a31cb3cf82c078f4252110306684f30",
+      "githubDeploymentId": "6023788676",
+      "githubDeploymentStatus": "success",
+      "vercelDeploymentId": "dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr",
+      "vercelBuildId": "bld_6ru8isp7p",
+      "vercelDeploymentUrl": "https://liquidity-arena-7bkvfta05-leokings588-5902s-projects.vercel.app",
+      "productionAliasAtVerification": "https://liquidity-arena.vercel.app",
+      "vercelStatusAtVerification": "READY_PRODUCTION",
+      "nodeRuntime": "24.x",
+      "htmlBytes": 17986,
+      "bundleFile": "/assets/market-Cbg1BCfB.js",
+      "bundleBytes": 225141,
+      "bundleEtag": "\"7e1bea4635aa5da15eae5805c486d4c1\"",
+      "bundleSha256": "33a2cfa7b48970660b09bf8b3a455dd3740f09efe65f0e33b5a0707321f95bbf",
+      "aliasAndImmutableBundleIdentity": "PASS_EXACT_FILE_SIZE_ETAG_AND_SHA256",
+      "healthReadyHistoryStatus": "PASS_HTTP_200_EXACT_V7_KEEPER_COVERAGE_FIVE_FEEDS_HISTORY_39_OF_39_ZERO_GAPS",
+      "healthReadyHistoryEvidenceScope": "ARTIFACT_AND_BROWSER_VERIFICATION_SNAPSHOT_NOT_EVERGREEN",
+      "laterDocumentationValidation": "2026-08-21T15:16:17.648Z_HTTP_200_READY_JOURNAL_3_HISTORY_40_TERMINAL_40_RESOLVE_0_TIMEOUT_ZERO_GAPS",
+      "modalAccessibilityFixIncluded": true,
+      "productionFocusVerification": "PASS_P0_0_P1_0_P2_0_DESKTOP_MOBILE_CONTAINMENT_WRAP_RESTORE_NO_SITE_ORIGIN_ERRORS",
+      "walletSignatureSubmitted": false,
+      "claimTransactionSubmitted": false,
+      "evidenceScope": "MERGED_MODAL_ACCESSIBILITY_RUNTIME_PRODUCTION_ARTIFACT_BROWSER_VERIFIED_NO_LIVE_WALLET_SIGNATURE_OR_CLAIM_TRANSACTION"
     }
   },
-  "releaseCandidateUpdate20260821": {
-    "scope": "DOCUMENTATION_OF_LIVE_OPERATIONS_EVIDENCE_AND_LOCAL_CLAIM_UX_RELEASE_CANDIDATE",
+  "claimUxReleaseEvidence20260821": {
+    "scope": "MERGED_DEPLOYED_CLAIM_UX_RUNTIME_AND_LIVE_PRODUCTION_BROWSER_EVIDENCE",
+    "pullRequest": {
+      "number": 21,
+      "url": "https://github.com/Leokings/liquidity-arena/pull/21",
+      "mergedAt": "2026-08-21T13:47:56Z",
+      "squashCommit": "5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475"
+    },
+    "releasePipeline": {
+      "ci": {
+        "runId": "32488727873",
+        "url": "https://github.com/Leokings/liquidity-arena/actions/runs/32488727873",
+        "status": "SUCCESS",
+        "browserAndOperatorJobId": "96791127172",
+        "intelligentContractsJobId": "96791126997"
+      },
+      "codeql": {
+        "runId": "32488727758",
+        "url": "https://github.com/Leokings/liquidity-arena/actions/runs/32488727758",
+        "status": "SUCCESS",
+        "pythonJobId": "96791126830",
+        "javascriptTypescriptJobId": "96791127089"
+      },
+      "cloudflareSchedulerCi": {
+        "runId": "32488727814",
+        "url": "https://github.com/Leokings/liquidity-arena/actions/runs/32488727814",
+        "jobId": "96791126522",
+        "status": "SUCCESS"
+      }
+    },
+    "repositoryControls": {
+      "dependabotAlertsEnabled": true,
+      "dependabotAutomatedSecurityUpdatesEnabled": true,
+      "shaPinEnforcementEnabled": true,
+      "conversationResolutionRequired": true,
+      "requiredChecks": [
+        "BROWSER_AND_OPERATOR",
+        "INTELLIGENT_CONTRACTS",
+        "CODEQL_PYTHON",
+        "CODEQL_JAVASCRIPT_TYPESCRIPT"
+      ],
+      "dependencyGraphRunId": "32489288312",
+      "dependencyGraphStatus": "SUCCESS"
+    },
+    "dependencySecurity": {
+      "advisoryId": "GHSA-6w46-j5rx-g56g",
+      "advisoryUrl": "https://github.com/advisories/GHSA-6w46-j5rx-g56g",
+      "dependency": "pytest",
+      "resolvedWithVersion": "9.1.1",
+      "firstPatchedVersion": "9.0.3",
+      "pullRequestNumber": 22,
+      "pullRequestUrl": "https://github.com/Leokings/liquidity-arena/pull/22",
+      "mergedAt": "2026-08-21T14:37:16Z",
+      "mergeCommit": "e79192eb25294bb59dc0dd31b55dee97085a464f",
+      "dependabotAlertFixedAt": "2026-08-21T14:38:20Z",
+      "status": "FIXED"
+    },
+    "priorCoreClaimProductionEvidence": {
+      "githubDeploymentId": "6022675081",
+      "githubDeploymentStatus": "success",
+      "vercelDeploymentId": "dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx",
+      "vercelStatus": "READY_PROMOTED",
+      "immutableUrl": "https://liquidity-arena-eujqytbxd-leokings588-5902s-projects.vercel.app",
+      "productionAlias": "https://liquidity-arena.vercel.app",
+      "sourceCommit": "5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475",
+      "bundle": {
+        "file": "/assets/market-CfuCPKfs.js",
+        "bytes": 219197,
+        "sha256": "de89b5ae0947c35f384e5de0ff806b774947cf416f5e9dd9c0f7b51848232f87",
+        "etag": "W/\"830736d362d152a9ebb18e01b9b268a1\"",
+        "aliasAndImmutableIdentical": true
+      },
+      "endpoints": {
+        "healthzStatus": 200,
+        "readyzStatus": 200,
+        "historyHealthStatus": 200,
+        "readyChainId": "0xf22f",
+        "readyContractAddress": "0xb2ae59aE641f571726Ae81E30080f8c2192b15EF",
+        "readyKeeperAddress": "0x12ba664a1ec9ca78b070d103c6a69e20673f4b51",
+        "activeV7PlayerLiabilityAtto": "2000000000000000000",
+        "activeV7PlayerLiabilityBlocking": false,
+        "historyVerifiedTerminalOperationCount": 39,
+        "historyVerifiedResolveOperationCount": 39,
+        "historyVerifiedTimeoutOperationCount": 0,
+        "historyMissingDurableEpochCount": 0,
+        "historyStaleDurableEpochCount": 0,
+        "historyMissingDeterminedSnapshotCount": 0
+      },
+      "productionBrowser": {
+        "deploymentAlias": "v7",
+        "epochEndTimestamp": 1787205600,
+        "objective": "HIGH",
+        "epochIdentityExact": true,
+        "epochStatusLabel": "RESOLVED · ON-CHAIN",
+        "primaryActionLabel": "VIEW POSITION / CLAIM",
+        "reconnectActionLabel": "RECONNECT WALLET TO CLAIM HIGH POSITION",
+        "reconnectActionEnabled": true,
+        "binanceStreamConnected": true,
+        "walletSignatureSubmitted": false,
+        "claimTransactionSubmitted": false
+      },
+      "firstTenMinuteLogs": {
+        "errorLevelCount": 0,
+        "http500Count": 0
+      }
+    },
+    "productionEvidence": {
+      "githubDeploymentId": "6023788676",
+      "githubDeploymentStatus": "success",
+      "vercelDeploymentId": "dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr",
+      "vercelBuildId": "bld_6ru8isp7p",
+      "vercelStatus": "READY_PRODUCTION",
+      "immutableUrl": "https://liquidity-arena-7bkvfta05-leokings588-5902s-projects.vercel.app",
+      "productionAlias": "https://liquidity-arena.vercel.app",
+      "sourceCommit": "881e74895a31cb3cf82c078f4252110306684f30",
+      "nodeRuntime": "24.x",
+      "htmlBytes": 17986,
+      "bundle": {
+        "file": "/assets/market-Cbg1BCfB.js",
+        "bytes": 225141,
+        "sha256": "33a2cfa7b48970660b09bf8b3a455dd3740f09efe65f0e33b5a0707321f95bbf",
+        "etag": "\"7e1bea4635aa5da15eae5805c486d4c1\"",
+        "aliasAndImmutableIdentical": true
+      },
+      "endpoints": {
+        "evidenceScope": "ARTIFACT_AND_BROWSER_VERIFICATION_SNAPSHOT_NOT_EVERGREEN",
+        "healthzStatus": 200,
+        "readyzStatus": 200,
+        "historyHealthStatus": 200,
+        "readyChainId": "0xf22f",
+        "readyContractAddress": "0xb2ae59aE641f571726Ae81E30080f8c2192b15EF",
+        "readyKeeperAddress": "0x12ba664a1ec9ca78b070d103c6a69e20673f4b51",
+        "readyCoverageExact": true,
+        "readyFeedCount": 5,
+        "activeV7PlayerLiabilityAtto": "2000000000000000000",
+        "activeV7PlayerLiabilityBlocking": false,
+        "historyReady": true,
+        "historySchemaVersion": 1,
+        "journalSchemaVersion": 3,
+        "historyVerifiedTerminalOperationCount": 39,
+        "historyVerifiedResolveOperationCount": 39,
+        "historyVerifiedTimeoutOperationCount": 0,
+        "historyMissingDurableEpochCount": 0,
+        "historyStaleDurableEpochCount": 0,
+        "historyMissingDeterminedSnapshotCount": 0
+      },
+      "laterDocumentationValidation": {
+        "observedAt": "2026-08-21T15:16:17.648Z",
+        "historyHealthStatus": 200,
+        "historyReady": true,
+        "journalSchemaVersion": 3,
+        "historyVerifiedTerminalOperationCount": 40,
+        "historyVerifiedResolveOperationCount": 40,
+        "historyVerifiedTimeoutOperationCount": 0,
+        "historyMissingDurableEpochCount": 0,
+        "historyStaleDurableEpochCount": 0,
+        "historyMissingDeterminedSnapshotCount": 0,
+        "evidenceScope": "LATER_TIME_QUALIFIED_DOCUMENTATION_VALIDATION_NOT_EVERGREEN"
+      },
+      "productionBrowser": {
+        "independentVerdict": "INTERNAL_READ_ONLY_CODEX_BROWSER_AUDIT_PASS_P0_0_P1_0_P2_0",
+        "immutableHighRoute": "PASS_EXACT_EPOCH_1787205600_HIGH_DIALOG_OBJECTIVE_AND_RECONNECT_FOCUS",
+        "aliasLowRoute": "PASS_EXACT_EPOCH_1787205600_LOW_DIALOG_OBJECTIVE_AND_RECONNECT_FOCUS",
+        "backgroundSiblingIsolation": "PASS_EVERY_SIBLING_INERT_AND_ARIA_HIDDEN",
+        "desktopFocusWrap": "PASS_FORWARD_AND_REVERSE_24_MOVES_CONTAINED",
+        "mobileFocusWrap": "PASS_FORWARD_AND_REVERSE_12_MOVES_CONTAINED",
+        "escapeFallbackFocusTarget": "#prediction-button",
+        "selectedOrbOpenerRestore": "PASS_EXACT",
+        "backdropOpenerRestore": "PASS_EXACT",
+        "mobileViewport": "412x915",
+        "mobileDocumentWidth": 412,
+        "mobileViewportWidth": 412,
+        "mobileModalBounds": "x18..394",
+        "mobileHorizontalOverflow": false,
+        "mobileClaimCtaVisible": true,
+        "siteOriginWarningCount": 0,
+        "siteOriginErrorCount": 0,
+        "extensionWarningsExcluded": "METAMASK_EXTENSION_ONLY",
+        "walletActionSubmitted": false,
+        "walletSignatureSubmitted": false,
+        "claimTransactionSubmitted": false
+      }
+    },
     "cloudflareBackup": {
       "status": "LIVE_EVIDENCED",
       "workerName": "liquidity-arena-backup-scheduler",
@@ -1410,19 +1633,84 @@
         "event": "CLOUDFLARE_BACKUP_SKIPPED",
         "reason": "current_hour_run_succeeded"
       },
+      "postMergeMinute37Cycle": {
+        "sourceCommit": "5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475",
+        "cron": "37 * * * *",
+        "workerScheduledAt": "2026-08-21T14:37:29Z",
+        "workerLoggedAt": "2026-08-21T14:37:30.115Z",
+        "workerEvent": "CLOUDFLARE_BACKUP_SKIPPED",
+        "workerTrigger": "KEEPER",
+        "workerReason": "current_hour_run_succeeded",
+        "status": "PASS_CURRENT_HOUR_RUN_AND_DOWNSTREAM_WATCHDOG_VERIFIED",
+        "keeperWorkflowRun": {
+          "runId": "32490379141",
+          "url": "https://github.com/Leokings/liquidity-arena/actions/runs/32490379141",
+          "event": "schedule",
+          "sourceCommit": "5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475",
+          "status": "SUCCESS",
+          "reconcileJobId": "96796351916",
+          "historyJobId": "96797302128",
+          "operations": [
+            {
+              "kind": "RESOLVE",
+              "operationId": "371dec560c77bde5610b57ae7637f2dcbba0c740e4b73d64453a5450c4d06a78",
+              "epochEndTimestamp": 1787320800,
+              "transactionHash": "0x9d808082d5671911279f581dc7acdeeaad9f9b6b1e1421af40b71dd3e81b7742",
+              "journalState": "VERIFIED",
+              "postState": "RESOLVED"
+            },
+            {
+              "kind": "CREATE",
+              "operationId": "55c4a181c56b92f33aa4291473d82a571b2658ab51503b1503906bb085d295c1",
+              "epochEndTimestamp": 1787414400,
+              "transactionHash": "0x6df7394bbd77027968a8924bdeb5f9649792e391eed8bc42438b2535f1f945f9",
+              "journalState": "VERIFIED",
+              "postState": "OPEN"
+            }
+          ],
+          "historyProjection": {
+            "deploymentsSynced": 1,
+            "epochsSynced": 3,
+            "snapshotsSynced": 3,
+            "proofsVerified": 0,
+            "requestedProofsRejected": 0
+          }
+        },
+        "watchdogRun": {
+          "runId": "32490747878",
+          "url": "https://github.com/Leokings/liquidity-arena/actions/runs/32490747878",
+          "jobId": "96797531668",
+          "event": "workflow_run",
+          "upstreamKeeperRunId": "32490379141",
+          "status": "SUCCESS"
+        },
+        "historyIntegrity": {
+          "verifiedTerminalOperationCount": 39,
+          "verifiedResolveOperationCount": 39,
+          "verifiedTimeoutOperationCount": 0,
+          "missingDurableEpochCount": 0,
+          "staleDurableEpochCount": 0,
+          "missingDeterminedSnapshotCount": 0
+        },
+        "priorSchedulerEvidenceRemainsValid": true
+      },
       "credentialBoundary": "CLOUDFLARE_HAS_ONLY_ONE_REPOSITORY_ACTIONS_READ_WRITE_DISPATCH_TOKEN_NO_GENLAYER_NEON_JOURNAL_OWNER_TREASURY_OR_KEEPER_SECRET"
     },
     "claimUx": {
-      "status": "LOCAL_TESTED_NOT_MERGED_NOT_DEPLOYED_NOT_LIVE_WALLET_TESTED",
+      "status": "CORE_AND_MODAL_ACCESSIBILITY_FIX_MERGED_DEPLOYED_CI_CODEQL_ENDPOINTS_AND_PRODUCTION_BROWSER_VERIFIED_LIVE_WALLET_SIGNATURE_AND_CLAIM_TRANSACTION_UNTESTED",
       "evidenceRecordedOn": "2026-08-21",
-      "marketTests": "208/208",
-      "focusedClaimTests": "80/80",
-      "playwrightCases": "22/22",
-      "playwrightJourneyCount": 11,
+      "corePullRequestNumber": 21,
+      "modalAccessibilityPullRequestNumber": 26,
+      "sourceCommit": "881e74895a31cb3cf82c078f4252110306684f30",
+      "productionDeploymentId": "dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr",
+      "marketTests": "210/210",
+      "focusedClaimTests": "7/7",
+      "playwrightCases": "24/24",
+      "playwrightJourneyCount": 12,
       "playwrightWorkerCount": 1,
       "playwrightProjects": ["chromium", "mobile-chromium"],
       "playwrightDeviceProfiles": ["Desktop Chrome", "Pixel 7"],
-      "fullNpmTests": "432/432",
+      "fullNpmTests": "434/434",
       "buildModuleCount": 477,
       "npmAuditFindings": 0,
       "aggregateTruthModel": {
@@ -1466,7 +1754,59 @@
         "FINALIZED_ACTUAL_CLAIMED_AMOUNT_STORED_IN_ACTIVITY_AND_RECOVERY",
         "ACCESSIBLE_LARGE_CLAIM_CONTROLS"
       ],
-      "productionArtifactIdsChanged": false
+      "productionArtifactIdsChanged": true,
+      "modalAccessibilityRelease": {
+        "pullRequestNumber": 26,
+        "pullRequestUrl": "https://github.com/Leokings/liquidity-arena/pull/26",
+        "pullRequestState": "MERGED",
+        "headCommit": "fdbea7a96eb130aaf616f6c7ab76e9386b55ec39",
+        "baseCommit": "e79192eb25294bb59dc0dd31b55dee97085a464f",
+        "mergedAt": "2026-08-21T14:55:40Z",
+        "mergeCommit": "881e74895a31cb3cf82c078f4252110306684f30",
+        "scopeFiles": [
+          "market.html",
+          "market/app.js",
+          "market/claim-ux.test.mjs",
+          "tests/e2e/market-claim-flow.spec.mjs"
+        ],
+        "features": [
+          "MODAL_FOCUS_CONTAINMENT",
+          "BACKGROUND_INERT_AND_ARIA_HIDDEN_WITH_EXACT_RESTORATION",
+          "EXACT_OPENER_FOCUS_RESTORATION",
+          "NESTED_MODAL_BASELINE_UNISOLATION",
+          "ASYNC_GENERATION_AND_FOCUS_RACE_GUARDS"
+        ],
+        "independentReview": "INTERNAL_CODEX_DIFF_REVIEW_APPROVED_NO_REMAINING_P0_P1_P2",
+        "focusedClaimTests": "7/7",
+        "marketTests": "210/210",
+        "fullNpmTests": "434/434",
+        "playwrightCases": "24/24",
+        "playwrightJourneyCount": 12,
+        "playwrightProjects": ["chromium", "mobile-chromium"],
+        "buildModuleCount": 477,
+        "npmAuditFindings": 0,
+        "mainCiRunId": "32494801072",
+        "mainCiStatus": "SUCCESS",
+        "browserAndOperatorJobId": "96810573370",
+        "intelligentContractsJobId": "96810573060",
+        "codeqlRunId": "32494801089",
+        "codeqlStatus": "SUCCESS",
+        "codeqlJavascriptTypescriptJobId": "96810573794",
+        "codeqlPythonJobId": "96810574148",
+        "mergeStatus": "MERGED",
+        "productionGithubDeploymentId": "6023788676",
+        "productionVercelDeploymentId": "dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr",
+        "productionBundleIdentity": "PASS_MARKET_CBG1BCFB_JS_225141_BYTES_SHA256_33A2CFA7B48970660B09BF8B3A455DD3740F09EFE65F0E33B5A0707321F95BBF",
+        "productionEndpoints": "PASS_HEALTH_READY_HISTORY_HTTP_200",
+        "productionLiveBrowserVerification": "PASS_P0_0_P1_0_P2_0_HIGH_IMMUTABLE_LOW_ALIAS_DESKTOP_MOBILE_CONTAINMENT_WRAP_RESTORE_NO_SITE_ORIGIN_ERRORS_NO_WALLET_ACTION"
+      }
+    },
+    "remainingClaimReleaseEvidence": {
+      "liveUserWalletSignature": "PENDING_UNTESTED",
+      "liveClaimTransaction": "PENDING_UNTESTED",
+      "liveClaimChildTransfer": "PENDING_UNTESTED",
+      "modalAccessibilityFixMergeDeployAndLiveBrowserVerification": "PASS",
+      "meaning": "PRODUCTION_CLAIM_ROUTE_RECONNECT_AND_MODAL_FOCUS_VERIFIED_NO_USER_WALLET_WRITE_OR_VALUE_TRANSFER_CLAIM"
     },
     "activeParticipantObligation": {
       "deployment": "v7",
@@ -1499,8 +1839,8 @@
     "legacyV6ScheduledDrainWorkflow": "HISTORICAL_PASS_LIVE_WORKFLOW_338089016_DISABLED_MANUALLY_ZERO_PLAYER_LIABILITY_MAIN_SOURCE_WORKFLOW_DISPATCH_ONLY",
     "currentReceiptVerifierCiRunId": "32308815377",
     "currentReceiptVerifierCi": "PASS_BOTH_JOBS",
-    "lastRuntimeChangingVercelDeployment": "PASS_READY_PROMOTED_RUNTIME_ARTIFACT_DPL_9DPV89RJGBSJYFO3JGMMBEMTPV6K_SOURCE_A1C773A",
-    "productionAliasPublicationPolicy": "LATER_DOCS_ONLY_PUBLICATION_DEPLOYMENTS_MAY_SUPERSEDE_ALIAS_WITHOUT_CHANGING_RUNTIME_GUARANTEES",
+    "lastRuntimeChangingVercelDeployment": "PASS_READY_PRODUCTION_RUNTIME_ARTIFACT_DPL_4WME3QATS8UQVS7HA6FTFFCTJDBR_SOURCE_881E748",
+    "productionAliasPublicationPolicy": "LATER_EVIDENCE_PUBLICATION_DEPLOYMENTS_MAY_SUPERSEDE_ALIAS_AND_CHANGE_ARTIFACT_BYTES_BECAUSE_REGISTRIES_ARE_SERVERLESS_BUILD_INPUTS_CHECKPOINT_REMAINS_HISTORICAL_BEHAVIOR_AFFECTING_CONSUMED_FIELDS_REQUIRE_REVALIDATION",
     "keeperReceiptGraceMainCommit": "958e51743a821606ca78881e6bcc8fb0a34a8e8f",
     "keeperReceiptGraceCiRunId": "32310160397",
     "keeperReceiptGraceCi": "PASS_BOTH_JOBS_FIRST_LIVE_SCHEDULED_RUN_FAILED_LOOKUP_BUT_BOTH_EXACT_WRITES_LATER_FINALIZED_AND_APPLIED",
@@ -1511,8 +1851,20 @@
     "firstQualifyingRestoredScheduleRun": "PASS_TWO_VERIFIED_OPERATIONS_POST_RUN_JOURNAL_8_OF_8_VERIFIED_ZERO_UNRESOLVED_HISTORY_GREEN",
     "secondActionBearingRestoredScheduleRunId": "32332196428",
     "secondActionBearingRestoredScheduleRun": "HISTORICAL_PASS_TWO_VERIFIED_OPERATIONS_POST_RUN_JOURNAL_10_OF_10_VERIFIED_ZERO_UNRESOLVED_HISTORY_GREEN",
-    "currentHardenedRuntimeCiRunId": "32332498286",
-    "currentHardenedRuntimeVerification": "PASS_SHARED_SSE_CANCELLATION_CLEANUP_BROWSER_STRESS_PUBLIC_ENDPOINTS_AND_BUNDLE_IDENTITY",
+    "lastRuntimeChangingHardenedRuntimeCiRunId": "32494801072",
+    "lastRuntimeChangingHardenedRuntimeVerification": "PASS_JOBS_96810573370_96810573060_CLAIM_UX_BROWSER_OPERATOR_INTELLIGENT_CONTRACTS_BUILD_AND_AUDIT",
+    "lastRuntimeChangingCodeqlRunId": "32494801089",
+    "lastRuntimeChangingCodeqlVerification": "PASS_JOBS_96810573794_96810574148_JAVASCRIPT_TYPESCRIPT_AND_PYTHON",
+    "claimUxCloudflareSchedulerCiRunId": "32488727814",
+    "claimUxCloudflareSchedulerCi": "PASS_JOB_96791126522",
+    "postMergeCloudflareMinute37Cycle": "PASS_SKIP_CURRENT_HOUR_RUN_32490379141_JOBS_96796351916_96797302128_WATCHDOG_32490747878_JOB_96797531668_HISTORY_39_OF_39_ZERO_GAPS",
+    "pytestSecurityAdvisory": "FIXED_GHSA_6W46_J5RX_G56G_PR_22_COMMIT_E79192E",
+    "priorCoreClaimRouteVerification": "PASS_V7_HIGH_EPOCH_1787205600_RESOLVED_ON_CHAIN_RECONNECT_ENABLED_STREAM_CONNECTED",
+    "lastRuntimeChangingProductionClaimRouteVerification": "PASS_HIGH_IMMUTABLE_LOW_ALIAS_EPOCH_1787205600_DIALOG_OBJECTIVE_RECONNECT_FOCUS_DESKTOP_MOBILE_CONTAINMENT_WRAP_RESTORE_NO_SITE_ORIGIN_ERRORS",
+    "lastRuntimeChangingArtifactEndpointsSnapshot": "PASS_ARTIFACT_BROWSER_SNAPSHOT_HEALTH_READY_HISTORY_HTTP_200_EXACT_V7_KEEPER_COVERAGE_FIVE_FEEDS_HISTORY_39_OF_39_ZERO_GAPS",
+    "laterDocumentationValidationEndpoints": "PASS_2026_08_21T15_16_17_648Z_HISTORY_HTTP_200_READY_JOURNAL_3_40_TERMINAL_40_RESOLVE_0_TIMEOUT_ZERO_GAPS",
+    "liveUserWalletSignatureAndClaimTransaction": "PENDING_UNTESTED",
+    "modalAccessibilityFix": "PASS_PR_26_MERGED_CI_CODEQL_DEPLOYED_AND_INDEPENDENT_PRODUCTION_BROWSER_VERIFIED_P0_0_P1_0_P2_0",
     "postSoakHardeningMainCommit": "abef30d7268b34331528c470cc2a06eefe50ba33",
     "postSoakHardeningCiRunId": "32458652480",
     "postSoakHardeningCi": "PASS_BOTH_JOBS",

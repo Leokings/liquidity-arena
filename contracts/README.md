@@ -28,13 +28,33 @@ remain read-only, and this is an unresolved protocol P1 rather than a browser-on
 The active V7 deployment currently reports 2 GEN across two eligible unclaimed refunds. Those are
 participant obligations and remain claimable on V7. A fresh-deployment V8 state machine,
 delivery-loss reserve, and idempotent payout-escrow proposal are documented in
-[`../docs/V8-PAYOUT-RECOVERY.md`](../docs/V8-PAYOUT-RECOVERY.md). The local claim/refund UX release
-candidate improves discovery and reconnection but does not change this contract boundary. Its
-pre-write quote is intent; wallet account and StudioNet are rechecked immediately before writing;
-finalized actual proceeds must be at least that quote; and delivery plus activity/recovery use the
-actual amount. Its 2026-08-21 local evidence—208/208 market, 80/80 focused claim, 22/22 browser cases
-across 11 `chromium`/`mobile-chromium` journeys, and 432/432 full tests, plus a 477-module build and
-audit 0—is not deployment or live-wallet evidence.
+[`../docs/V8-PAYOUT-RECOVERY.md`](../docs/V8-PAYOUT-RECOVERY.md). The claim/refund UX merged in
+[PR #21](https://github.com/Leokings/liquidity-arena/pull/21) and is deployed from exact source
+`5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475`; it improves discovery and reconnection but does not
+change this contract boundary. Its pre-write quote is intent; wallet account and StudioNet are
+rechecked immediately before writing; finalized actual proceeds must be at least that quote; and
+delivery plus activity/recovery use the actual amount. Final accessibility release evidence is 210/210 market,
+7/7 focused claim, 24/24 browser cases across 12 `chromium`/`mobile-chromium` journeys, 434/434 full
+tests, a 477-module build, and audit 0. Production route/reconnect UI was browser-verified, but no
+live user-wallet signature, finalized claim transaction, or exact child delivery was performed. The
+focus-containment fix approved by an internal independent Codex diff review merged as PR #26 commit
+`881e74895a31cb3cf82c078f4252110306684f30`; CI/CodeQL passed and its exact replacement deployment
+`dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr` was READY at verification. An independent read-only Codex
+desktop/mobile production focus audit passed with P0/P1/P2 all zero,
+but no wallet action or signature was submitted. It does not change V7 or resolve the payout-recovery
+P1.
+
+Operational evidence outside the immutable contract boundary also passed. Native GitHub scheduled
+keeper run [`32490379141`](https://github.com/Leokings/liquidity-arena/actions/runs/32490379141)
+verified one resolve and one create, projected 1 deployment/3 epochs/3 snapshots/0 proofs, and was followed by
+successful watchdog run
+[`32490747878`](https://github.com/Leokings/liquidity-arena/actions/runs/32490747878); Worker version
+`536e6476-3c4e-4b93-a454-700f55d6cea7` then emitted `CLOUDFLARE_BACKUP_SKIPPED` because the current
+hour's primary run had succeeded. Pytest advisory
+[`GHSA-6w46-j5rx-g56g`](https://github.com/advisories/GHSA-6w46-j5rx-g56g) was fixed by
+[PR #22](https://github.com/Leokings/liquidity-arena/pull/22), merge
+`e79192eb25294bb59dc0dd31b55dee97085a464f`; neither operational change alters V7 or closes its
+payout-recovery P1.
 
 ## V7 contract boundary
 
@@ -149,8 +169,10 @@ The post-soak integrity gate now cross-checks VERIFIED V7 terminal journal opera
 epochs and determined snapshots. Repair runs `32458718433`, `32459026957`, and `32459340292`
 synchronized seven epochs/snapshots and moved the diagnostic from 31 terminal operations with three
 missing and one stale epoch to 31/31 with zero missing, stale, or missing-snapshot rows. After manual
-keeper run `32459740369`, history-health reports 32/32 verified terminal/resolve operations and zero
-gaps. This remains a discoverability check over an off-chain projection, not contract authority.
+keeper run `32459740369`, history-health reported 32/32 verified terminal/resolve operations and zero
+gaps; the later post-merge snapshot was 39/39/0 with zero gaps. Documentation validation at
+`2026-08-21T15:16:17.648Z` then observed HTTP 200 ready, journal 3, 40/40/0, and zero gaps. These are
+time-qualified observations over an off-chain projection, not contract authority.
 
 ## Verification requirements
 
@@ -213,7 +235,9 @@ known issue even though every delivered action passed. PR #15 merge
 `abef30d7268b34331528c470cc2a06eefe50ba33` installs one minute-27 trigger, a durable shared
 `queue: max` writer queue, mandatory three-epoch V7 projection, integrity health, active-player-
 liability reporting, and a GitHub-native watchdog. Post-merge run `32459740369` added one exact
-VERIFIED resolve/create pair; the journal is now 64/64 VERIFIED with zero unresolved. The historical
+VERIFIED resolve/create pair; the journal at that checkpoint was 64/64 VERIFIED with zero unresolved.
+Later keeper cycles are recorded by exact operations without asserting a new aggregate count. The
+historical
 READY artifact that executed the first restored run was
 Vercel deployment `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, source
 `81850e3c814cd541d392fdeecf4dacca753d25e6`, bundle `/assets/market-BQWvq82y.js` SHA-256
@@ -246,14 +270,16 @@ optional, unconfigured enhancement. Active V7 player liability is 2 GEN
 across two eligible unclaimed refunds; it is an outstanding participant obligation, not a readiness
 failure. Outage recovery and external review remain pending.
 
-The last runtime-changing production artifact and synthetic-watchdog evidence checkpoint was
+The previous runtime-changing production artifact and synthetic-watchdog evidence checkpoint was
 READY/PROMOTED deployment `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K`,
 GitHub deployment `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`, at
 `https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`. Main-push CI
 `32461039766` passed. Bundle `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
 `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
-This immutable checkpoint does not assert that the public alias still targets it; later documentation-only
-publication deployments may supersede the alias without changing the recorded runtime guarantees.
+This immutable checkpoint does not assert that the public alias still targets it. Later evidence-publication
+deployments may supersede the alias and produce different artifact bytes because the deployment registries are
+serverless build inputs; they do not retroactively change this checkpoint. Any behavior-affecting consumed
+registry-field change requires separate validation.
 
 See [`../docs/STUDIONET-V7.md`](../docs/STUDIONET-V7.md) and
 [`../deployments/studionet-v7.json`](../deployments/studionet-v7.json).

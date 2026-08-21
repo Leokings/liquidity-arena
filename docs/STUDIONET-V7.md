@@ -20,28 +20,64 @@ The machine-readable source of record is
 [`../deployments/studionet-v7.json`](../deployments/studionet-v7.json). This document adds operational
 context; it does not replace the JSON evidence.
 
-## 2026-08-21 release-candidate update
+## 2026-08-21 claim UX release evidence
 
-Cloudflare backup activation is now evidenced, without changing the V7 contract identity or any
-recorded Vercel artifact ID. Worker version `536e6476-3c4e-4b93-a454-700f55d6cea7` dispatched keeper
+Cloudflare backup activation is evidenced without changing the V7 contract identity. Worker version
+`536e6476-3c4e-4b93-a454-700f55d6cea7` dispatched keeper
 run `32473485508`; reconciliation VERIFIED RESOLVE `0x62331f…c746` and CREATE `0x310fc6…5445`, and
 history synchronized 3/3 epochs/snapshots. Watchdog run `32473776356` succeeded. A subsequent
 minute-57 Worker log emitted `CLOUDFLARE_BACKUP_SKIPPED` with
-`current_hour_run_succeeded`, proving the conditional skip path.
+`current_hour_run_succeeded`, proving the conditional skip path. The post-merge cycle also passes: on
+the tick scheduled for `2026-08-21T14:37:29Z`, the Worker logged its skip at
+`2026-08-21T14:37:30.115Z` for successful current-hour native GitHub scheduled run `32490379141` on
+`5ac2c1f`. Reconcile/history jobs `96796351916`/`96797302128` VERIFIED RESOLVE
+operation `371dec560c77bde5610b57ae7637f2dcbba0c740e4b73d64453a5450c4d06a78`, transaction
+`0x9d808082d5671911279f581dc7acdeeaad9f9b6b1e1421af40b71dd3e81b7742`, to `RESOLVED`, and CREATE
+operation `55c4a181c56b92f33aa4291473d82a571b2658ab51503b1503906bb085d295c1`, transaction
+`0x6df7394bbd77027968a8924bdeb5f9649792e391eed8bc42438b2535f1f945f9`, to `OPEN`; history projected
+1 deployment, 3 epochs, 3 snapshots, and 0 proofs. Watchdog run `32490747878`, job `96797531668`,
+succeeded. Integrity is 39 terminal, 39 resolve, 0 timeout, with zero gaps.
 
-Claim/refund UX hardening is local release-candidate code only. As of 2026-08-21, pre-modal
+Core claim/refund UX hardening is merged and deployed; the modal focus follow-up remains separate
+below. [PR
+#21](https://github.com/Leokings/liquidity-arena/pull/21) merged at `2026-08-21T13:47:56Z` as squash
+`5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475`. CI run
+[`32488727873`](https://github.com/Leokings/liquidity-arena/actions/runs/32488727873), CodeQL run
+[`32488727758`](https://github.com/Leokings/liquidity-arena/actions/runs/32488727758), and Cloudflare
+scheduler CI run [`32488727814`](https://github.com/Leokings/liquidity-arena/actions/runs/32488727814)
+succeeded. Pre-modal
 aggregate eligibility, same-page route/session preservation, explicit cross-deployment reconnect,
 exact reload intent, fail-closed quote identity, last-good validated pagination, and accessible
-actions pass 208/208 market tests, 80/80 focused claim tests, 22/22 Playwright cases (11 journeys
-across `chromium`/`mobile-chromium`, Desktop Chrome/Pixel 7, one worker), 432/432 full tests, a
+actions pass 210/210 market tests, 7/7 focused claim tests, 24/24 Playwright cases (12 journeys
+across `chromium`/`mobile-chromium`, Desktop Chrome/Pixel 7, one worker), 434/434 full tests, a
 477-module build, and audit 0. Verified-current aggregates require complete known pagination and
 successful deployment reads;
 failed or refreshing cached rows are neutral `LAST VERIFIED`/`PARTIAL` evidence with no false `≥`
-lower bound. The changes are not yet merged, deployed, or live-wallet tested.
+lower bound.
 
 The pre-write quote is intent. The runtime rechecks exact quote identity, wallet account, and
 StudioNet immediately before writing; finalized actual proceeds must be at least the quote; exact
 child delivery is verified against the actual amount; and activity/recovery stores that actual.
+
+GitHub deployment `6022675081` succeeded, and Vercel deployment
+`dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx` is READY/PROMOTED. Production browser verification reached the
+exact V7 HIGH deep link for epoch `1787205600`, showing the exact epoch,
+`RESOLVED · ON-CHAIN`, `VIEW POSITION / CLAIM`, and enabled
+`RECONNECT WALLET TO CLAIM HIGH POSITION` with the Binance stream
+connected. No error-level or HTTP 500 log appeared in the first ten minutes. This is route/reconnect
+UI evidence only: a live user-wallet signature, finalized claim transaction, and exact child delivery
+remain untested. The production artifact contains the PR #21 core claim UX, not the modal
+focus-containment fix approved by an internal independent Codex diff review: [PR #26](https://github.com/Leokings/liquidity-arena/pull/26)
+merged at `2026-08-21T14:55:40Z` as `881e74895a31cb3cf82c078f4252110306684f30`.
+Main CI `32494801072` passed jobs `96810573370`/`96810573060`, and CodeQL `32494801089` passed jobs
+`96810573794`/`96810574148`. Successful GitHub deployment `6023788676` and READY production Vercel
+deployment `dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr` form the last runtime-changing checkpoint from exact
+source `881e748`; health/readiness/history passed at verification. An independent read-only Codex
+immutable-HIGH/alias-LOW desktop/mobile focus audit passed with
+P0/P1/P2 all zero. Pytest advisory
+`GHSA-6w46-j5rx-g56g` was fixed by PR #22 merge
+`e79192eb25294bb59dc0dd31b55dee97085a464f`; Dependabot marked the alert fixed at
+`2026-08-21T14:38:20Z`.
 
 V7 still reports 2 GEN of active player liability across two eligible unclaimed refunds. Because V7
 has no upgrader and applies claim accounting before its independent transfer child, ambiguous-child
@@ -175,9 +211,10 @@ then passed reconcile job `96704099506` and history job `96704818464`. It VERIFI
 and CREATE `1787389200`, operation
 `f55fa63b8e598172435ec284d7eb82e6db2c8aeb6f368188bc6f58452e172252`, transaction
 `0x2075252b008d239da9bee85ff7186b0548da20570db8d319a0ed1ce1d4f25d73`, with OPEN post-state.
-History synchronized 3/3 at `2026-08-21T07:45:20.943Z`. Neon now reads 64/64 VERIFIED with zero
-unresolved; public history-health is HTTP 200 with 32/32 terminal/resolve operations and zero timeout,
-missing, stale, or missing-snapshot rows. Manual watchdog `32459656268`/job `96703858691` and
+History synchronized 3/3 at `2026-08-21T07:45:20.943Z`. At that checkpoint Neon read 64/64 VERIFIED
+with zero unresolved and history-health read 32/32. The recorded post-merge snapshot was HTTP 200
+with 39/39 terminal/resolve operations, zero timeouts, and zero missing, stale, or missing-snapshot rows.
+Manual watchdog `32459656268`/job `96703858691` and
 automatic `workflow_run` `32460047757`/job `96704995526` both pass. Synthetic run `32461072315`
 then passed all production checks, injected failure, and opened issue #17 at
 `2026-08-21T07:59:29Z`. Recovery run `32461245006`/job `96708451794` succeeded from
@@ -244,8 +281,8 @@ Completed:
   create, and left the production journal at 10/10 VERIFIED with zero unresolved;
 - 24-hour checkpoint passed 25/25 delivered scheduled records, 50/50 jobs, and 52/52 VERIFIED actions,
   ending at 62/62 VERIFIED and zero unresolved before maintenance;
-- PR #15 post-soak hardening, three serialized repair runs, one verified manual keeper/history run,
-  and history integrity 32/32 with zero gaps;
+- PR #15 post-soak hardening, three serialized repair runs, verified keeper/history cycles, and a
+  recorded 39/39/0 zero-gap history snapshot;
 - GitHub-native watchdog healthy, synthetic issue-open, recovery-comment, and issue-close paths passed.
 
 Pending:
@@ -255,6 +292,7 @@ Pending:
 - live 24-hour timeout-refund proof;
 - database outage-recovery verification and transaction-proof coverage beyond the selected V7
   deployment/canary/fee evidence;
+- a live user-wallet signature, finalized claim transaction, and exact child-delivery verification;
 - continued public browser/wallet soak and rollback rehearsal without re-enabling V6 writes;
 - independent security and provider/legal review.
 
@@ -359,8 +397,9 @@ Post-soak projection repair is separately recorded in runs `32458718433`, `32459
 `32459340292`. They synchronized seven V7 epochs/snapshots in batches of 3/3, 2/2, and 2/2 with no
 proof failures/rejections. The integrity diagnostic changed from 31 VERIFIED terminal operations,
 three missing durable epochs, one stale epoch, and zero missing snapshots to 31/31 with no gaps.
-Manual keeper run `32459740369` then projected 3/3 at `2026-08-21T07:45:20.943Z`; current integrity
-is 32/32 terminal/resolve operations with zero timeout, missing, stale, or missing-snapshot rows.
+Manual keeper run `32459740369` then projected 3/3 at `2026-08-21T07:45:20.943Z`; the later
+post-merge snapshot was 39/39 terminal/resolve operations with zero timeout, missing, stale, or
+missing-snapshot rows.
 
 Merged fix `e5627ebd270a7c6d5291151795b0af6442eba0a6` reuses the audited fail-closed StudioNet
 consensus/leader receipt validator for history proof verification. Protected manual workflow
@@ -451,7 +490,7 @@ history-health, and proof surfaces return HTTP 200. Active V7 player liability i
 eligible unclaimed refunds; it is reported as an outstanding participant obligation and does not
 block readiness.
 
-The last runtime-changing production artifact and synthetic-watchdog evidence checkpoint was the
+The previous runtime-changing production artifact and synthetic-watchdog evidence checkpoint was the
 READY/PROMOTED Vercel deployment
 `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
 [liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app](https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app),
@@ -460,5 +499,38 @@ GitHub deployment `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f
 direct tests). Bundle `/assets/market-BoHfo81C.js` is 193040 bytes with ETag
 `"fa10949a324593024ea6c209eb3a0cc3"` and SHA-256
 `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
-This immutable checkpoint does not assert that the public alias still targets it; later documentation-only
-publication deployments may supersede the alias without changing the recorded runtime guarantees.
+This immutable checkpoint no longer owns the public alias.
+
+The previous core-claim production artifact is GitHub deployment `6022675081` and
+READY/PROMOTED Vercel deployment `dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx` at
+[liquidity-arena-eujqytbxd-leokings588-5902s-projects.vercel.app](https://liquidity-arena-eujqytbxd-leokings588-5902s-projects.vercel.app).
+At that verification checkpoint, [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app)
+also targeted exact source `5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475`, and both URLs served identical
+`/assets/market-CfuCPKfs.js` bytes: 219197 bytes, ETag
+`W/"830736d362d152a9ebb18e01b9b268a1"` for the gzip representation, SHA-256
+`de89b5ae0947c35f384e5de0ff806b774947cf416f5e9dd9c0f7b51848232f87`. Health/readiness/history
+health returned HTTP 200; the artifact/browser history snapshot was 39/39/0 with zero gaps. The exact V7 HIGH route
+for epoch `1787205600` showed `RESOLVED · ON-CHAIN`, `VIEW POSITION / CLAIM`, and enabled
+`RECONNECT WALLET TO CLAIM HIGH POSITION`, with the Binance stream connected and no error-level or
+HTTP 500 logs in the first ten minutes. This route/reconnect proof predates merged PR #26's focus-
+containment fix and does not prove a live wallet signature or claim transfer. The last runtime-changing
+checkpoint is successful GitHub deployment `6023788676` and READY production Vercel deployment
+`dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr`, build `bld_6ru8isp7p`, at
+[liquidity-arena-7bkvfta05-leokings588-5902s-projects.vercel.app](https://liquidity-arena-7bkvfta05-leokings588-5902s-projects.vercel.app).
+At its verification checkpoint, the public alias and immutable deployment served identical exact-source
+`881e74895a31cb3cf82c078f4252110306684f30` `/assets/market-Cbg1BCfB.js` bytes (225141 bytes), ETag
+`"7e1bea4635aa5da15eae5805c486d4c1"`, SHA-256
+`33a2cfa7b48970660b09bf8b3a455dd3740f09efe65f0e33b5a0707321f95bbf`; HTML is 17986 bytes.
+Health/readiness checks passed at exact V7/keeper/coverage/five feeds and non-blocking 2 GEN. The
+artifact/browser history snapshot was 39/39/0 with zero gaps; later documentation validation at
+`2026-08-21T15:16:17.648Z` observed HTTP 200 ready, journal 3, 40/40/0, and zero gaps. Immutable HIGH
+and alias LOW epoch-`1787205600` routes passed
+correct dialog/objective/reconnect focus; every background sibling was inert and `aria-hidden`;
+24 desktop and 12 mobile forward/reverse edge moves stayed contained; Escape fell back to
+`#prediction-button`; selected-orb/backdrop closes restored exact openers; and the 412x915 mobile
+layout had width 412, modal x18..394, no overflow, and a visible CTA. Both routes had zero site-origin
+warnings/errors, excluding MetaMask-extension warnings. The internal read-only Codex audit verdict was P0=0/P1=0/P2=0;
+no wallet action or signature was submitted.
+An evidence-publication successor may move the alias and differ in artifact bytes because the deployment
+registries are serverless build inputs; it does not retroactively alter this immutable checkpoint. The
+current registry edit leaves every field consumed by `history/deployment-manifest.mjs` unchanged.

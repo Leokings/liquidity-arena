@@ -4,22 +4,52 @@ This brief turns [the V7 product specification](REDESIGN-SPEC.md) into a release
 what is deployed, what is verified, and what must still pass before any public-value readiness claim.
 A checked box must be backed by reproducible local output or immutable StudioNet/public evidence.
 
-## Release-candidate delta — 2026-08-21
+## Claim UX deployment evidence — 2026-08-21
 
 - [x] Cloudflare backup activation is publicly evidenced: Worker version `536e6476…cea7`, successful
   keeper dispatch run `32473485508` with VERIFIED RESOLVE `0x62331f…c746`, CREATE
   `0x310fc6…5445`, and 3/3 history projection; successful watchdog run `32473776356`; and an
   observed minute-57 `CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded` decision.
-- [x] As of 2026-08-21, claim/refund UX changes pass 208/208 market tests, 80/80 focused
-  claim tests, 22/22 Playwright cases (11 journeys across `chromium`/`mobile-chromium`, Desktop
-  Chrome/Pixel 7, one worker), 432/432 full tests, a 477-module build, and audit 0.
+- [x] Post-merge minute-37 proof passes: the Worker tick scheduled for `2026-08-21T14:37:29Z` logged
+  its skip at `2026-08-21T14:37:30.115Z` after recognizing successful current-hour run `32490379141`
+  on `5ac2c1f`; jobs `96796351916`/`96797302128` VERIFIED exact
+  RESOLVE/CREATE post-states and projected 1/3/3/0; watchdog `32490747878`/`96797531668` passed;
+  integrity is 39/39/0 with zero gaps.
+- [x] As of 2026-08-21, final accessibility release changes pass 210/210 market tests, 7/7 focused claim
+  tests, 24/24 Playwright cases (12 journeys across `chromium`/`mobile-chromium`, Desktop Chrome/
+  Pixel 7, one worker), 434/434 full tests, a 477-module build, and audit 0.
 - [x] Claim aggregates are verified-current only after complete known pagination and successful
   deployment reads. Failed or refreshing cached deployments remain neutral `LAST VERIFIED`/
   `PARTIAL` evidence with `CHECK`/`RETRY`, never a false `≥` lower bound.
 - [x] The pre-write quote is intent; wallet account and StudioNet are rechecked immediately before
   writing; finalized actual proceeds must be at least the quote; exact child delivery and persisted
   activity/recovery use that actual amount.
-- [ ] Claim/refund UX changes are not yet merged, deployed, or verified with a live StudioNet wallet.
+- [x] [PR #21](https://github.com/Leokings/liquidity-arena/pull/21) merged at
+  `2026-08-21T13:47:56Z` as `5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475`; CI `32488727873`,
+  CodeQL `32488727758`, and Cloudflare scheduler CI `32488727814` succeeded.
+- [x] Dependabot alerts and automated security updates, SHA-pin enforcement, conversation resolution,
+  and required browser/operator, contracts, and both CodeQL checks are enabled; dependency-graph run
+  `32489288312` succeeded.
+- [x] GitHub deployment `6022675081` and Vercel deployment `dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx`
+  succeeded; the exact V7 HIGH epoch-`1787205600` route/reconnect UI was production-browser verified.
+- [x] An internal independent Codex diff review approved the four-file modal focus-containment fix with no P0/P1/P2 remaining.
+- [x] [PR #26](https://github.com/Leokings/liquidity-arena/pull/26) merged at
+  `2026-08-21T14:55:40Z` as `881e74895a31cb3cf82c078f4252110306684f30`.
+- [x] Main CI `32494801072` passed jobs `96810573370`/`96810573060`; CodeQL `32494801089` passed
+  jobs `96810573794`/`96810574148`.
+- [x] GitHub deployment `6023788676` and READY Vercel deployment
+  `dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr` form the last runtime-changing checkpoint from exact source
+  `881e748` with recorded bundle identity at verification;
+  release health/readiness checks and the 39/39/0 history snapshot pass.
+- [x] Later documentation validation at `2026-08-21T15:16:17.648Z` observed history HTTP 200 ready,
+  journal 3, 40/40/0, and zero missing/stale/snapshot gaps.
+- [x] An independent read-only Codex immutable-HIGH/alias-LOW desktop/mobile production-browser modal
+  focus audit passed with P0/P1/P2 all zero; no wallet action or signature was submitted.
+- [x] Pytest advisory [GHSA-6w46-j5rx-g56g](https://github.com/advisories/GHSA-6w46-j5rx-g56g)
+  was fixed by PR #22 merge `e79192e`; Dependabot marked
+  the alert fixed at `2026-08-21T14:38:20Z`.
+- [ ] A live StudioNet user-wallet signature, finalized claim transaction, and exact child delivery
+  have not been exercised for this deployment.
 - [ ] Active V7 liability remains 2 GEN across two eligible unclaimed refunds.
 - [ ] V7 ambiguous asynchronous-child recovery remains a protocol P1. V7 is immutable; the proposed
   fresh V8 state machine and idempotent payout escrow are in
@@ -286,8 +316,9 @@ seven snapshots in serialized batches. Integrity moved from 31 verified terminal
 three missing and one stale durable epoch to 31/31 with no missing, stale, or missing-snapshot rows.
 Manual keeper run `32459740369` subsequently VERIFIED RESOLVE `1787295600` and CREATE `1787389200`,
 left the journal at 64/64 VERIFIED with zero unresolved, and synchronized 3/3 epochs/snapshots at
-`2026-08-21T07:45:20.943Z`. Public history-health is now HTTP 200 at 32/32 terminal/resolve
-operations and zero gaps.
+`2026-08-21T07:45:20.943Z`. That checkpoint reached 32/32 terminal/resolve operations and zero gaps;
+the recorded post-merge public history-health snapshot is HTTP 200 with 39 verified terminal/resolve operations, zero
+timeouts, and zero missing or stale rows.
 
 ## 8. Phase F — browser/API release candidate
 
@@ -308,11 +339,12 @@ Cutover procedure:
 
 1. [x] configure and promote V7 with the recorded address and expected roles;
 2. [x] verify health, readiness, chain `0xf22f`, all five feeds, kline history, CSP, and console;
-3. [ ] test V7 wallet entry/claim UX and V6 legacy history/claim UX;
-4. [ ] verify mobile, refresh, delayed finality, stale feed, and database outage behavior;
-5. [x] preserve the last verified production artifact and environment for rollback;
-6. [x] promote V7 while retaining V6 recovery;
-7. [x] verify production health/readiness/history-health and exact deployment identity;
+3. [x] production-browser verify the exact V7 claim deep link and enabled reconnect-to-claim action;
+4. [ ] exercise a live V7 user-wallet claim write and V6 legacy wallet claim;
+5. [ ] verify mobile, refresh, delayed finality, stale feed, and database outage behavior;
+6. [x] preserve the last verified production artifact and environment for rollback;
+7. [x] promote V7 while retaining V6 recovery;
+8. [x] verify production health/readiness/history-health and exact deployment identity;
 
 Historical verified V7 production deployment `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi` was READY at
 `https://liquidity-arena-elththdkj-leokings588-5902s-projects.vercel.app`. Vercel metadata anchors it
@@ -346,14 +378,42 @@ SHA-256 `2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709`. Publ
 HTTP 200 after repair. Readiness reports 2 GEN of active V7 player liability across two eligible
 unclaimed refunds without treating that obligation as a service failure.
 
-The last runtime-changing production artifact and synthetic-watchdog evidence checkpoint was
+The previous runtime-changing production artifact and synthetic-watchdog evidence checkpoint was
 READY/PROMOTED deployment `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K`
 at `https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`, GitHub deployment
 `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main-push CI run
 `32461039766` passed. Bundle `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
 `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
-This immutable checkpoint does not assert that the public alias still targets it; later documentation-only
-publication deployments may supersede the alias without changing the recorded runtime guarantees.
+This immutable checkpoint no longer owns the public alias.
+
+The previous core-claim runtime artifact is GitHub deployment `6022675081` and READY/PROMOTED Vercel
+deployment `dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx` at
+`https://liquidity-arena-eujqytbxd-leokings588-5902s-projects.vercel.app`. At that verification
+checkpoint, `https://liquidity-arena.vercel.app` also targeted exact source
+`5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475`, and both URLs served identical
+`/assets/market-CfuCPKfs.js` bytes (219197 bytes), ETag
+`W/"830736d362d152a9ebb18e01b9b268a1"` for the gzip representation, SHA-256
+`de89b5ae0947c35f384e5de0ff806b774947cf416f5e9dd9c0f7b51848232f87`. Health, readiness, and
+history-health returned HTTP 200; the recorded post-merge history snapshot reports 39 terminal/resolve
+operations, zero timeouts, and zero missing or stale rows. The exact V7 HIGH claim deep link for epoch
+`1787205600` showed
+`RESOLVED · ON-CHAIN`, `VIEW POSITION / CLAIM`, and enabled `RECONNECT WALLET TO CLAIM HIGH POSITION`
+with the Binance stream connected. No error-level or HTTP 500 logs appeared in the first ten
+minutes. This is route/reconnect UI evidence, not a live wallet signature or claim transfer, and the
+artifact predates the merged PR #26 modal accessibility fix.
+
+The last runtime-changing checkpoint is successful GitHub deployment `6023788676` and READY production Vercel
+deployment `dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr`, build `bld_6ru8isp7p`, at
+`https://liquidity-arena-7bkvfta05-leokings588-5902s-projects.vercel.app`. At its verification
+checkpoint, the public alias and immutable deployment served identical exact-source
+`881e74895a31cb3cf82c078f4252110306684f30` `/assets/market-Cbg1BCfB.js` bytes (225141 bytes), ETag
+`"7e1bea4635aa5da15eae5805c486d4c1"`, SHA-256
+`33a2cfa7b48970660b09bf8b3a455dd3740f09efe65f0e33b5a0707321f95bbf`. Health/readiness/history
+pass, and an independent read-only Codex desktop/mobile focus audit returned P0/P1/P2 all zero without a wallet
+action or signature.
+An evidence-publication successor may move the alias and differ in artifact bytes because the deployment
+registries are serverless build inputs; it does not retroactively alter this immutable checkpoint. The
+current registry edit leaves every field consumed by `history/deployment-manifest.mjs` unchanged.
 
 ## 9. Phase G — submission package
 
@@ -394,8 +454,10 @@ selected proof backfill, proof-view deployment, authenticated schema-v3 journal 
 successful six-operation authoritative-journal canary, the 24-hour delivered-run audit, projection
 repair/integrity gate, end-to-end GitHub-native watchdog delivery, and independent Cloudflare
 keeper-dispatch/watchdog-skip evidence are also complete. The release still needs outage/broader-
-proof evidence, timeout evidence, schedule-delivery monitoring, claim UX merge/deploy/live-wallet
-proof, protocol child-recovery closure, and independent reviews; a third-party pager remains
+proof evidence, timeout evidence, schedule-delivery monitoring, a live user-wallet claim
+signature/finalized transaction/exact child-delivery proof, protocol
+child-recovery closure, and independent
+reviews; a third-party pager remains
 optional. The post-soak manual keeper/projection run and current
 production runtime are recorded. The prior
 seven-attempt live run remains recorded as a failed lookup despite both exact writes later
@@ -406,7 +468,8 @@ The next safe sequence is:
 1. extend transaction-proof coverage and rehearse database outage recovery;
 2. monitor minute-27 GitHub plus the live Cloudflare backup; optionally connect an independent
    third-party pager;
-3. merge and deploy the claim/refund UX candidate, then verify its exact wallet journey on StudioNet;
+3. exercise the deployed claim/refund UX with a live StudioNet user-wallet signature, finalized
+   claim transaction, and exact child-delivery verification;
 4. continue public browser/wallet soak with V6 legacy recovery;
 5. decide the V8 payout-recovery boundary before any real-value claim;
 6. rehearse rollback without re-enabling V6 writes;
