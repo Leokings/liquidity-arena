@@ -171,7 +171,15 @@ missing coverage, source quorum loss, finality lag, scheduler failure, and unexp
 changes. The GitHub-native watchdog checks readiness, durable-history integrity, authenticated
 journal health, keeper recency/conclusion, and opens a repository issue on failure. Its manual and
 automatic healthy-path runs pass, and synthetic failure/recovery runs prove repository issue
-open/comment/close delivery. An optional independent third-party delivery path remains absent.
+open/comment/close delivery. The release candidate adds an independent Cron-only Cloudflare backup
+that checks for a current-hour GitHub reconciliation before using `workflow_dispatch`. Its only
+runtime credential is a fine-grained token restricted to this repository with Actions read/write;
+the token is stored as a Cloudflare secret and must never enter source, logs, command arguments, or
+chat. Cloudflare receives no keeper keystore/password, Neon URL, journal secret, owner key, treasury
+key, or GenLayer write implementation. HTTP 401/403/404 authorization/configuration failures stop;
+network failures, HTTP 429, and GitHub 5xx responses err toward a dispatch, which remains serialized
+and journal-fenced. Production activation
+and first-trigger evidence are required before treating this mitigation as live.
 
 ## Web, history, and migration threats
 

@@ -177,7 +177,7 @@ export async function runOpsWatchdog({
       `/repos/${repository}/actions/workflows/studionet-v7-keeper.yml/runs`,
       'https://api.github.com',
     );
-    runsUrl.searchParams.set('event', 'schedule');
+    runsUrl.searchParams.set('branch', 'main');
     runsUrl.searchParams.set('status', 'completed');
     runsUrl.searchParams.set('per_page', '1');
     const result = await fetchJson(fetchImpl, runsUrl, {
@@ -188,24 +188,28 @@ export async function runOpsWatchdog({
         'x-github-api-version': '2022-11-28',
       },
     });
-    const createdAt = result.body?.workflow_runs?.[0]?.created_at;
-    const latestConclusion = String(result.body?.workflow_runs?.[0]?.conclusion || '').toLowerCase();
+    const latestRun = result.body?.workflow_runs?.[0];
+    const createdAt = latestRun?.created_at;
+    const latestConclusion = String(latestRun?.conclusion || '').toLowerCase();
+    const latestEvent = String(latestRun?.event || '').toLowerCase();
+    const supportedEvent = latestEvent === 'schedule' || latestEvent === 'workflow_dispatch';
     const createdMs = Date.parse(String(createdAt || ''));
     const ageMs = Number(now()) - createdMs;
     const recent = result.ok
+      && supportedEvent
       && Number.isFinite(ageMs)
       && ageMs >= 0
       && ageMs <= MAX_SUCCESSFUL_KEEPER_AGE_MS
       && latestConclusion === 'success';
     results.push(check(
-      'recent scheduled keeper run',
+      'recent successful keeper reconciliation',
       recent,
       result.ok && Number.isFinite(ageMs)
-        ? `latest completed run conclusion=${latestConclusion || 'unknown'}; age=${Math.round(ageMs / 60_000)}m`
+        ? `latest completed run event=${latestEvent || 'unknown'}; conclusion=${latestConclusion || 'unknown'}; age=${Math.round(ageMs / 60_000)}m`
         : `HTTP ${result.status}; no valid completed run`,
     ));
   } catch (error) {
-    results.push(check('recent scheduled keeper run', false, error?.message || 'request failed'));
+    results.push(check('recent successful keeper reconciliation', false, error?.message || 'request failed'));
   }
 
   return Object.freeze({
