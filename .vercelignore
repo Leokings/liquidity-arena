@@ -8,6 +8,7 @@ __pycache__/
 !.env.example
 artifacts/
 ops/cloudflare-keeper-scheduler/
+ops/evm-payout-test/
 docs/screenshots/
 tests/
 **/*.test.mjs

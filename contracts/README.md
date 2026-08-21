@@ -17,6 +17,36 @@ This is an operational retirement, not an immutable V6 contract revocation. The 
 epoch during its window. Supported app and automation paths expose neither operation; the owner must
 not call V6 `create_epoch` again.
 
+## Inactive V8 release candidate
+
+[`LiquidityArenaV8.py`](LiquidityArenaV8.py) and the immutable
+[`evm/LiquidityArenaPayoutFactory.sol`](evm/LiquidityArenaPayoutFactory.sol) /
+[`evm/LiquidityArenaPayoutVault.sol`](evm/LiquidityArenaPayoutVault.sol) pair implement the candidate
+escrow-backed recovery protocol. V8 is not deployed, is not an active app/history/keeper alias, and
+cannot activate on StudioNet. Its exact state machine, reserve model, runner constraint, live-network
+gates, and V7 legacy-liability rule are specified in
+[`../docs/V8-PAYOUT-RECOVERY.md`](../docs/V8-PAYOUT-RECOVERY.md).
+
+V8 separates `PREPARING`, `DISPATCHED`, `FUNDED_IN_ESCROW`, and observed EOA withdrawal. It fixes
+recipient, amount, domain-separated payout ID, deterministic vault, and a three-attempt reserve
+budget before any value dispatch. No owner or keeper can redirect a payout, bypass proof, increase
+the cap, relabel an ambiguous balance as reserve, or withdraw reserve. New risk remains disabled
+until the exact EVM-capable chain, bound factory protocol, reserve capacity, and solvency checks pass.
+Zero-value factory preparation recovery is permissionless, cooldown-gated, exact, and uncapped;
+value-bearing dispatch remains bounded. The chain-4221 audited-factory constant is intentionally
+zero in this candidate, so activation is impossible until a verified factory address is frozen into
+the source and re-reviewed.
+
+Local verification currently comprises GenVM lint/validation, 33 V8 direct tests, and nine
+adversarial Solidity factory/vault tests plus compile, authority/storage/bytecode-size, and
+dependency audits. CI runs the Python and Solidity suites separately. No live-chain integration,
+factory deployment, V8 deployment, route, journal writer, history alias, or public cutover exists.
+The local Hardhat/solc artifact is test evidence, not a GenLayer zkSync-chain deployment artifact;
+the supported live deployment toolchain and resulting bytecode must be verified separately.
+
+This candidate does not migrate V7 funds. The existing 2 GEN/two-refund obligation stays solely on
+V7, whose historical claim routes must remain available after any future V8 cutover.
+
 ## V7 immutability and payout-recovery boundary
 
 V7 registers no upgrader and exposes no upgrade method, so the deployed contract cannot receive an
