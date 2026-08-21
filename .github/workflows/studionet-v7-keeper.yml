@@ -2,7 +2,10 @@ name: StudioNet V7 Keeper
 
 on:
   schedule:
-    - cron: '3,13 * * * *'
+    # GitHub's scheduler is heavily delayed near the top of the hour. One
+    # state-reconciling run at :27 is sufficient and avoids relying on two
+    # nominal triggers that GitHub repeatedly coalesced into one actual run.
+    - cron: '27 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -16,6 +19,7 @@ jobs:
     concurrency:
       group: studionet-liquidity-arena-writer
       cancel-in-progress: false
+      queue: max
     steps:
       - name: Require keeper configuration
         shell: bash
@@ -91,45 +95,39 @@ jobs:
     environment: studionet-keeper
     timeout-minutes: 15
     concurrency:
-      group: studionet-liquidity-arena-history
+      # StudioNet enforces one rolling read bucket. Serialize projection with
+      # every writer and manual repair/backfill job, not only other sync jobs.
+      group: studionet-liquidity-arena-writer
       cancel-in-progress: false
+      queue: max
     steps:
-      - name: Check optional history configuration
-        id: history-config
+      - name: Require history configuration
         shell: bash
         env:
           HISTORY_SYNC_URL: ${{ vars.HISTORY_SYNC_URL }}
           HISTORY_INGEST_SECRET: ${{ secrets.HISTORY_INGEST_SECRET }}
         run: |
           if [[ -z "$HISTORY_SYNC_URL" || -z "$HISTORY_INGEST_SECRET" ]]; then
-            echo "::warning::History synchronization is disabled because HISTORY_SYNC_URL or HISTORY_INGEST_SECRET is missing."
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "::error::HISTORY_SYNC_URL or HISTORY_INGEST_SECRET is missing."
+            exit 1
           fi
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        if: steps.history-config.outputs.enabled == 'true'
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        if: steps.history-config.outputs.enabled == 'true'
         with:
           node-version: 22
           cache: npm
 
       - name: Install pinned dependencies
-        if: steps.history-config.outputs.enabled == 'true'
         run: npm ci
 
-      - name: Synchronize durable V7 and legacy V6 history
-        if: steps.history-config.outputs.enabled == 'true'
+      - name: Synchronize durable V7 history
         env:
           HISTORY_SYNC_URL: ${{ vars.HISTORY_SYNC_URL }}
           HISTORY_INGEST_SECRET: ${{ secrets.HISTORY_INGEST_SECRET }}
-        # One latest-resolvable epoch per deployment stays below StudioNet's
-        # 30 gen_call/minute quota even when both epochs need five asset reads.
-        # Bundled proof backfill is intentionally separate from recurring state
-        # projection so it cannot consume the same provider quota window. The
-        # run ID lets the delayed watchdog re-read changed state in the same UTC
-        # hour while preserving idempotency for a retry of this exact run.
-        run: node scripts/history-sync.mjs --deployment v7 --deployment v6 --max-epochs 2 --no-known-proofs --idempotency-key "history-sync:${{ github.run_id }}"
+        # Three determined V7 epochs cost at most 24 StudioNet reads, below the
+        # 30/minute provider limit. Re-reading a three-hour tail lets projection
+        # recover a delayed/missed hourly sync. Retired V6 state is immutable and
+        # is no longer scanned by recurring projection.
+        run: node scripts/history-sync.mjs --deployment v7 --max-epochs 3 --no-known-proofs --idempotency-key "history-sync:${{ github.run_id }}"

@@ -46,9 +46,46 @@ test('scheduled history projection stays within the StudioNet read quota', async
   const workflow = await readFile(new URL('../.github/workflows/studionet-v7-keeper.yml', import.meta.url), 'utf8');
   assert.match(
     workflow,
-    /history-sync\.mjs --deployment v7 --deployment v6 --max-epochs 2 --no-known-proofs --idempotency-key "history-sync:\$\{\{ github\.run_id \}\}"/,
+    /history-sync\.mjs --deployment v7 --max-epochs 3 --no-known-proofs --idempotency-key "history-sync:\$\{\{ github\.run_id \}\}"/,
   );
+  assert.doesNotMatch(workflow, /history-sync\.mjs[^\r\n]*--deployment v6/);
   assert.doesNotMatch(workflow, /history-sync\.mjs[^\r\n]*--max-epochs 10/);
+  assert.match(workflow, /cron: '27 \* \* \* \*'/);
+  assert.equal((workflow.match(/group: studionet-liquidity-arena-writer/g) || []).length, 2);
+  assert.equal((workflow.match(/queue: max/g) || []).length, 2);
+  assert.match(workflow, /::error::HISTORY_SYNC_URL or HISTORY_INGEST_SECRET is missing/);
+  assert.doesNotMatch(workflow, /History synchronization is disabled/);
+
+  const proofBackfill = await readFile(
+    new URL('../.github/workflows/studionet-v7-proof-backfill.yml', import.meta.url),
+    'utf8',
+  );
+  assert.match(proofBackfill, /group: studionet-liquidity-arena-writer/);
+  assert.match(proofBackfill, /queue: max/);
+  assert.doesNotMatch(proofBackfill, /group: studionet-liquidity-arena-history/);
+
+  const legacyDrain = await readFile(
+    new URL('../.github/workflows/studionet-v6-keeper.yml', import.meta.url),
+    'utf8',
+  );
+  assert.match(legacyDrain, /group: studionet-liquidity-arena-writer/);
+  assert.match(legacyDrain, /queue: max/);
+});
+
+test('manual history repair is bounded, serialized with the writer, and quota-isolated', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/studionet-history-repair.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /group: studionet-liquidity-arena-writer/);
+  assert.match(workflow, /queue: max/);
+  assert.match(workflow, /START_OFFSET.*inputs\.start_offset/);
+  assert.match(workflow, /MAX_EPOCHS.*inputs\.max_epochs/);
+  assert.match(workflow, /\^\[0-9\]\{1,6\}\$/);
+  assert.match(workflow, /\^\[1-3\]\$/);
+  assert.match(workflow, /--deployment v7/);
+  assert.match(workflow, /--start-offset "\$START_OFFSET"/);
+  assert.match(workflow, /--max-epochs "\$MAX_EPOCHS"/);
+  assert.match(workflow, /if: always\(\)[\s\S]*run: sleep 90/);
+  assert.doesNotMatch(workflow, /schedule:/);
 });
 
 test('public history endpoint uses keyset pagination and never exposes repository internals', async () => {
@@ -216,6 +253,49 @@ test('history rate limiter is bounded and health explicitly reports unconfigured
   const payload = JSON.parse(res.body);
   assert.equal(payload.status, 'unconfigured');
   assert.equal(payload.configuration.databaseConfigured, false);
+});
+
+test('history health returns 503 and bounded diagnostics for an inconsistent journal projection', async () => {
+  const integrity = {
+    checked: true,
+    ready: false,
+    journalSchemaVersion: 3,
+    verifiedV7TerminalOperationCount: 10_000,
+    verifiedV7ResolveOperationCount: 10_000,
+    verifiedV7TimeoutOperationCount: 3,
+    missingDurableEpochCount: 1,
+    staleDurableEpochCount: 2,
+    missingDeterminedSnapshotCount: 4,
+    countLimit: 10_000,
+    countsCapped: true,
+  };
+  const repository = {
+    configured: true,
+    async health() {
+      return {
+        configured: true,
+        ready: true,
+        schemaVersion: 1,
+        integrity,
+      };
+    },
+  };
+  const environment = {
+    DATABASE_URL: 'postgresql://ignored.invalid/database',
+    HISTORY_INGEST_SECRET: 's'.repeat(32),
+    VITE_GENLAYER_NETWORK: 'studionet',
+    VITE_GENLAYER_PROTOCOL: 'LIQUIDITY_ARENA_V6',
+    VITE_GENLAYER_CONTRACT: `0x${'7'.repeat(40)}`,
+    GENLAYER_RPC_URL: 'https://studio.genlayer.com/api',
+  };
+  const handler = createHistoryHealthHandler({ repository, environment });
+  const res = response();
+  await handler(request({ method: 'GET', url: '/api/history-health' }), res);
+
+  assert.equal(res.statusCode, 503);
+  const payload = JSON.parse(res.body);
+  assert.equal(payload.status, 'degraded');
+  assert.deepEqual(payload.database.integrity, integrity);
 });
 
 test('strict JSON parser rejects duplicate members and unsafe integer literals', () => {

@@ -1,6 +1,11 @@
 import { HistoryError } from './errors.mjs';
+import {
+  KEEPER_JOURNAL_SCHEMA_CHECKSUM,
+  KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM,
+} from '../keeper-journal/repository.mjs';
 
 const HISTORY_SCHEMA_CHECKSUM = 'dd95ed3a5c55bf55d02090605a46557377778afb220126451bb4e750dbc280b2';
+const HISTORY_INTEGRITY_COUNT_LIMIT = 10_000;
 const QUERY_TIMEOUT_MS = 8_000;
 
 function json(value) {
@@ -180,21 +185,150 @@ export function createNeonHistoryRepository({
            to_regclass('public.arena_market_snapshots') IS NOT NULL AS snapshots_exists,
            to_regclass('public.arena_transaction_proofs') IS NOT NULL AS proofs_exists,
            to_regclass('public.arena_keeper_runs') IS NOT NULL AS runs_exists,
+           to_regclass('public.arena_keeper_operations') IS NOT NULL AS journal_operations_exists,
            EXISTS (
              SELECT 1 FROM arena_schema_migrations
              WHERE version = 1 AND schema_checksum = $1
-           ) AS migration_valid`,
-        [HISTORY_SCHEMA_CHECKSUM],
+           ) AS migration_valid,
+           EXISTS (
+             SELECT 1 FROM arena_schema_migrations
+              WHERE version = 2
+                AND name = 'keeper_transaction_journal'
+                AND schema_checksum = $2
+           ) AS journal_base_migration_valid,
+           EXISTS (
+             SELECT 1 FROM arena_schema_migrations
+              WHERE version = 3
+                AND name = 'keeper_transaction_journal_attempts'
+                AND schema_checksum = $3
+           ) AS journal_attempt_migration_valid,
+           EXISTS (
+             SELECT 1 FROM arena_schema_migrations
+              WHERE version = 3
+           ) AS journal_attempt_migration_present`,
+        [
+          HISTORY_SCHEMA_CHECKSUM,
+          KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM,
+          KEEPER_JOURNAL_SCHEMA_CHECKSUM,
+        ],
         3_000,
       );
       const state = rows[0] || {};
-      const ready = state.deployments_exists === true
+      const schemaReady = state.deployments_exists === true
         && state.epochs_exists === true
         && state.snapshots_exists === true
         && state.proofs_exists === true
         && state.runs_exists === true
         && state.migration_valid === true;
-      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 1 : null });
+      const journalConfigured = state.journal_operations_exists === true
+        || state.journal_base_migration_valid === true
+        || state.journal_attempt_migration_valid === true
+        || state.journal_attempt_migration_present === true;
+      const journalCompatible = state.journal_operations_exists === true
+        && state.journal_base_migration_valid === true
+        && (
+          state.journal_attempt_migration_present !== true
+          || state.journal_attempt_migration_valid === true
+        );
+      let integrity = Object.freeze({
+        checked: false,
+        ready: !journalConfigured,
+        journalSchemaVersion: state.journal_attempt_migration_present === true
+          ? 3
+          : (state.journal_base_migration_valid === true ? 2 : null),
+        verifiedV7TerminalOperationCount: 0,
+        verifiedV7ResolveOperationCount: 0,
+        verifiedV7TimeoutOperationCount: 0,
+        missingDurableEpochCount: 0,
+        staleDurableEpochCount: 0,
+        missingDeterminedSnapshotCount: 0,
+        countLimit: HISTORY_INTEGRITY_COUNT_LIMIT,
+        countsCapped: false,
+      });
+      if (schemaReady && journalCompatible) {
+        const integrityRows = await query(
+          `WITH verified_terminals AS (
+             SELECT operation.contract_address, operation.epoch_end_timestamp, operation.method
+               FROM arena_keeper_operations operation
+              WHERE operation.deployment_alias = 'v7'
+                AND operation.method IN ('resolve_epoch', 'activate_timeout_refund')
+                AND operation.state = 'VERIFIED'
+           ), projection AS (
+             SELECT verified.contract_address, verified.epoch_end_timestamp,
+                    verified.method,
+                    epoch.deployment_id AS epoch_deployment_id,
+                    epoch.status AS epoch_status,
+                    epoch.result_status AS epoch_result_status,
+                    snapshot.deployment_id AS snapshot_deployment_id
+               FROM verified_terminals verified
+               LEFT JOIN arena_epochs epoch
+                 ON epoch.deployment_alias = 'v7'
+                AND epoch.contract_address = verified.contract_address
+                AND epoch.epoch_end_timestamp = verified.epoch_end_timestamp
+               LEFT JOIN arena_market_snapshots snapshot
+                 ON snapshot.deployment_id = epoch.deployment_id
+                AND snapshot.epoch_end_timestamp = epoch.epoch_end_timestamp
+           )
+           SELECT
+             LEAST(COUNT(*), $1::bigint)::integer AS verified_terminal_count,
+             LEAST(COUNT(*) FILTER (
+               WHERE method = 'resolve_epoch'
+             ), $1::bigint)::integer AS verified_resolve_count,
+             LEAST(COUNT(*) FILTER (
+               WHERE method = 'activate_timeout_refund'
+             ), $1::bigint)::integer AS verified_timeout_count,
+             LEAST(COUNT(*) FILTER (
+               WHERE epoch_deployment_id IS NULL
+             ), $1::bigint)::integer AS missing_epoch_count,
+             LEAST(COUNT(*) FILTER (
+               WHERE epoch_deployment_id IS NOT NULL
+                 AND (
+                   (method = 'resolve_epoch' AND NOT (
+                     (epoch_status = 'RESOLVED' AND epoch_result_status = 'DETERMINED')
+                     OR (epoch_status = 'UNDETERMINED' AND epoch_result_status = 'UNDETERMINED')
+                   ))
+                   OR (method = 'activate_timeout_refund' AND NOT (
+                     epoch_status = 'TIMED_OUT' AND epoch_result_status = 'TIMEOUT'
+                   ))
+                 )
+             ), $1::bigint)::integer AS stale_epoch_count,
+             LEAST(COUNT(*) FILTER (
+               WHERE method = 'resolve_epoch'
+                 AND epoch_status = 'RESOLVED'
+                 AND epoch_result_status = 'DETERMINED'
+                 AND snapshot_deployment_id IS NULL
+             ), $1::bigint)::integer AS missing_snapshot_count,
+             COUNT(*) > $1::bigint AS counts_capped
+             FROM projection`,
+          [HISTORY_INTEGRITY_COUNT_LIMIT],
+          3_000,
+        );
+        const projection = integrityRows[0] || {};
+        const missingDurableEpochCount = Number(projection.missing_epoch_count || 0);
+        const staleDurableEpochCount = Number(projection.stale_epoch_count || 0);
+        const missingDeterminedSnapshotCount = Number(projection.missing_snapshot_count || 0);
+        integrity = Object.freeze({
+          checked: true,
+          ready: missingDurableEpochCount === 0
+            && staleDurableEpochCount === 0
+            && missingDeterminedSnapshotCount === 0,
+          journalSchemaVersion: state.journal_attempt_migration_valid === true ? 3 : 2,
+          verifiedV7TerminalOperationCount: Number(projection.verified_terminal_count || 0),
+          verifiedV7ResolveOperationCount: Number(projection.verified_resolve_count || 0),
+          verifiedV7TimeoutOperationCount: Number(projection.verified_timeout_count || 0),
+          missingDurableEpochCount,
+          staleDurableEpochCount,
+          missingDeterminedSnapshotCount,
+          countLimit: HISTORY_INTEGRITY_COUNT_LIMIT,
+          countsCapped: projection.counts_capped === true,
+        });
+      }
+      return Object.freeze({
+        configured: true,
+        ready: schemaReady && integrity.ready,
+        schemaVersion: schemaReady ? 1 : null,
+        integrity,
+      });
     },
 
     async listDeployments({ cursor, limit }) {
