@@ -225,6 +225,32 @@ export function createLiquidityArenaReadinessProbe({
     return { ready: false };
   }
 
+  async function checkActivePlayerFunds() {
+    try {
+      const rawLiability = await read(
+        config.contractAddress,
+        'get_total_player_liability_atto',
+      );
+      const playerLiabilityAtto = normalizedAtto(
+        rawLiability,
+        'active contract player liability',
+      );
+      return {
+        blocking: false,
+        readable: true,
+        playerLiabilityAtto,
+        hasOutstandingLiability: BigInt(playerLiabilityAtto) > 0n,
+      };
+    } catch {
+      return {
+        blocking: false,
+        readable: false,
+        playerLiabilityAtto: null,
+        hasOutstandingLiability: null,
+      };
+    }
+  }
+
   async function checkLegacyV6() {
     const addresses = config.legacyV6Contracts;
     if (addresses.length === 0) {
@@ -279,11 +305,19 @@ export function createLiquidityArenaReadinessProbe({
     controller = new AbortController();
     const abortTimer = setTimeout(() => controller?.abort(), timeoutMs);
     try {
-      const [genlayerRpc, contract, keeperCoverage, binance, legacyV6] = await Promise.all([
+      const [
+        genlayerRpc,
+        contract,
+        keeperCoverage,
+        binance,
+        activePlayerFunds,
+        legacyV6,
+      ] = await Promise.all([
         checkRpc(),
         checkActiveContract(),
         checkKeeperCoverage(),
         checkFiveFeeds(),
+        checkActivePlayerFunds(),
         checkLegacyV6(),
       ]);
       const ready = genlayerRpc.ready && contract.ready && keeperCoverage.ready && binance.ready;
@@ -296,6 +330,7 @@ export function createLiquidityArenaReadinessProbe({
           contract,
           keeperCoverage,
           binance,
+          activePlayerFunds,
           legacyV6,
         },
       };

@@ -280,7 +280,10 @@ export function createHistoryHealthHandler({ repository, environment = process.e
     const fullyConfigured = configuration.databaseConfigured
       && configuration.ingestConfigured
       && configuration.chainConfigured;
-    const ready = fullyConfigured && database.ready === true && !probeFailed;
+    const ready = fullyConfigured
+      && database.ready === true
+      && database.integrity?.ready !== false
+      && !probeFailed;
     const status = ready ? 'ready' : (fullyConfigured ? 'degraded' : 'unconfigured');
     return jsonResponse(res, status === 'degraded' ? 503 : 200, {
       status,

@@ -1,0 +1,75 @@
+name: StudioNet Operations Watchdog
+
+on:
+  schedule:
+    - cron: '47 * * * *'
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - StudioNet V7 Keeper
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: studionet-liquidity-arena-watchdog
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    environment: studionet-keeper
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Verify independent operational surfaces
+        id: health
+        continue-on-error: true
+        env:
+          OPS_APP_URL: https://liquidity-arena.vercel.app
+          KEEPER_JOURNAL_URL: ${{ vars.KEEPER_JOURNAL_URL }}
+          KEEPER_JOURNAL_SECRET: ${{ secrets.KEEPER_JOURNAL_SECRET }}
+          GH_TOKEN: ${{ github.token }}
+          WATCHDOG_TRIGGER_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WATCHDOG_REPORT_PATH: ${{ runner.temp }}/ops-watchdog-report.md
+        run: node scripts/ops-watchdog.mjs
+
+      - name: Open or update the operational alert
+        if: steps.health.outcome == 'failure'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT_PATH: ${{ runner.temp }}/ops-watchdog-report.md
+        run: |
+          title='[ops] StudioNet liquidity arena degraded'
+          issue_number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
+          if [[ -n "$issue_number" ]]; then
+            gh issue comment "$issue_number" --repo "$GITHUB_REPOSITORY" --body-file "$REPORT_PATH"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$REPORT_PATH"
+          fi
+
+      - name: Close a recovered operational alert
+        if: steps.health.outcome == 'success'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title='[ops] StudioNet liquidity arena degraded'
+          issue_number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
+          if [[ -n "$issue_number" ]]; then
+            gh issue close "$issue_number" --repo "$GITHUB_REPOSITORY" --comment 'Automated watchdog recovery check passed.'
+          fi
+
+      - name: Fail after persisting the alert
+        if: steps.health.outcome == 'failure'
+        run: exit 1

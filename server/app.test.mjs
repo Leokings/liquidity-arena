@@ -74,6 +74,7 @@ function validEpoch(epochEndTimestamp, overrides = {}) {
 async function validV6ContractReader({ functionName, args }) {
   if (functionName === 'get_config') return validContractConfig();
   if (functionName === 'get_epoch') return validEpoch(Number(args[0]));
+  if (functionName === 'get_total_player_liability_atto') return 0n;
   throw new Error(`Unexpected contract read ${functionName}`);
 }
 
@@ -348,6 +349,8 @@ test('local server uses the shared V7 gate and reports legacy V6 liability witho
       }
       if (address === LEGACY_CONTRACT_ADDRESS
         && functionName === 'get_total_player_liability_atto') return 77n;
+      if (address === CONTRACT_ADDRESS
+        && functionName === 'get_total_player_liability_atto') return 456n;
       if (functionName === 'get_config') return validV7ContractConfig();
       if (functionName === 'get_epoch') return validV7Epoch(Number(args[0]));
       throw new Error('unexpected contract read');
@@ -360,6 +363,12 @@ test('local server uses the shared V7 gate and reports legacy V6 liability witho
     assert.equal(body.checks.contract.protocolVersion, 'LIQUIDITY_ARENA_V7');
     assert.equal(body.checks.contract.keeper, V7_KEEPER);
     assert.equal(body.checks.keeperCoverage.ready, true);
+    assert.deepEqual(body.checks.activePlayerFunds, {
+      blocking: false,
+      readable: true,
+      playerLiabilityAtto: '456',
+      hasOutstandingLiability: true,
+    });
     assert.equal(body.checks.legacyV6.blocking, false);
     assert.equal(body.checks.legacyV6.totalPlayerLiabilityAtto, '77');
     assert.equal(body.checks.legacyV6.hasOutstandingLiability, true);

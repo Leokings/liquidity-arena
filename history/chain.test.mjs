@@ -139,20 +139,24 @@ test('scheduled history reads the latest resolvable epoch instead of the pre-see
   assert.equal(result.epochs.length, 2);
 });
 
-test('two determined scheduled epochs stay below StudioNet thirty-call quota', async () => {
-  const deployments = [testDeployment('v7'), testDeployment('v6')];
+test('three determined V7 epochs stay below StudioNet thirty-call quota', async () => {
+  const deployment = testDeployment('v7');
   let networkReads = 0;
   let contractReads = 0;
   const client = {
-    async readContract({ address, functionName, args }) {
+    async readContract({ functionName, args }) {
       contractReads += 1;
-      const alias = address === deployments[0].address ? 'v7' : 'v6';
-      if (functionName === 'get_config') return testConfig(alias);
+      if (functionName === 'get_config') return testConfig('v7');
       if (functionName === 'get_asset_catalog') return testAssetCatalog();
       if (functionName === 'get_venue_catalog') return testVenueCatalog();
-      if (functionName === 'get_epoch_count') return 1;
+      if (functionName === 'get_epoch_count') return 3;
       if (functionName === 'get_epoch_page') {
-        return { offset: 0, next_offset: 1, total: 1, epoch_ids: [String(TEST_EPOCH)] };
+        return {
+          offset: 0,
+          next_offset: 3,
+          total: 3,
+          epoch_ids: [TEST_EPOCH - 7_200, TEST_EPOCH - 3_600, TEST_EPOCH].map(String),
+        };
       }
       if (functionName === 'get_epoch') return testDeterminedEpoch();
       if (functionName === 'get_epoch_asset') {
@@ -164,7 +168,7 @@ test('two determined scheduled epochs stay below StudioNet thirty-call quota', a
   const chain = createStudioNetHistoryChain({
     configuration: {
       ...configuration(),
-      deployments,
+      deployments: [deployment],
     },
     createClientImpl: () => client,
     now: () => (TEST_EPOCH + 121) * 1_000,
@@ -174,13 +178,11 @@ test('two determined scheduled epochs stay below StudioNet thirty-call quota', a
     },
   });
 
-  for (const deployment of deployments) {
-    const result = await chain.readDeployment(deployment.deploymentId, { maxEpochs: 1, startOffset: null });
-    assert.equal(result.epochs.length, 1);
-    assert.equal(result.epochs[0].assets.length, 5);
-  }
+  const result = await chain.readDeployment(deployment.deploymentId, { maxEpochs: 3, startOffset: null });
+  assert.equal(result.epochs.length, 3);
+  assert.ok(result.epochs.every((epoch) => epoch.assets.length === 5));
 
-  assert.equal(networkReads + contractReads, 23);
+  assert.equal(networkReads + contractReads, 24);
   assert.ok(networkReads + contractReads < 30);
 });
 

@@ -28,7 +28,7 @@ test('Neon history repository remains lazy and build-safe without DATABASE_URL',
   assert.equal(imports, 0);
 });
 
-test('Neon driver is imported only on first query and schema health validates the exact migration', async () => {
+test('Neon driver is imported only on first query and v1 health stays ready without a journal schema', async () => {
   let imports = 0;
   let connectionString;
   const calls = [];
@@ -57,12 +57,171 @@ test('Neon driver is imported only on first query and schema health validates th
     },
   });
   assert.equal(imports, 0);
-  assert.equal((await repository.health()).ready, true);
+  const health = await repository.health();
+  assert.equal(health.ready, true);
   assert.equal(imports, 1);
   assert.match(connectionString, /^postgresql:/);
   assert.equal(calls.length, 1);
   assert.match(calls[0].text, /arena_schema_migrations/);
   assert.equal(calls[0].params[0].length, 64);
+  assert.equal(calls[0].params.length, 3);
+  assert.equal(health.schemaVersion, 1);
+  assert.deepEqual(health.integrity, {
+    checked: false,
+    ready: true,
+    journalSchemaVersion: null,
+    verifiedV7TerminalOperationCount: 0,
+    verifiedV7ResolveOperationCount: 0,
+    verifiedV7TimeoutOperationCount: 0,
+    missingDurableEpochCount: 0,
+    staleDurableEpochCount: 0,
+    missingDeterminedSnapshotCount: 0,
+    countLimit: 10_000,
+    countsCapped: false,
+  });
+});
+
+test('history health verifies every journaled V7 resolve has a terminal durable epoch', async () => {
+  const calls = [];
+  const resultSets = [[{
+    deployments_exists: true,
+    epochs_exists: true,
+    snapshots_exists: true,
+    proofs_exists: true,
+    runs_exists: true,
+    journal_operations_exists: true,
+    migration_valid: true,
+    journal_base_migration_valid: true,
+    journal_attempt_migration_valid: true,
+    journal_attempt_migration_present: true,
+  }], [{
+    verified_terminal_count: 28,
+    verified_resolve_count: 27,
+    verified_timeout_count: 1,
+    missing_epoch_count: 0,
+    stale_epoch_count: 0,
+    missing_snapshot_count: 0,
+    counts_capped: false,
+  }]];
+  const repository = createNeonHistoryRepository({
+    environment: { DATABASE_URL: 'postgresql://ignored.invalid/database' },
+    importDriver: async () => ({
+      neon: () => ({
+        async query(text, params) {
+          calls.push({ text, params });
+          return resultSets.shift();
+        },
+      }),
+    }),
+  });
+
+  const health = await repository.health();
+  assert.equal(health.ready, true);
+  assert.equal(health.schemaVersion, 1);
+  assert.deepEqual(health.integrity, {
+    checked: true,
+    ready: true,
+    journalSchemaVersion: 3,
+    verifiedV7TerminalOperationCount: 28,
+    verifiedV7ResolveOperationCount: 27,
+    verifiedV7TimeoutOperationCount: 1,
+    missingDurableEpochCount: 0,
+    staleDurableEpochCount: 0,
+    missingDeterminedSnapshotCount: 0,
+    countLimit: 10_000,
+    countsCapped: false,
+  });
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].text, /operation\.deployment_alias = 'v7'/);
+  assert.match(calls[1].text, /operation\.method IN \('resolve_epoch', 'activate_timeout_refund'\)/);
+  assert.match(calls[1].text, /operation\.state = 'VERIFIED'/);
+  assert.match(calls[1].text, /LEFT JOIN arena_epochs/);
+  assert.match(calls[1].text, /epoch_status = 'RESOLVED'/);
+  assert.match(calls[1].text, /epoch_status = 'UNDETERMINED'/);
+  assert.match(calls[1].text, /epoch_status = 'TIMED_OUT'/);
+  assert.match(calls[1].text, /LEFT JOIN arena_market_snapshots/);
+  assert.match(calls[1].text, /snapshot_deployment_id IS NULL/);
+  assert.match(calls[1].text, /LEAST\(COUNT\(\*\)/);
+  assert.deepEqual(calls[1].params, [10_000]);
+});
+
+test('history health degrades on missing or stale verified V7 resolve projections and caps diagnostics', async () => {
+  const resultSets = [[{
+    deployments_exists: true,
+    epochs_exists: true,
+    snapshots_exists: true,
+    proofs_exists: true,
+    runs_exists: true,
+    journal_operations_exists: true,
+    migration_valid: true,
+    journal_base_migration_valid: true,
+    journal_attempt_migration_valid: true,
+    journal_attempt_migration_present: true,
+  }], [{
+    verified_terminal_count: 10_000,
+    verified_resolve_count: 10_000,
+    verified_timeout_count: 3,
+    missing_epoch_count: 1,
+    stale_epoch_count: 2,
+    missing_snapshot_count: 4,
+    counts_capped: true,
+  }]];
+  const repository = createNeonHistoryRepository({
+    environment: { DATABASE_URL: 'postgresql://ignored.invalid/database' },
+    importDriver: async () => ({
+      neon: () => ({ async query() { return resultSets.shift(); } }),
+    }),
+  });
+
+  const health = await repository.health();
+  assert.equal(health.ready, false);
+  assert.equal(health.schemaVersion, 1);
+  assert.deepEqual(health.integrity, {
+    checked: true,
+    ready: false,
+    journalSchemaVersion: 3,
+    verifiedV7TerminalOperationCount: 10_000,
+    verifiedV7ResolveOperationCount: 10_000,
+    verifiedV7TimeoutOperationCount: 3,
+    missingDurableEpochCount: 1,
+    staleDurableEpochCount: 2,
+    missingDeterminedSnapshotCount: 4,
+    countLimit: 10_000,
+    countsCapped: true,
+  });
+});
+
+test('history health fails closed when a present v3 journal migration has the wrong checksum', async () => {
+  let calls = 0;
+  const repository = createNeonHistoryRepository({
+    environment: { DATABASE_URL: 'postgresql://ignored.invalid/database' },
+    importDriver: async () => ({
+      neon: () => ({
+        async query() {
+          calls += 1;
+          return [{
+            deployments_exists: true,
+            epochs_exists: true,
+            snapshots_exists: true,
+            proofs_exists: true,
+            runs_exists: true,
+            journal_operations_exists: true,
+            migration_valid: true,
+            journal_base_migration_valid: true,
+            journal_attempt_migration_valid: false,
+            journal_attempt_migration_present: true,
+          }];
+        },
+      }),
+    }),
+  });
+
+  const health = await repository.health();
+  assert.equal(calls, 1);
+  assert.equal(health.ready, false);
+  assert.equal(health.integrity.checked, false);
+  assert.equal(health.integrity.ready, false);
+  assert.equal(health.integrity.journalSchemaVersion, 3);
 });
 
 test('deployment and determined epoch writes are parameterized and snapshot is atomic with epoch upsert', async () => {

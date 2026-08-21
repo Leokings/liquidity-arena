@@ -140,6 +140,7 @@ test('Vercel readiness verifies StudioNet, V6 config, and the five-asset display
         async readContract(call) {
           calls.push(call);
           if (call.functionName === 'get_config') return config();
+          if (call.functionName === 'get_total_player_liability_atto') return 0n;
           return epoch(Number(call.args[0]));
         },
       };
@@ -165,8 +166,14 @@ test('Vercel readiness verifies StudioNet, V6 config, and the five-asset display
   assert.equal(body.checks.keeperCoverage.ready, true);
   assert.deepEqual(body.checks.keeperCoverage.epochEnds, [OPERATIONAL_EPOCH, UPCOMING_EPOCH]);
   assert.deepEqual(new Set(calls.map(({ functionName }) => functionName)), new Set([
-    'get_config', 'get_epoch',
+    'get_config', 'get_epoch', 'get_total_player_liability_atto',
   ]));
+  assert.deepEqual(body.checks.activePlayerFunds, {
+    blocking: false,
+    readable: true,
+    playerLiabilityAtto: '0',
+    hasOutstandingLiability: false,
+  });
 });
 
 test('V7 readiness binds exact roles and fixed epochs while exposing legacy V6 liability', async () => {
@@ -180,6 +187,8 @@ test('V7 readiness binds exact roles and fixed epochs while exposing legacy V6 l
           if (call.address.toLowerCase() === LEGACY && call.functionName === 'get_config') return config();
           if (call.address.toLowerCase() === LEGACY
             && call.functionName === 'get_total_player_liability_atto') return 123n;
+          if (call.address.toLowerCase() === CONTRACT
+            && call.functionName === 'get_total_player_liability_atto') return 456n;
           if (call.functionName === 'get_config') return v7Config();
           if (call.functionName === 'get_epoch') return v7Epoch(Number(call.args[0]));
           throw new Error('unexpected read');
@@ -197,6 +206,12 @@ test('V7 readiness binds exact roles and fixed epochs while exposing legacy V6 l
   assert.equal(body.checks.contract.protocolVersion, 'LIQUIDITY_ARENA_V7');
   assert.equal(body.checks.contract.owner, OWNER);
   assert.equal(body.checks.keeperCoverage.ready, true);
+  assert.deepEqual(body.checks.activePlayerFunds, {
+    blocking: false,
+    readable: true,
+    playerLiabilityAtto: '456',
+    hasOutstandingLiability: true,
+  });
   assert.deepEqual(body.checks.legacyV6, {
     blocking: false,
     configured: true,
@@ -213,6 +228,45 @@ test('V7 readiness binds exact roles and fixed epochs while exposing legacy V6 l
   });
   assert.ok(calls.some(({ address, functionName }) => address === LEGACY
     && functionName === 'get_total_player_liability_atto'));
+});
+
+test('active player-funds diagnostic fails closed without blocking readiness', async () => {
+  for (const failure of ['malformed', 'read']) {
+    const handler = createReadyHandler({
+      environment: v7Environment(),
+      createClientImpl() {
+        return {
+          async readContract(call) {
+            if (call.address.toLowerCase() === LEGACY && call.functionName === 'get_config') {
+              return config();
+            }
+            if (call.address.toLowerCase() === LEGACY
+              && call.functionName === 'get_total_player_liability_atto') return 0n;
+            if (call.functionName === 'get_config') return v7Config();
+            if (call.functionName === 'get_epoch') return v7Epoch(Number(call.args[0]));
+            if (call.functionName === 'get_total_player_liability_atto') {
+              if (failure === 'read') throw new Error('active liability unavailable');
+              return 'not-an-atto-amount';
+            }
+            throw new Error('unexpected read');
+          },
+        };
+      },
+      now: () => NOW,
+      fetchImpl: readyFetch,
+    });
+    const res = response();
+    await handler({ method: 'GET' }, res);
+    assert.equal(res.statusCode, 200);
+    const body = JSON.parse(res.body);
+    assert.equal(body.status, 'ready');
+    assert.deepEqual(body.checks.activePlayerFunds, {
+      blocking: false,
+      readable: false,
+      playerLiabilityAtto: null,
+      hasOutstandingLiability: null,
+    });
+  }
 });
 
 test('an unreadable allowlisted V6 contract is visible but does not block healthy V7 readiness', async () => {

@@ -12,8 +12,9 @@ jobs:
     environment: studionet-keeper
     timeout-minutes: 15
     concurrency:
-      group: studionet-liquidity-arena-history
+      group: studionet-liquidity-arena-writer
       cancel-in-progress: false
+      queue: max
     steps:
       - name: Require history configuration
         shell: bash

@@ -11,6 +11,7 @@ permissions:
 concurrency:
   group: studionet-liquidity-arena-writer
   cancel-in-progress: false
+  queue: max
 
 jobs:
   drain:
