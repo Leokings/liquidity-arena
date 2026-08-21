@@ -129,6 +129,27 @@ test('watchdog stays degraded when the latest scheduled keeper run failed', asyn
   assert.match(schedule.detail, /conclusion=failure/);
 });
 
+test('watchdog labels a synthetic alert exercise without misreporting a keeper failure', async () => {
+  const requests = [];
+  const result = await runOpsWatchdog({
+    appUrl: 'https://liquidity-arena.example.test',
+    journalUrl: 'https://liquidity-arena.example.test/api/keeper-journal',
+    journalSecret: SECRET,
+    githubRepository: 'Leokings/liquidity-arena',
+    githubToken: 'github-token-value-long-enough',
+    syntheticFailure: true,
+    fetchImpl: healthyFetch(requests),
+    now: () => NOW,
+  });
+
+  assert.equal(result.healthy, false);
+  assert.equal(result.checks.find(({ name }) => name === 'synthetic alert exercise').ok, false);
+  assert.equal(result.checks.some(({ name }) => name === 'keeper workflow event'), false);
+  const report = watchdogMarkdown(result);
+  assert.match(report, /operator-requested failure injection/);
+  assert.doesNotMatch(report, /workflow_run conclusion=failure/);
+});
+
 test('watchdog validates configuration before making any request', async () => {
   let requests = 0;
   await assert.rejects(

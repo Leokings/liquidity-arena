@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '47 * * * *'
   workflow_dispatch:
+    inputs:
+      synthetic_failure:
+        description: Exercise issue delivery without degrading production
+        required: true
+        default: false
+        type: boolean
   workflow_run:
     workflows:
       - StudioNet V7 Keeper
@@ -40,6 +46,7 @@ jobs:
           KEEPER_JOURNAL_SECRET: ${{ secrets.KEEPER_JOURNAL_SECRET }}
           GH_TOKEN: ${{ github.token }}
           WATCHDOG_TRIGGER_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WATCHDOG_SYNTHETIC_FAILURE: ${{ inputs.synthetic_failure }}
           WATCHDOG_REPORT_PATH: ${{ runner.temp }}/ops-watchdog-report.md
         run: node scripts/ops-watchdog.mjs
 
