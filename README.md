@@ -120,7 +120,7 @@ main now keeps only `workflow_dispatch` for that legacy drain.
 | V7 funded canary | Complete: settlement, three claim deliveries, loser rejection, conservation, and fee withdrawal verified |
 | Dedicated V7 keeper rotation | Complete: finalized on-chain and exact config/repository address verified |
 | V7 keeper workflow | Workflow `338089019` is active on minute 27; writer jobs share durable `queue: max`; post-merge run `32459740369` passed both jobs |
-| Public Vercel browser | V7 active and READY on source `a1c773a`; V6 legacy recovery remains readable with zero known liability |
+| Public Vercel browser | V7 active and READY; runtime guarantees last changed at source `a1c773a`, while later docs-only publication deployments may own the alias; V6 legacy recovery remains readable with zero known liability |
 | V6 | Public app/automation new writes disabled; owner creation capability remains and must not be used |
 | Durable settled-epoch history | Repair backfill and integrity health passed: 32 verified V7 resolves, 0 missing/stale/snapshot gaps; outage recovery and broader proof coverage remain pending |
 | Keeper journal | Operational authority active; 64/64 operations VERIFIED, 0 unresolved after the post-soak manual run |
@@ -176,8 +176,8 @@ history-health, and proof surfaces returned HTTP 200 after repair. Readiness rep
 player liability as two unclaimed eligible refunds without treating that positive obligation as an
 availability failure.
 
-The current production artifact, including synthetic watchdog injection support from PR #16, is
-READY and promoted as Vercel deployment `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
+The last runtime-changing production artifact and synthetic-watchdog evidence checkpoint from PR #16
+was READY and promoted as Vercel deployment `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
 [its immutable URL](https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app), GitHub
 deployment `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main-push CI run
 `32461039766` passed browser/operator job `96707863823` (393/393 tests, 477-module build, audit 0)
@@ -185,6 +185,8 @@ and contracts job `96707864002` (V6/V7 lint and 37 direct tests). Bundle
 `/assets/market-BoHfo81C.js` is 193040 bytes, has ETag
 `"fa10949a324593024ea6c209eb3a0cc3"`, and SHA-256
 `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
+This immutable checkpoint is not a claim that the public alias still targets it: later documentation-only
+publication deployments may supersede the alias without changing the recorded runtime guarantees.
 
 The 24-target full-day seed covers epoch IDs `1787169600` through `1787252400`. Its first and final
 creation transactions are `0x7b94b2d0…7726` and `0x443afcf7…7677f`; the separate canary epoch

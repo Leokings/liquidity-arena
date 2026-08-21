@@ -212,8 +212,9 @@ funded canary, exact public readiness, and proof view from merged PR #6 are depl
 soak and rollback discipline remain ongoing obligations. Historical READY schedule-restoration
 artifact `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ` executed first restored run `32329108358`; historical
 stream-hardened runtime `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` is retained as a dated checkpoint. The
-initial post-soak runtime is `dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6` from source `abef30d`. The current
-synthetic-watchdog runtime is `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` from source `a1c773a`. Exact
+initial post-soak runtime is `dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6` from source `abef30d`. The last
+runtime-changing synthetic-watchdog checkpoint is `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` from source
+`a1c773a`. Exact
 identities are recorded below.
 
 ## 11. Keeper and readiness
@@ -379,11 +380,15 @@ Tests and review must cover:
   `2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709`. Public surfaces return HTTP
   200; active V7 player liability is 2 GEN across two eligible unclaimed refunds and is non-blocking.
 
-- current synthetic-watchdog deployment: READY/PROMOTED `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
+- last runtime-changing production artifact and synthetic-watchdog evidence checkpoint:
+  READY/PROMOTED `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
   `https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`, GitHub deployment
   `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`; main CI run `32461039766`
   passed, and `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
   `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
+  This immutable checkpoint does not assert that the public alias still targets it; later
+  documentation-only publication deployments may supersede the alias without changing the recorded
+  runtime guarantees.
 
 Observed StudioNet finality is not an SLA. The recorded deploy finalized in about 36 seconds, but the
 system always waits for actual finality rather than a timer.

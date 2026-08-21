@@ -1329,14 +1329,14 @@
       },
       "evidenceScope": "HISTORICAL_INITIAL_POST_SOAK_PRODUCTION_RUNTIME_ARTIFACT"
     },
-    "currentProductionRuntimeArtifact": {
+    "lastRuntimeChangingProductionArtifact": {
       "sourceCommit": "a1c773ae36a882c043c6b167a1324d1d558ac60f",
       "githubDeploymentId": "6017754639",
       "githubDeploymentStatus": "success",
       "vercelDeploymentId": "dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K",
       "vercelDeploymentUrl": "https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app",
-      "productionAlias": "https://liquidity-arena.vercel.app",
-      "vercelStatus": "READY_PROMOTED",
+      "productionAliasAtVerification": "https://liquidity-arena.vercel.app",
+      "vercelStatusAtVerification": "READY_PROMOTED",
       "ci": {
         "runId": "32461039766",
         "event": "push",
@@ -1354,7 +1354,8 @@
       "bundleEtag": "\"fa10949a324593024ea6c209eb3a0cc3\"",
       "bundleSha256": "82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa",
       "syntheticWatchdogDelivery": "PASS_ISSUE_17_OPEN_RECOVERY_COMMENT_AND_CLOSE",
-      "evidenceScope": "CURRENT_VERIFIED_PRODUCTION_RUNTIME_ARTIFACT"
+      "evidenceScope": "LAST_RUNTIME_CHANGING_SYNTHETIC_WATCHDOG_EVIDENCE_CHECKPOINT",
+      "productionAliasPolicy": "LATER_DOCS_ONLY_PUBLICATION_DEPLOYMENTS_MAY_SUPERSEDE_ALIAS_WITHOUT_CHANGING_RUNTIME_GUARANTEES"
     }
   },
   "verification": {
@@ -1373,7 +1374,8 @@
     "legacyV6ScheduledDrainWorkflow": "HISTORICAL_PASS_LIVE_WORKFLOW_338089016_DISABLED_MANUALLY_ZERO_PLAYER_LIABILITY_MAIN_SOURCE_WORKFLOW_DISPATCH_ONLY",
     "currentReceiptVerifierCiRunId": "32308815377",
     "currentReceiptVerifierCi": "PASS_BOTH_JOBS",
-    "currentVercelDeployment": "PASS_READY_PROMOTED_RUNTIME_ARTIFACT_DPL_9DPV89RJGBSJYFO3JGMMBEMTPV6K_SOURCE_A1C773A",
+    "lastRuntimeChangingVercelDeployment": "PASS_READY_PROMOTED_RUNTIME_ARTIFACT_DPL_9DPV89RJGBSJYFO3JGMMBEMTPV6K_SOURCE_A1C773A",
+    "productionAliasPublicationPolicy": "LATER_DOCS_ONLY_PUBLICATION_DEPLOYMENTS_MAY_SUPERSEDE_ALIAS_WITHOUT_CHANGING_RUNTIME_GUARANTEES",
     "keeperReceiptGraceMainCommit": "958e51743a821606ca78881e6bcc8fb0a34a8e8f",
     "keeperReceiptGraceCiRunId": "32310160397",
     "keeperReceiptGraceCi": "PASS_BOTH_JOBS_FIRST_LIVE_SCHEDULED_RUN_FAILED_LOOKUP_BUT_BOTH_EXACT_WRITES_LATER_FINALIZED_AND_APPLIED",

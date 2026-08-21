@@ -227,11 +227,14 @@ optional, unconfigured enhancement. Active V7 player liability is 2 GEN
 across two eligible unclaimed refunds; it is an outstanding participant obligation, not a readiness
 failure. Outage recovery and external review remain pending.
 
-The current production artifact is READY/PROMOTED deployment `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K`,
+The last runtime-changing production artifact and synthetic-watchdog evidence checkpoint was
+READY/PROMOTED deployment `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K`,
 GitHub deployment `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`, at
 `https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`. Main-push CI
 `32461039766` passed. Bundle `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
 `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
+This immutable checkpoint does not assert that the public alias still targets it; later documentation-only
+publication deployments may supersede the alias without changing the recorded runtime guarantees.
 
 See [`../docs/STUDIONET-V7.md`](../docs/STUDIONET-V7.md) and
 [`../deployments/studionet-v7.json`](../deployments/studionet-v7.json).
