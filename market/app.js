@@ -33,6 +33,12 @@ import {
   v6TimeoutGate,
   v6WagerGate,
 } from './v6-state.js';
+import {
+  normalizeWalletPositionPage,
+  walletClaimTarget,
+  walletPositionPageWindow,
+  walletPositionPresentation,
+} from './wallet-positions.js';
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -878,21 +884,14 @@ class LiquidityArenaApp {
       const historyGateway = this.gateways.get(deployment.alias);
       const count = await historyGateway.readWalletPositionCount(account);
       const previous = this.onchainPositionsByDeployment.get(deployment.alias) || [];
-      const alreadyLoaded = append ? Math.min(previous.length, count) : 0;
-      const remaining = Math.max(0, count - alreadyLoaded);
-      const limit = Math.min(50, remaining);
-      const offset = Math.max(0, count - alreadyLoaded - limit);
-      const page = limit > 0
-        ? await historyGateway.readWalletPositionPage(account, offset, limit)
+      const window = walletPositionPageWindow({
+        total: count,
+        loaded: append ? previous.length : 0,
+      });
+      const page = window.limit > 0
+        ? await historyGateway.readWalletPositionPage(account, window.offset, window.limit)
         : { positions: [] };
-      const positions = Array.isArray(page?.positions)
-        ? page.positions.map((position) => Object.freeze({
-            ...normalizeV6Entry(position),
-            deploymentAlias: deployment.alias,
-            contractAddress: deployment.address,
-            protocolVersion: deployment.protocolVersion,
-          })).reverse()
-        : [];
+      const positions = normalizeWalletPositionPage(page?.positions, deployment);
       this.onchainPositionCountsByDeployment.set(deployment.alias, count);
       this.onchainPositionsByDeployment.set(
         deployment.alias,
@@ -1391,27 +1390,17 @@ class LiquidityArenaApp {
     }
     for (const entry of positions) {
       const positionDeployment = DEPLOYMENT_REGISTRY.get(entry.deploymentAlias);
+      const presentation = walletPositionPresentation(entry, positionDeployment, location.href);
       const item = document.createElement('li');
-      item.dataset.status = entry.claimed ? 'finalized' : entry.eligible ? 'submitted' : 'review';
+      item.dataset.status = presentation.dataStatus;
       const summary = document.createElement('span');
-      const status = entry.claimed
-        ? 'CLAIMED'
-        : entry.eligible
-          ? (entry.settlementMode.startsWith('REFUND_') ? 'REFUND READY' : 'PAYOUT READY')
-          : entry.settlementMode === 'PENDING' ? 'AWAITING RESULT' : 'NO PAYOUT';
-      summary.textContent = `${positionDeployment.alias.toUpperCase()} ON-CHAIN · ${entry.objective} · ${contractAssetLabel(entry.choiceAssetId)} · ${displayGen(entry.stakeAtto, 6)} · ${status}`;
+      summary.textContent = `${positionDeployment.alias.toUpperCase()} ON-CHAIN · ${entry.objective} · ${contractAssetLabel(entry.choiceAssetId)} · ${displayGen(entry.stakeAtto, 6)} · ${presentation.status}`;
       const actions = document.createElement('span');
       actions.className = 'activity-actions';
       const open = document.createElement('a');
-      const url = new URL(location.href);
-      url.searchParams.delete('contract');
-      url.searchParams.set('feed', 'live');
-      url.searchParams.set('deployment', positionDeployment.alias);
-      url.searchParams.set('epoch', String(entry.epochEndTimestamp));
-      url.searchParams.set('objective', entry.objective === 'LOW' ? 'lowest' : 'highest');
-      open.href = url.href;
-      open.textContent = entry.eligible ? 'OPEN & CLAIM' : 'OPEN EPOCH';
-      open.title = `Open epoch ${entry.epochEndTimestamp} ${entry.objective}`;
+      open.href = presentation.href;
+      open.textContent = presentation.actionText;
+      open.title = presentation.actionTitle;
       actions.append(open);
       item.append(summary, actions);
       list.append(item);
@@ -2025,19 +2014,20 @@ class LiquidityArenaApp {
       this._renderPredictionState();
       return;
     }
+    const claimTarget = walletClaimTarget(this.round);
     this.claimingWager = true;
     this.modalNotice = null;
     this._renderPredictionState();
     let activity = {
       type: 'CLAIM',
-      roundId: this.round.roundId,
+      roundId: String(claimTarget.epochEndTimestamp),
       assetId: this.entry?.choiceAssetId || null,
-      objective: this.round.objective,
+      objective: claimTarget.objective,
       amountAtto: this.claimQuote?.amountAtto?.toString() || null,
       deliveryStatus: 'PENDING',
     };
     try {
-      const result = await this.gateway.claimEpoch(this.round.epochEndTimestamp, this.objectiveSelector, {
+      const result = await this.gateway.claimEpoch(claimTarget.epochEndTimestamp, claimTarget.objective, {
         onSubmitted: (hash, submission) => {
           activity = {
             ...activity,

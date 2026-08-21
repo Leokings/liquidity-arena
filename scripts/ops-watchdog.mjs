@@ -95,6 +95,7 @@ export async function runOpsWatchdog({
   githubRepository,
   githubToken,
   triggerConclusion = '',
+  syntheticFailure = false,
   fetchImpl = globalThis.fetch,
   now = Date.now,
 } = {}) {
@@ -113,6 +114,13 @@ export async function runOpsWatchdog({
       'keeper workflow event',
       conclusion === 'success',
       `workflow_run conclusion=${conclusion}`,
+    ));
+  }
+  if (syntheticFailure === true) {
+    results.push(check(
+      'synthetic alert exercise',
+      false,
+      'operator-requested failure injection; production checks continue below',
     ));
   }
 
@@ -231,6 +239,7 @@ async function main() {
     githubRepository: process.env.GITHUB_REPOSITORY,
     githubToken: process.env.GH_TOKEN,
     triggerConclusion: process.env.WATCHDOG_TRIGGER_CONCLUSION,
+    syntheticFailure: process.env.WATCHDOG_SYNTHETIC_FAILURE === 'true',
   });
   const report = watchdogMarkdown(result);
   const reportPath = String(process.env.WATCHDOG_REPORT_PATH || '').trim();
