@@ -330,7 +330,8 @@ issue #17 after an injected failure, and recovery run `32461245006`/job `9670845
 surface, closed the issue, and posted the recovery comment. This proves GitHub-native delivery;
 an independent pager remains an optional enhancement.
 
-The current production artifact with that synthetic path is READY/PROMOTED Vercel deployment
+The last runtime-changing production artifact and synthetic-watchdog evidence checkpoint was the
+READY/PROMOTED Vercel deployment
 `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
 `https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`, GitHub deployment
 `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main-push CI run
@@ -338,6 +339,8 @@ The current production artifact with that synthetic path is READY/PROMOTED Verce
 direct tests). Bundle `/assets/market-BoHfo81C.js` is 193040 bytes, ETag
 `"fa10949a324593024ea6c209eb3a0cc3"`, SHA-256
 `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
+This immutable checkpoint does not assert that the public alias still targets it; later documentation-only
+publication deployments may supersede the alias without changing the recorded runtime guarantees.
 
 Main commit `958e51743a821606ca78881e6bcc8fb0a34a8e8f` separately extends keeper receipt propagation to
 seven attempts on the same hash, using 315 seconds of outer backoff and no write resubmission; CI run

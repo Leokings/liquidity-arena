@@ -380,7 +380,8 @@ ETag `W/"aed8cd3722fd07b7762e4331cd94d235"` and SHA-256
 200. Readiness reports 2 GEN of active V7 player liability across two eligible unclaimed refunds;
 this positive participant obligation is non-blocking.
 
-The current synthetic-watchdog runtime is READY/PROMOTED Vercel deployment
+The last runtime-changing production artifact and synthetic-watchdog evidence checkpoint was the
+READY/PROMOTED Vercel deployment
 `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
 [its immutable URL](https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app), GitHub
 deployment `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main-push CI run
@@ -388,6 +389,8 @@ deployment `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main
 direct tests). Bundle `/assets/market-BoHfo81C.js` is 193040 bytes, ETag
 `"fa10949a324593024ea6c209eb3a0cc3"`, SHA-256
 `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
+This immutable checkpoint does not assert that the public alias still targets it; later documentation-only
+publication deployments may supersede the alias without changing the recorded runtime guarantees.
 
 ## Monitoring and recovery
 

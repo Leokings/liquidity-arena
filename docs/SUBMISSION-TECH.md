@@ -20,7 +20,7 @@ pari-mutuel objectives: highest return (`HIGH`) and lowest return (`LOW`).
 | Evidence | Binance, OKX, Bybit, Gate, KuCoin; at least 3 complete baskets |
 | Operator | Limited epoch-creation keeper; permissionless resolve/timeout; V7 workflow `338089019` active at minute 27 with durable writer queue, V6 workflow `338089016` disabled |
 | Keeper write authority | Active authoritative Neon journal: 64/64 operations VERIFIED, 0 unresolved after the 24-hour checkpoint and post-merge run |
-| Public host | [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app), V7 source `a1c773a` active/READY with V6 legacy recovery |
+| Public host | [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app), V7 active/READY; runtime guarantees last changed at source `a1c773a`, while later docs-only publication deployments may own the alias; V6 legacy recovery remains readable |
 | Operations health | Projection integrity 32/32 with zero gaps; GitHub-native synthetic issue delivery/recovery passes; independent pager optional |
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is retained for historical reads, eligible
@@ -150,11 +150,14 @@ historical context and do not reset with the hourly wager round.
   deployment `6017361124`, source `abef30d7268b34331528c470cc2a06eefe50ba33`; bundle
   `/assets/market-B8kYJwYW.js` is 191540 bytes with SHA-256
   `2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709`;
-- current synthetic-watchdog runtime is READY/PROMOTED Vercel deployment
+- last runtime-changing production artifact and synthetic-watchdog evidence checkpoint was
+  READY/PROMOTED Vercel deployment
   `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K`, GitHub deployment `6017754639`, source
   `a1c773ae36a882c043c6b167a1324d1d558ac60f`; main CI `32461039766` passed, and bundle
   `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
-  `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`;
+  `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`; this immutable checkpoint
+  does not assert that the public alias still targets it, because later documentation-only publication
+  deployments may supersede the alias without changing the recorded runtime guarantees;
 - historical scheduled V6 drain run `32297047031` completed successfully without creating any epoch;
   the later zero-liability audit retired recurring execution and live workflow `338089016` is now
   `disabled_manually`;
@@ -264,8 +267,11 @@ The initial post-soak runtime was `dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6` at
 200 after repair; history integrity is 32/32 with zero gaps, and readiness reports the non-blocking
 2 GEN outstanding active-player liability.
 
-The current production runtime is `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
+The last runtime-changing production artifact and synthetic-watchdog evidence checkpoint was
+`dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
 `https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`, GitHub deployment
 `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main-push CI `32461039766`
 passed; bundle `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
 `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
+This immutable checkpoint does not assert that the public alias still targets it; later documentation-only
+publication deployments may supersede the alias without changing the recorded runtime guarantees.

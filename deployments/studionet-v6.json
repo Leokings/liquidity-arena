@@ -586,13 +586,13 @@
       "historyIntegrity": "PASS_32_OF_32_TERMINAL_RESOLVE_ZERO_GAPS",
       "evidenceScope": "HISTORICAL_INITIAL_POST_SOAK_PRODUCTION_RUNTIME_ARTIFACT"
     },
-    "currentProductionRuntimeArtifact": {
+    "lastRuntimeChangingProductionArtifact": {
       "sourceCommit": "a1c773ae36a882c043c6b167a1324d1d558ac60f",
       "githubDeploymentId": "6017754639",
       "githubDeploymentStatus": "success",
       "vercelDeploymentId": "dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K",
       "vercelDeploymentUrl": "https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app",
-      "status": "READY_PROMOTED",
+      "statusAtVerification": "READY_PROMOTED",
       "ciRunId": "32461039766",
       "ciStatus": "SUCCESS",
       "browserAndOperatorJobId": "96707863823",
@@ -607,7 +607,8 @@
       "bundleSha256": "82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa",
       "readyV6PlayerLiabilityAtto": "0",
       "syntheticWatchdogDelivery": "PASS_ISSUE_17_OPEN_RECOVERY_COMMENT_AND_CLOSE",
-      "evidenceScope": "CURRENT_VERIFIED_PRODUCTION_RUNTIME_ARTIFACT"
+      "evidenceScope": "LAST_RUNTIME_CHANGING_SYNTHETIC_WATCHDOG_EVIDENCE_CHECKPOINT",
+      "productionAliasPolicy": "LATER_DOCS_ONLY_PUBLICATION_DEPLOYMENTS_MAY_SUPERSEDE_ALIAS_WITHOUT_CHANGING_RUNTIME_GUARANTEES"
     },
     "previousV6CompatibilityArtifact": {
       "deploymentId": "dpl_DQEvnGup417wvTxuxzeNfJvySiM5",

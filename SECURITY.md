@@ -288,7 +288,8 @@ history-health, and proof surfaces return HTTP 200. Readiness reports active V7 
 2 GEN, corresponding to two eligible unclaimed refunds; it is an outstanding participant obligation
 and intentionally non-blocking, never an inferred zero or a readiness success condition.
 
-The current production artifact with synthetic watchdog support is READY/PROMOTED Vercel deployment
+The last runtime-changing production artifact and synthetic-watchdog evidence checkpoint was the
+READY/PROMOTED Vercel deployment
 `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
 `https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`, GitHub deployment
 `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main-push CI `32461039766`
@@ -296,6 +297,8 @@ passed jobs `96707863823` (393/393, build 477, audit 0) and `96707864002` (lint 
 tests). Bundle `/assets/market-BoHfo81C.js` is 193040 bytes with ETag
 `"fa10949a324593024ea6c209eb3a0cc3"` and SHA-256
 `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
+This immutable checkpoint does not assert that the public alias still targets it; later documentation-only
+publication deployments may supersede the alias without changing the recorded runtime guarantees.
 
 ## Reporting
 

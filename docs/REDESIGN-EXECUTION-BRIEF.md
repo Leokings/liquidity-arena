@@ -325,11 +325,14 @@ SHA-256 `2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709`. Publ
 HTTP 200 after repair. Readiness reports 2 GEN of active V7 player liability across two eligible
 unclaimed refunds without treating that obligation as a service failure.
 
-The current synthetic-watchdog runtime is READY/PROMOTED deployment `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K`
+The last runtime-changing production artifact and synthetic-watchdog evidence checkpoint was
+READY/PROMOTED deployment `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K`
 at `https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`, GitHub deployment
 `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main-push CI run
 `32461039766` passed. Bundle `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
 `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
+This immutable checkpoint does not assert that the public alias still targets it; later documentation-only
+publication deployments may supersede the alias without changing the recorded runtime guarantees.
 
 ## 9. Phase G — submission package
 
