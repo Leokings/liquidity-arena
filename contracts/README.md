@@ -126,6 +126,13 @@ now exposes exactly one creation, four wagers, one resolution, and three credite
 E20 and V6 E19 remain at zero because they were outside that selected backfill. Neon history is a
 cache/projection rather than a replacement for these views, and outage recovery remains pending.
 
+The post-soak integrity gate now cross-checks VERIFIED V7 terminal journal operations against durable
+epochs and determined snapshots. Repair runs `32458718433`, `32459026957`, and `32459340292`
+synchronized seven epochs/snapshots and moved the diagnostic from 31 terminal operations with three
+missing and one stale epoch to 31/31 with zero missing, stale, or missing-snapshot rows. After manual
+keeper run `32459740369`, history-health reports 32/32 verified terminal/resolve operations and zero
+gaps. This remains a discoverability check over an off-chain projection, not contract authority.
+
 ## Verification requirements
 
 - every UTC boundary and exactly 24 targets per day;
@@ -179,12 +186,20 @@ history job `96306791996`, verified one resolve and one create, and left Neon at
 zero unresolved. Live epoch count was 35, including eight workflow-created epochs. Second scheduled
 run `32332196428` passed reconcile job `96314848434` and history job `96315355338`, verified
 RESOLVE `1787198400` and CREATE `1787292000`, and left Neon at 10/10 VERIFIED with zero unresolved;
-evidenced coverage is at least 36 epochs, nine workflow-created. Extended soak and external alert
-delivery remain pending. The historical READY artifact that executed the first restored run was
+evidenced coverage was at least 36 epochs, nine workflow-created at that checkpoint. The subsequent
+24-hour audit found 25/25 delivered scheduled runs, 50/50 jobs, and 52/52 actions VERIFIED, split 26
+resolve/26 create, with 62/62 journal operations and zero unresolved. Only 25 of 52 nominal cron
+slots produced records, with a longest gap of `01:39:05`, so schedule delivery reliability remains a
+known issue even though every delivered action passed. PR #15 merge
+`abef30d7268b34331528c470cc2a06eefe50ba33` installs one minute-27 trigger, a durable shared
+`queue: max` writer queue, mandatory three-epoch V7 projection, integrity health, active-player-
+liability reporting, and a GitHub-native watchdog. Post-merge run `32459740369` added one exact
+VERIFIED resolve/create pair; the journal is now 64/64 VERIFIED with zero unresolved. The historical
+READY artifact that executed the first restored run was
 Vercel deployment `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, source
 `81850e3c814cd541d392fdeecf4dacca753d25e6`, bundle `/assets/market-BQWvq82y.js` SHA-256
-`37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`. The current verified
-hardened runtime is READY Vercel deployment `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj`, GitHub deployment
+`37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`. The historical stream-
+hardened runtime was READY Vercel deployment `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj`, GitHub deployment
 `5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`; CI `32332498286` passed jobs
 `96315684498` and `96315684590`. Bundle `/assets/market-DTvIR-Xr.js` is 191538 bytes with SHA-256
 `7056bef680f18a8e98af1b21822f91f3630644b75a639c83398e1b31601f8e00`. Its shared ref-counted
@@ -200,7 +215,23 @@ artifacts/caches are never proof or authority. Migration 003 retry-attempt linea
 production-read-back verified at checksum
 `9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70`; the matching API now reports
 authenticated `ready=true`, `schemaVersion=3`, and the manual and scheduled runs prove live
-execution. Extended monitoring, outage recovery, and external review remain pending.
+execution. The initial post-soak runtime was READY deployment `dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6`,
+GitHub deployment `6017361124`, source `abef30d7268b34331528c470cc2a06eefe50ba33`, at
+`https://liquidity-arena-oadqjhtxc-leokings588-5902s-projects.vercel.app`. Bundle
+`/assets/market-B8kYJwYW.js` is 191540 bytes with SHA-256
+`2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709`. Manual and automatic
+watchdog runs pass. Synthetic failure run `32461072315` opened issue #17; healthy recovery run
+`32461245006`/job `96708451794` rechecked production, closed the issue, and posted the automated
+recovery comment. GitHub-native delivery is proven; an independent third-party pager remains an
+optional, unconfigured enhancement. Active V7 player liability is 2 GEN
+across two eligible unclaimed refunds; it is an outstanding participant obligation, not a readiness
+failure. Outage recovery and external review remain pending.
+
+The current production artifact is READY/PROMOTED deployment `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K`,
+GitHub deployment `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`, at
+`https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`. Main-push CI
+`32461039766` passed. Bundle `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
+`82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
 
 See [`../docs/STUDIONET-V7.md`](../docs/STUDIONET-V7.md) and
 [`../deployments/studionet-v7.json`](../deployments/studionet-v7.json).

@@ -33,7 +33,7 @@ The release protocol is `LIQUIDITY_ARENA_V7` and the settlement policy is
 | Keeper privilege | Create fixed-terms epochs only |
 | Resolution/timeout | Permissionless |
 | Public hosting | Vercel browser and bounded API |
-| Durable history | Neon repeated V7/V6 projection and selected V7 proof backfill live; outage recovery and broader proof coverage pending |
+| Durable history | Neon repeated projection, selected proof backfill, post-soak repair, and journal-to-projection integrity health live; outage recovery and broader proof coverage pending |
 
 ## 3. Canonical hourly model
 
@@ -156,8 +156,8 @@ recovery design remains required before real value.
 
 The owner key is never an automation credential. Dedicated encrypted keeper
 `0x12ba664a1ec9ca78b070d103c6a69e20673f4b51` is installed on-chain and configured for the keeper
-workflow. Default-branch runtime-signer/profile preflight passed; long-run monitoring remains
-mandatory. Seven-attempt/315-second receipt propagation grace is merged on main
+workflow. Default-branch runtime-signer/profile preflight passed; schedule-delivery and independent
+alert monitoring remain mandatory. Seven-attempt/315-second receipt propagation grace is merged on main
 `958e51743a821606ca78881e6bcc8fb0a34a8e8f`. Its first live action-bearing scheduled use, run
 `32312864108` / job `96259232716`, exhausted receipt lookups for CREATE `0xe6af…3574` and RESOLVE
 `0x0850…c7e`; both exact writes nevertheless later finalized and applied. Manual
@@ -170,7 +170,13 @@ submitted; history job `96297112208` also succeeded. V6 workflow `338089016` rem
 `96306191739` and history job `96306791996`, verifying one resolve and one create. Second
 action-bearing scheduled run `32332196428` passed jobs `96314848434` and `96315355338`, verifying
 RESOLVE `1787198400` and CREATE `1787292000`. Neon read back 10/10 VERIFIED operations with zero
-unresolved; extended soak and external alert delivery remain mandatory.
+unresolved. A later 24-hour audit passed every delivered unit—25/25 scheduled records, 50/50 jobs,
+and 52/52 VERIFIED actions (26 resolve, 26 create)—and reached 62/62 VERIFIED operations with zero
+unresolved. Only 25 of 52 nominal cron slots emitted records and the longest gap was `01:39:05`.
+PR #15 merge `abef30d7268b34331528c470cc2a06eefe50ba33` therefore moved to one minute-27 trigger,
+durable `queue: max` writer serialization, required V7-only three-epoch projection, integrity health,
+active-player-liability reporting, and a GitHub-native issue watchdog. Synthetic failure/recovery
+later proved issue delivery end to end; independent third-party alert delivery remains optional.
 
 ## 9. Visualization
 
@@ -204,9 +210,11 @@ must not be used; legacy resolve/timeout/claim discoverability remains until lia
 The public Vercel site targets V7 and retains V6 legacy recovery. The dedicated keeper rotation,
 funded canary, exact public readiness, and proof view from merged PR #6 are deployed. Browser/wallet
 soak and rollback discipline remain ongoing obligations. Historical READY schedule-restoration
-artifact `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ` executed first restored run `32329108358`; the current
-verified hardened runtime is `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj`. Exact identities are recorded
-below.
+artifact `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ` executed first restored run `32329108358`; historical
+stream-hardened runtime `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` is retained as a dated checkpoint. The
+initial post-soak runtime is `dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6` from source `abef30d`. The current
+synthetic-watchdog runtime is `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` from source `a1c773a`. Exact
+identities are recorded below.
 
 ## 11. Keeper and readiness
 
@@ -223,14 +231,17 @@ The reconciler:
 
 V6 workflow `338089016` remains `disabled_manually` with `workflow_dispatch`-only source on `main`.
 PR #11 merge `81850e3` restored the V7 cron source, and action-bearing scheduled runs `32329108358`
-and `32332196428` passed.
+and `32332196428` passed. PR #15 merge `abef30d` now runs once per hour at minute 27 and uses one
+durable `queue: max` concurrency group across every chain/history writer.
 Contract time remains authoritative. The Neon journal uses one fenced global signer
 lease across V7 and manual V6 recovery, requires durable PREPARE before broadcast and exact captured
 hash binding, and blocks every later write while an operation is unknown or unverified. Raw
 `gen_getTransactionStatus` is only liveness; VERIFIED still requires the full exact receipt,
 successful execution, and matching post-state. Workflow artifacts and caches are never authority.
 Readiness checks exact chain/contract/roles/policy/stakes/fee/schedule and all five feeds. V6 legacy
-liability is a separately reported compatibility state; an unreadable value is not zero.
+and active V7 player liabilities are separately reported; an unreadable value is not zero. The
+current V7 value is 2 GEN across two eligible unclaimed refunds and is deliberately diagnostic, not
+a service-readiness failure.
 
 ## 12. History and observability
 
@@ -270,8 +281,21 @@ unresolved unique index including `QUARANTINED`, and the parent-freeze trigger. 
 reports authenticated `ready=true`, `schemaVersion=3`; manual run `32325583494` proved six VERIFIED
 live operations, including one recovered across runs.
 
+Projection integrity is now an explicit health surface. Before repair it observed 31 VERIFIED V7
+terminal operations with three missing durable epochs, one stale epoch, and zero missing snapshots.
+Serialized V7-only repair runs `32458718433`, `32459026957`, and `32459340292` synchronized seven
+epochs/snapshots without proof failures or rejections and closed every gap. Post-merge keeper run
+`32459740369` VERIFIED one resolve and one create and synchronized 3/3 epochs/snapshots; journal
+read-back is 64/64 VERIFIED, zero unresolved, while history-health is HTTP 200 at 32/32 terminal/
+resolve operations and zero missing, stale, or missing-snapshot rows.
+
 Monitor public health/readiness, exact-hour coverage, exchange source status, finality lag, keeper
 failures, role/config drift, parent/child delivery, V6 legacy liability, and history ingestion lag.
+The GitHub-native issue watchdog passed manual run `32459656268` and automatic `workflow_run`
+`32460047757`. Synthetic run `32461072315` injected failure only after production checks passed and
+opened issue #17; recovery `32461245006`/job `96708451794` rechecked every surface, commented, and
+closed the issue. GitHub-native delivery is therefore proven. An independent third-party pager is an
+optional defense-in-depth enhancement.
 
 ## 13. Security requirements
 
@@ -313,8 +337,13 @@ Tests and review must cover:
 - second scheduled run `32332196428` passed both jobs, verified exact attempt-1 RESOLVE
   `1787198400` and CREATE `1787292000` transactions with finalized majority-agree receipts and
   matching post-state, left Neon at 10/10 VERIFIED with zero unresolved, and raised evidenced
-  read-back to at least 36 epochs with nine workflow-created; extended soak and external alert
-  delivery remain pending;
+  read-back to at least 36 epochs with nine workflow-created at that checkpoint;
+- 24-hour delivered-run audit: 25/25 scheduled records, 50/50 jobs, and 52/52 actions passed; the
+  journal read 62/62 VERIFIED with zero unresolved. The declared cron had 52 nominal slots but only
+  25 emitted records, with a longest `01:39:05` gap; catch-up run `32439590155` verified four actions;
+- post-soak hardening/repair: PR #15 merged as `abef30d7268b34331528c470cc2a06eefe50ba33`; three repair
+  runs closed three missing and one stale durable epoch, and manual run `32459740369` left the journal
+  at 64/64 VERIFIED with history health 32/32 terminal/resolve and zero gaps;
 - funded V7 canary: complete—resolution `0xc2c86fdb…ab66`, three exact claim deliveries, expected
   loser rejection, 1.748 GEN conserved, and exact 0.002 GEN fee withdrawal delivered;
 - Neon production migrations: history v1 and keeper-journal v2/v3 applied; six-table/four-index history
@@ -331,7 +360,7 @@ Tests and review must cover:
   source `81850e3c814cd541d392fdeecf4dacca753d25e6`, served bundle
   `/assets/market-BQWvq82y.js` (188376 bytes), SHA-256
   `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`, and executed successful
-  scheduled run `32329108358`. Current verified hardened runtime
+  scheduled run `32329108358`. The earlier verified live-feed-hardening runtime was
   `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
   `https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app`, GitHub deployment
   `5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`, passed CI run `32332498286`
@@ -342,6 +371,19 @@ Tests and review must cover:
   LIVE/FRESH without STALE/errors, plus immediate independent HTTP-200 five-asset events. Public
   health/readiness/history-health/proof endpoints returned HTTP 200; readiness matched chain
   `0xf22f`, exact V7/keeper/coverage, and zero V6 liability.
+
+- initial post-soak deployment: `dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6` at
+  `https://liquidity-arena-oadqjhtxc-leokings588-5902s-projects.vercel.app`, GitHub deployment
+  `6017361124`, source `abef30d7268b34331528c470cc2a06eefe50ba33`; CI run `32458652480` passed jobs
+  `96700917346`/`96700917084`, and bundle `/assets/market-B8kYJwYW.js` is 191540 bytes with SHA-256
+  `2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709`. Public surfaces return HTTP
+  200; active V7 player liability is 2 GEN across two eligible unclaimed refunds and is non-blocking.
+
+- current synthetic-watchdog deployment: READY/PROMOTED `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
+  `https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`, GitHub deployment
+  `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`; main CI run `32461039766`
+  passed, and `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
+  `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
 
 Observed StudioNet finality is not an SLA. The recorded deploy finalized in about 36 seconds, but the
 system always waits for actual finality rather than a timer.

@@ -21,10 +21,30 @@ restored the V7 cron source. Scheduled run `32329108358` passed reconcile/histor
 resolve and one create, and left Neon at eight operations, all VERIFIED, zero unresolved. Live epoch
 count became 35, including eight workflow-created epochs. Second scheduled run `32332196428` passed
 reconcile job `96314848434` and history job `96315355338`, finalized another exact resolve/create
-pair, and left Neon at 10/10 VERIFIED operations with zero unresolved. Evidenced coverage is now at
-least 36 epochs, nine workflow-created. Extended scheduled soak and external alert delivery,
-database-outage recovery, broader proof coverage, and an independent security review remain release
-gates. The payment path must not be described as production-ready.
+pair, and left Neon at 10/10 VERIFIED operations with zero unresolved. Evidenced coverage was then at
+least 36 epochs, nine workflow-created. The 24-hour checkpoint ending approximately
+`2026-08-21T06:50Z` subsequently passed all 25 delivered scheduled runs, 50/50 jobs, and 52/52
+VERIFIED actions (26 resolves and 26 creates), leaving the pre-maintenance journal at 62/62 VERIFIED
+and zero unresolved. The former two-trigger cron nevertheless produced only 25 records for 52
+nominal slots, with a longest gap of `01:39:05`; delivered execution integrity passed, while schedule
+delivery reliability did not meet the declared cadence.
+
+PR #15 merged as `abef30d7268b34331528c470cc2a06eefe50ba33` and hardens that boundary with one minute-27
+trigger, durable `queue: max` serialization across every writer, required history configuration,
+V7-only three-epoch projection, projection-integrity health, an active-player-liability diagnostic,
+and a GitHub-native issue watchdog. Three repair runs (`32458718433`, `32459026957`, and
+`32459340292`) passed and closed three missing plus one stale durable epoch. Post-merge keeper run
+`32459740369` passed both jobs and added one exact VERIFIED resolve/create pair; Neon now reads 64/64
+VERIFIED with zero unresolved. History health is `200` with 32/32 verified terminal/resolve
+operations and zero timeout, missing, stale, or missing-snapshot rows. Manual watchdog run
+`32459656268` and automatic `workflow_run` `32460047757` both passed. Synthetic run `32461072315`
+then opened issue #17 after all real production checks passed and an injected failure fired. Recovery
+run `32461245006`/job `96708451794` rechecked every surface, closed the issue at
+`2026-08-21T08:01:35Z`, and posted the automated recovery comment. GitHub-native detection and
+delivery/recovery are proven; an independent third-party pager remains an optional, unconfigured
+enhancement. Database-outage recovery, broader proof
+coverage, and an independent security review remain release gates. The payment path must not be
+described as production-ready.
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is a legacy liability surface only. It remains readable
 and claimable for existing positions; supported public app and automation paths must not use it for
@@ -139,14 +159,19 @@ three resolves and three creates. Live V6 workflow `338089016` remains `disabled
 merged `main` source is `workflow_dispatch`-only. PR #11 merge `81850e3` restored the V7 cron source;
 run `32329108358` then passed with two exact VERIFIED operations and green history synchronization.
 Second action-bearing scheduled run `32332196428` repeated that result with two more exact VERIFIED
-operations and a green history job; this is incremental soak evidence, not completion of the
-extended-soak or external-alert gates.
+operations and a green history job. The later 24-hour checkpoint proved all 25 delivered runs and
+52 actions, while also exposing that GitHub emitted only 25 of 52 nominal schedule records. Catch-up
+run `32439590155` safely verified four actions. PR #15 therefore moved the cadence to one minute-27
+trigger and placed all keeper, projection-repair, and proof-backfill writers in the same durable
+`queue: max` group; the Neon fenced lease remains the actual distributed write authority.
 
-The restored GitHub cron is best-effort. Cron does not
-define epoch time and is not an availability guarantee.
+GitHub cron is best-effort. Cron does not define epoch time and is not an availability guarantee.
 Permissionless resolution and timeout reduce operator lock-in, but monitoring must still alert on
 missing coverage, source quorum loss, finality lag, scheduler failure, and unexpected role/config
-changes.
+changes. The GitHub-native watchdog checks readiness, durable-history integrity, authenticated
+journal health, keeper recency/conclusion, and opens a repository issue on failure. Its manual and
+automatic healthy-path runs pass, and synthetic failure/recovery runs prove repository issue
+open/comment/close delivery. An optional independent third-party delivery path remains absent.
 
 ## Web, history, and migration threats
 
@@ -176,6 +201,14 @@ parent are stored outside that epoch array. V7 E20 and V6 E19 remain at zero bec
 part of the selected backfill. Database outage recovery and broader proof coverage remain pending.
 Database availability can affect discovery, never settlement or claim eligibility.
 
+Post-soak integrity health cross-checks VERIFIED V7 terminal journal operations against durable
+epochs and required determined snapshots. Before repair it reported 31 terminal operations, three
+missing epochs, one stale epoch, and zero missing snapshots. Serialized V7-only runs `32458718433`,
+`32459026957`, and `32459340292` synchronized seven epochs and seven snapshots with no proof
+failures/rejections and reduced every gap count to zero. Post-merge run `32459740369` then produced
+the current 32/32 terminal/resolve, zero-timeout, zero-gap result. This integrity gate protects
+discoverability; it does not make Neon a settlement authority.
+
 The separate Neon keeper-journal migration 002 was prepared as migration
 `1e440327-2e66-403d-934d-c302790ac775` on temporary branch `br-sweet-frost-auakkl85`, applied
 identically to production branch `br-calm-fire-aup0rw0r`, and the temporary branch was deleted. Its
@@ -192,7 +225,9 @@ unresolved unique index including `QUARANTINED`, and the parent-freeze trigger i
 API now reports authenticated `ready=true`, `schemaVersion=3`, and manual run `32325583494` proved
 the live journal path with six VERIFIED operations. Proof-view PR #6 is merged and deployed;
 scheduled run `32329108358` subsequently proved the restored cron path, and `32332196428` proved a
-second action-bearing scheduled cycle. The current hardened production runtime is recorded below.
+second action-bearing scheduled cycle. The current journal state after the 24-hour checkpoint and
+post-merge manual run is 64/64 VERIFIED with zero unresolved. The current hardened production
+runtime is recorded below.
 
 ## Remaining security gates
 
@@ -201,7 +236,8 @@ After the V7 public cutover:
 1. rerun GenVM lint, V7 direct tests, full JavaScript tests, build, and dependency audit;
 2. complete an independent focused review of contract, evidence adapters, keeper, deployment
    registry, server boundary, and database ingestion;
-3. continue scheduled-run soak and external alert verification; keep live V6 workflow `338089016`
+3. monitor the 25/52 nominal GitHub schedule-delivery finding and preserve the proven GitHub-native
+   watchdog; an independent third-party pager is an optional open enhancement. Keep live V6 workflow `338089016`
    disabled at zero player liability and prove no owner material exists in automation;
 4. independently review the recorded funded V7 canary, including its shared resolution, fee/refund
    math, loser rejection, conserved balances, and finalized parent/child deliveries;
@@ -227,7 +263,7 @@ deployment `5994871034`, source
 `81850e3c814cd541d392fdeecf4dacca753d25e6`. Its bundle `/assets/market-BQWvq82y.js` is 188376 bytes
 with SHA-256 `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`.
 
-The current verified hardened runtime is READY Vercel deployment
+The historical stream-hardened runtime is READY Vercel deployment
 `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
 `https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app`, GitHub deployment
 `5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`. CI run `32332498286` passed jobs
@@ -240,6 +276,26 @@ LIVE/FRESH without STALE/errors, and an immediate independent HTTP-200 curl with
 Health, readiness, history-health, and proof view returned HTTP 200; readiness matched chain
 `0xf22f`, exact V7/keeper/coverage, and zero V6 liability. The earlier V6 compatibility deployment
 remains a rollback artifact, but rollback must never re-enable V6 writes.
+
+The initial post-soak artifact was READY Vercel deployment `dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6` at
+`https://liquidity-arena-oadqjhtxc-leokings588-5902s-projects.vercel.app`, GitHub deployment
+`6017361124`, source `abef30d7268b34331528c470cc2a06eefe50ba33`. CI run `32458652480` passed
+browser/operator job `96700917346` and intelligent-contracts job `96700917084`. Bundle
+`/assets/market-B8kYJwYW.js` is 191540 bytes with ETag
+`W/"aed8cd3722fd07b7762e4331cd94d235"` and SHA-256
+`2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709`. Public health, readiness,
+history-health, and proof surfaces return HTTP 200. Readiness reports active V7 player liability of
+2 GEN, corresponding to two eligible unclaimed refunds; it is an outstanding participant obligation
+and intentionally non-blocking, never an inferred zero or a readiness success condition.
+
+The current production artifact with synthetic watchdog support is READY/PROMOTED Vercel deployment
+`dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
+`https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`, GitHub deployment
+`6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main-push CI `32461039766`
+passed jobs `96707863823` (393/393, build 477, audit 0) and `96707864002` (lint plus 37 direct
+tests). Bundle `/assets/market-BoHfo81C.js` is 193040 bytes with ETag
+`"fa10949a324593024ea6c209eb3a0cc3"` and SHA-256
+`82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
 
 ## Reporting
 

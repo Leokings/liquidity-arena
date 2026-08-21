@@ -152,17 +152,19 @@ zero-fee fallback for an epoch that remains open.
 
 ## GitHub Actions
 
-GitHub workflow `338089019` is active. PR #11 restored the minute-3/minute-13 schedule in
+GitHub workflow `338089019` is active. PR #11 historically restored the minute-3/minute-13 schedule in
 `.github/workflows/studionet-v7-keeper.yml` on main commit
 `81850e3c814cd541d392fdeecf4dacca753d25e6` after the manual authoritative-journal canary passed.
 Restored scheduled run [`32329108358`](https://github.com/Leokings/liquidity-arena/actions/runs/32329108358)
 then passed reconcile job `96306191739` and history job `96306791996`. This proves the trigger and
 journal path at that checkpoint. Second action-bearing scheduled run
 [`32332196428`](https://github.com/Leokings/liquidity-arena/actions/runs/32332196428) passed reconcile
-job `96314848434` and history job `96315355338`, providing meaningful incremental soak evidence;
-extended soak and external alert delivery remain monitoring obligations.
-Contract time still defines every gate. The separate read/project history job has its own
-concurrency group, but it must not run after a blocked keeper CLI result.
+job `96314848434` and history job `96315355338`. The later 24-hour checkpoint is recorded below.
+PR #15 merge `abef30d7268b34331528c470cc2a06eefe50ba33` now uses one hourly minute-27 trigger. Keeper,
+scheduled projection, manual history repair, and proof backfill writers all share one durable
+`queue: max` concurrency group, preventing pending writer replacement. Contract time still defines
+every gate, and the Neon fenced lease remains the distributed writer authority. A projection job
+must not run after a blocked keeper CLI result.
 
 Environment: `studionet-keeper`
 
@@ -175,7 +177,7 @@ V7_KEEPER_ADDRESS
 V7_TREASURY_ADDRESS
 V6_CONTRACT_ADDRESS
 KEEPER_JOURNAL_URL
-HISTORY_SYNC_URL (optional projection job)
+  HISTORY_SYNC_URL
 ```
 
 Encrypted environment secrets:
@@ -184,7 +186,7 @@ Encrypted environment secrets:
 V7_KEEPER_KEYSTORE_B64
 V7_KEEPER_KEYSTORE_PASSWORD
 KEEPER_JOURNAL_SECRET
-HISTORY_INGEST_SECRET (optional projection job)
+  HISTORY_INGEST_SECRET
 ```
 
 The keystore is decoded only into the runner's temporary directory, imported without printing its
@@ -197,9 +199,10 @@ secrets `V7_KEEPER_KEYSTORE_B64` and `V7_KEEPER_KEYSTORE_PASSWORD` are installed
 and public repository variable `V7_KEEPER_ADDRESS` is
 `0x12ba664a1ec9ca78b070d103c6a69e20673f4b51`. Never substitute the owner keystore.
 
-Durable-history ingestion runs in a separate dependent job with its own concurrency group. Missing
-history configuration skips only that projection job; a configured sync failure is reported as a
-history failure after reconciliation has already completed. History-projection availability never
+Durable-history ingestion runs in a separate dependent job under the shared writer concurrency
+group. Missing history configuration is now a workflow failure, as is a configured sync failure
+after reconciliation has already completed. Scheduled projection is V7-only and syncs up to three
+eligible epochs per run. History-projection availability never
 authorizes or blocks settlement. Keeper-journal availability is intentionally different: an outage
 before PREPARE permits zero writes, and an unresolved durable operation blocks later writes. A
 blocked keeper CLI result must be nonzero so the dependent history job does not conceal it behind a
@@ -209,8 +212,8 @@ Scheduled V7 run `32298454771` proved default-branch activation and reconciliati
 history job failed on the StudioNet provider quota. That projection incident did not invalidate the
 successful reconcile and was superseded by workflow-dispatch run `32299468899`: reconcile job
 `96218469576` passed exact profile/runtime-signer preflight with no actions required, and history job
-`96218806119` completed the bounded sync. Activation is proven; long-run scheduling/alert monitoring
-remains a release obligation. Later verified workflow-dispatch run `32300282482` on code commit
+`96218806119` completed the bounded sync. Activation is proven; later 24-hour delivery and watchdog
+evidence is recorded below. Later verified workflow-dispatch run `32300282482` on code commit
 `45be825084cce9e97579ca42266e318e2e97fe17` also passed reconcile job `96221017562` and history job
 `96221327115`.
 
@@ -317,11 +320,40 @@ at `04:33:44.882Z`, `04:33:46.767Z`, `04:34:24.947Z`, and `04:34:29.922Z`. Snaps
 `96315355338` synchronized two deployments, two epochs, and two snapshots at
 `2026-08-20T04:34:56.951Z`, with zero proof failures/rejections and `replayed=false`. Evidenced live
 coverage is now at least 36 epochs, including nine workflow-created epochs. This is a second
-action-bearing scheduled cycle, not completion of the extended-soak or external-alert requirements.
+action-bearing scheduled cycle and a dated checkpoint.
 
-### Current hardened production runtime
+### Recorded 24-hour checkpoint, repair, and manual verification
 
-The current verified runtime is READY Vercel deployment `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
+At the approximately `2026-08-21T06:50Z` cutoff, 25/25 delivered scheduled runs, all 50 jobs, and all
+52 actions passed. The actions were 26 resolves plus 26 creates, every one VERIFIED; Neon read back
+62/62 VERIFIED with zero unresolved. The old two-trigger schedule had 52 nominal slots but only 25
+GitHub run records (48.08%), with a longest `01:39:05` gap. Catch-up run `32439590155` verified four
+actions through the same journal boundary.
+
+After PR #15, repair workflow runs must be dispatched sequentially and allowed to finish before the
+next batch:
+
+1. run `32458718433`, job `96701115201`: start offset 1, maximum 3, synced 3 epochs/3 snapshots;
+2. run `32459026957`, job `96702015382`: start offset 4, maximum 2, synced 2/2;
+3. run `32459340292`, job `96702933162`: start offset 29, maximum 2, synced 2/2.
+
+All three completed with no proof failures or rejected requests. The history-integrity result moved
+from 31 terminal journal operations with three missing and one stale durable epoch to 31/31 with
+zero missing, stale, or missing-snapshot rows.
+
+Manual keeper run `32459740369` then passed reconcile job `96704099506` and history job
+`96704818464`. It VERIFIED RESOLVE `1787295600` operation
+`4d0a94692338f4650a64ed6d44b8ae21eb3ee2c0ec3b0937eb77408cffc55cf9`, transaction
+`0x6b2928291db52738ddcceb0500b7790ad46098a09e9c058effdeb9ba9e022bea`, and CREATE `1787389200`
+operation `f55fa63b8e598172435ec284d7eb82e6db2c8aeb6f368188bc6f58452e172252`, transaction
+`0x2075252b008d239da9bee85ff7186b0548da20570db8d319a0ed1ce1d4f25d73`. Exact post-states were
+RESOLVED and OPEN. The dependent history job synchronized 3/3 at `2026-08-21T07:45:20.943Z`.
+Current read-back is 64/64 journal operations VERIFIED, zero unresolved; history-health is HTTP 200
+with 32/32 terminal/resolve operations and zero timeout, missing, stale, or missing snapshots.
+
+### Production runtime checkpoints
+
+The historical stream-hardened runtime is READY Vercel deployment `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
 [its immutable URL](https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app), GitHub
 deployment `5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`. CI run
 `32332498286` passed browser/operator job `96315684498` and intelligent-contracts job
@@ -338,6 +370,24 @@ The UI remained LIVE/FRESH with no STALE state or browser error. A separate curl
 the stress sequence returned HTTP 200 `text/event-stream` with live BTC/ETH/BNB/SOL/XRP events.
 Health, readiness, history-health, and proof view returned HTTP 200; readiness matched chain
 `0xf22f`, exact V7/keeper/coverage, and zero V6 liability.
+
+The initial post-soak runtime was READY Vercel deployment `dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6` at
+[its immutable URL](https://liquidity-arena-oadqjhtxc-leokings588-5902s-projects.vercel.app), GitHub
+deployment `6017361124`, source `abef30d7268b34331528c470cc2a06eefe50ba33`. CI run `32458652480`
+passed jobs `96700917346` and `96700917084`. Bundle `/assets/market-B8kYJwYW.js` is 191540 bytes with
+ETag `W/"aed8cd3722fd07b7762e4331cd94d235"` and SHA-256
+`2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709`. Public surfaces return HTTP
+200. Readiness reports 2 GEN of active V7 player liability across two eligible unclaimed refunds;
+this positive participant obligation is non-blocking.
+
+The current synthetic-watchdog runtime is READY/PROMOTED Vercel deployment
+`dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
+[its immutable URL](https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app), GitHub
+deployment `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main-push CI run
+`32461039766` passed jobs `96707863823` (393/393, build 477, audit 0) and `96707864002` (lint plus 37
+direct tests). Bundle `/assets/market-BoHfo81C.js` is 193040 bytes, ETag
+`"fa10949a324593024ea6c209eb3a0cc3"`, SHA-256
+`82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
 
 ## Monitoring and recovery
 
@@ -359,6 +409,16 @@ Health, readiness, history-health, and proof view returned HTTP 200; readiness m
 - One epoch failure must not move later exact-hour boundaries.
 - Alert on missing current/next coverage, role or config drift, repeated venue quorum failure,
   finality delay, scheduler failure, and readiness degradation.
+- GitHub-native watchdog manual run `32459656268`/job `96703858691` and automatic `workflow_run`
+  `32460047757`/job `96704995526` passed. The watchdog checks readiness, projection integrity,
+  authenticated schema-v3 journal health, keeper recency, and trigger conclusion; it opens/closes a
+  repository issue on state change.
+- Synthetic failure run `32461072315` passed real production checks, injected the alert condition,
+  and opened issue #17 at `2026-08-21T07:59:29Z`. Recovery run `32461245006`/job `96708451794`
+  rechecked app/history/journal/latest schedule, closed issue #17 at `08:01:35Z`, and posted the
+  automated recovery comment. GitHub-native delivery is proven end to end.
+- An independent third-party pager remains an optional defense-in-depth enhancement because the
+  current watchdog shares GitHub's control plane with the scheduler it observes.
 - Claims are participant actions, not keeper actions.
 
 `scripts/claim-delivery-monitor.mjs` is read-only and requires an explicit `--protocol v6` or
@@ -405,9 +465,10 @@ discoverable.
 - StudioNet and GitHub Actions have no exact availability or finality SLA.
 - The hosted RPC budget may change; reads are paged/paced and writes serialized.
 - GitHub concurrency is not a distributed lease; the Neon fenced signer lease is the write boundary.
-- External alert delivery and long-run soak evidence remain release work.
-- The schema-v3 journal/API/action-bearing gate and two restored action-bearing scheduled cycles are
-  complete; extended soak and external alert delivery remain pending.
+- The 24-hour delivered-run audit is complete, but GitHub emitted only 25 of 52 nominal schedule
+  records; minute-27 delivery must continue to be measured.
+- The schema-v3 journal/API/action-bearing gate, 64/64 VERIFIED read-back, integrity repair, and
+  GitHub-native watchdog delivery/recovery are complete; independent third-party alerting is optional.
 - The Neon production schema and repeated V7/V6 snapshot ingestion are complete. Public rows cover
   V7 E20/E19 and V6 E19 without a duplicate overlapping V6 row. Protected run `32309637237` verified
   one deployment proof, nine V7 E19 epoch proofs, and the epochless fee-withdrawal parent with zero

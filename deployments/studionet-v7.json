@@ -68,7 +68,7 @@
         }
       ]
     },
-    "defaultBranchWorkflowActivation": "PASS_MANUAL_JOURNAL_CANARY_AND_TWO_ACTION_BEARING_RESTORED_SCHEDULED_RUNS",
+    "defaultBranchWorkflowActivation": "PASS_24_HOUR_DELIVERED_RUN_AUDIT_AND_POST_SOAK_MANUAL_KEEPER_RUN",
     "defaultBranchWorkflowEvidence": {
       "firstScheduledRunId": "32298454771",
       "firstScheduledReconcileStatus": "SUCCESS",
@@ -80,25 +80,25 @@
       "actionsSubmitted": 0,
       "historyJobId": "96218806119",
       "historyStatus": "SUCCESS",
-      "latestSuccessfulRunId": "32332196428",
-      "latestRunEvent": "schedule",
-      "latestRunHeadCommit": "2664e739c11ee3f223626a20663bc2564d64ec7a",
-      "latestRunCreatedAt": "2026-08-20T04:31:28Z",
-      "latestReconcileJobId": "96314848434",
-      "latestReconcileStatus": "SUCCESS",
-      "latestHistoryJobId": "96315355338",
-      "latestHistoryStatus": "SUCCESS",
-      "latestRunVerifiedJournalOperationCount": 2,
-      "postRunTotalJournalOperationCount": 10,
-      "postRunVerifiedJournalOperationCount": 10,
-      "postRunUnresolvedJournalOperationCount": 0,
-      "longRunMonitoring": "PENDING_EXTENDED_SOAK_AND_EXTERNAL_ALERT_DELIVERY",
+      "historicalSecondActionBearingRunId": "32332196428",
+      "historicalSecondActionBearingRunEvent": "schedule",
+      "historicalSecondActionBearingRunHeadCommit": "2664e739c11ee3f223626a20663bc2564d64ec7a",
+      "historicalSecondActionBearingRunCreatedAt": "2026-08-20T04:31:28Z",
+      "historicalSecondActionBearingReconcileJobId": "96314848434",
+      "historicalSecondActionBearingReconcileStatus": "SUCCESS",
+      "historicalSecondActionBearingHistoryJobId": "96315355338",
+      "historicalSecondActionBearingHistoryStatus": "SUCCESS",
+      "historicalSecondActionBearingVerifiedJournalOperationCount": 2,
+      "historicalSecondActionBearingPostRunTotalJournalOperationCount": 10,
+      "historicalSecondActionBearingPostRunVerifiedJournalOperationCount": 10,
+      "historicalSecondActionBearingPostRunUnresolvedJournalOperationCount": 0,
+      "longRunMonitoring": "PASS_24_HOUR_DELIVERED_RUN_AUDIT_GITHUB_SCHEDULE_DELIVERY_REMAINS_OPEN_THIRD_PARTY_PAGER_OPTIONAL",
       "liveWorkflowId": 338089019,
       "liveWorkflowState": "active",
       "scheduleRestorePullRequest": 11,
       "scheduleRestoreMergedAt": "2026-08-20T02:53:29Z",
       "scheduleRestoreMainCommit": "81850e3c814cd541d392fdeecf4dacca753d25e6",
-      "remoteMainSourceTriggerMode": "CRON_MINUTE_3_AND_13_PLUS_WORKFLOW_DISPATCH",
+      "remoteMainSourceTriggerMode": "CRON_MINUTE_27_PLUS_WORKFLOW_DISPATCH",
       "firstQualifyingRestoredScheduleRunId": "32329108358",
       "firstQualifyingRestoredScheduleRunStatus": "SUCCESS",
       "secondActionBearingRestoredScheduleRunId": "32332196428",
@@ -227,7 +227,27 @@
     "minimumRecordedEpochCount": 36,
     "recordedWorkflowCreatedEpochCount": 9,
     "continuousAutomationActivation": "PASS_TWO_ACTION_BEARING_RESTORED_SCHEDULED_RECONCILE_AND_HISTORY_SYNC_CYCLES",
-    "longRunAutomationSoak": "PENDING_EXTENDED_MONITORING_AND_EXTERNAL_ALERT_DELIVERY"
+    "longRunAutomationSoak": "PASS_24_HOUR_DELIVERED_RUN_SOAK_GITHUB_SCHEDULE_DELIVERY_25_OF_52_NOMINAL_THIRD_PARTY_PAGER_OPTIONAL",
+    "postSoakAudit": {
+      "cutoffApproximate": "2026-08-21T06:50:00Z",
+      "scheduledRunRecordCount": 25,
+      "scheduledRunSuccessCount": 25,
+      "jobCount": 50,
+      "jobSuccessCount": 50,
+      "verifiedActionCount": 52,
+      "resolveActionCount": 26,
+      "createActionCount": 26,
+      "journalOperationCount": 62,
+      "journalVerifiedOperationCount": 62,
+      "journalUnresolvedOperationCount": 0,
+      "nominalCronSlotCount": 52,
+      "observedScheduleRecordCount": 25,
+      "observedScheduleDeliveryPercent": 48.08,
+      "longestObservedScheduleGap": "01:39:05",
+      "catchUpRunId": "32439590155",
+      "catchUpVerifiedActionCount": 4,
+      "evidenceMeaning": "PASS_ALL_DELIVERED_RUNS_JOBS_AND_ACTIONS_GITHUB_SCHEDULE_DELIVERY_DID_NOT_MATCH_NOMINAL_CADENCE"
+    }
   },
   "fundedCanary": {
     "epochEndTimestamp": 1787166000,
@@ -530,6 +550,69 @@
         "epochEndTimestamp": null,
         "publicEpochArrayMembership": false,
         "reason": "withdraw_accrued_fees has no epoch argument; child delivery is separate monitor evidence"
+      }
+    },
+    "postSoakRepairEvidence": {
+      "status": "PASS",
+      "preRepairIntegrity": {
+        "verifiedTerminalOperationCount": 31,
+        "verifiedResolveOperationCount": 31,
+        "verifiedTimeoutOperationCount": 0,
+        "missingDurableEpochCount": 3,
+        "staleDurableEpochCount": 1,
+        "missingSnapshotCount": 0
+      },
+      "repairRuns": [
+        {
+          "workflowRunId": "32458718433",
+          "jobId": "96701115201",
+          "status": "SUCCESS",
+          "startOffset": 1,
+          "maxEpochs": 3,
+          "epochsSynced": 3,
+          "snapshotsSynced": 3,
+          "proofFailures": 0,
+          "requestedProofsRejected": 0
+        },
+        {
+          "workflowRunId": "32459026957",
+          "jobId": "96702015382",
+          "status": "SUCCESS",
+          "startOffset": 4,
+          "maxEpochs": 2,
+          "epochsSynced": 2,
+          "snapshotsSynced": 2,
+          "proofFailures": 0,
+          "requestedProofsRejected": 0
+        },
+        {
+          "workflowRunId": "32459340292",
+          "jobId": "96702933162",
+          "status": "SUCCESS",
+          "startOffset": 29,
+          "maxEpochs": 2,
+          "epochsSynced": 2,
+          "snapshotsSynced": 2,
+          "proofFailures": 0,
+          "requestedProofsRejected": 0
+        }
+      ],
+      "postRepairIntegrity": {
+        "verifiedTerminalOperationCount": 31,
+        "verifiedResolveOperationCount": 31,
+        "verifiedTimeoutOperationCount": 0,
+        "missingDurableEpochCount": 0,
+        "staleDurableEpochCount": 0,
+        "missingSnapshotCount": 0
+      },
+      "postManualKeeperIntegrity": {
+        "verifiedTerminalOperationCount": 32,
+        "verifiedResolveOperationCount": 32,
+        "verifiedTimeoutOperationCount": 0,
+        "missingDurableEpochCount": 0,
+        "staleDurableEpochCount": 0,
+        "missingSnapshotCount": 0,
+        "historyHealthHttpStatus": 200
       }
     },
     "publicSnapshotVerifiedProofCounts": {
@@ -964,7 +1047,96 @@
       },
       "minimumRecordedEpochCountAfterRun": 36,
       "recordedWorkflowCreatedEpochCountAfterRun": 9,
-      "evidenceMeaning": "PASS_SECOND_ACTION_BEARING_SCHEDULED_CYCLE_EXTENDED_SOAK_AND_EXTERNAL_ALERT_DELIVERY_REMAIN_PENDING"
+      "evidenceMeaning": "HISTORICAL_PASS_SECOND_ACTION_BEARING_SCHEDULED_CYCLE_AT_2026_08_20_CHECKPOINT"
+    },
+    "postSoakHardening": {
+      "pullRequest": 15,
+      "mergeCommit": "abef30d7268b34331528c470cc2a06eefe50ba33",
+      "mergedAt": "2026-08-21T07:26:39Z",
+      "ci": {
+        "workflowRunId": "32458652480",
+        "status": "SUCCESS",
+        "browserAndOperatorJobId": "96700917346",
+        "intelligentContractsJobId": "96700917084"
+      },
+      "cron": "27 * * * *",
+      "writerConcurrencyGroup": "studionet-liquidity-arena-writer",
+      "writerConcurrencyQueue": "max",
+      "scheduledProjectionDeployment": "v7",
+      "scheduledProjectionMaxEpochs": 3,
+      "historyConfigurationRequired": true,
+      "activePlayerLiability": {
+        "playerLiabilityAtto": "2000000000000000000",
+        "playerLiabilityGen": "2",
+        "eligibleUnclaimedRefundCount": 2,
+        "blockingReadiness": false,
+        "meaning": "OUTSTANDING_PARTICIPANT_OBLIGATION"
+      },
+      "successfulManualKeeperRun": {
+        "workflowRunId": "32459740369",
+        "status": "SUCCESS",
+        "reconcileJobId": "96704099506",
+        "historyJobId": "96704818464",
+        "operations": [
+          {
+            "operationId": "4d0a94692338f4650a64ed6d44b8ae21eb3ee2c0ec3b0937eb77408cffc55cf9",
+            "method": "resolve_epoch",
+            "epochEndTimestamp": 1787295600,
+            "transactionHash": "0x6b2928291db52738ddcceb0500b7790ad46098a09e9c058effdeb9ba9e022bea",
+            "finalState": "VERIFIED",
+            "postState": "RESOLVED"
+          },
+          {
+            "operationId": "f55fa63b8e598172435ec284d7eb82e6db2c8aeb6f368188bc6f58452e172252",
+            "method": "create_epoch",
+            "epochEndTimestamp": 1787389200,
+            "transactionHash": "0x2075252b008d239da9bee85ff7186b0548da20570db8d319a0ed1ce1d4f25d73",
+            "finalState": "VERIFIED",
+            "postState": "OPEN"
+          }
+        ],
+        "historyProjection": {
+          "stateReadAt": "2026-08-21T07:45:20.943Z",
+          "epochsSynced": 3,
+          "snapshotsSynced": 3,
+          "proofFailures": 0,
+          "requestedProofsRejected": 0
+        },
+        "postRunJournalReadback": {
+          "operationCount": 64,
+          "verifiedOperationCount": 64,
+          "unresolvedOperationCount": 0
+        }
+      },
+      "watchdog": {
+        "delivery": "GITHUB_NATIVE_ISSUE",
+        "independentThirdPartyPagerConfigured": false,
+        "independentThirdPartyPagerOptional": true,
+        "manualRunId": "32459656268",
+        "manualJobId": "96703858691",
+        "manualStatus": "SUCCESS",
+        "automaticWorkflowRunId": "32460047757",
+        "automaticJobId": "96704995526",
+        "automaticStatus": "SUCCESS",
+        "automaticTriggerConclusion": "success",
+        "automaticCompletedAt": "2026-08-21T07:46:02Z",
+        "syntheticFailureRunId": "32461072315",
+        "syntheticFailureJobId": "96707962137",
+        "syntheticFailureHeadCommit": "a1c773ae36a882c043c6b167a1324d1d558ac60f",
+        "syntheticFailureStatus": "EXPECTED_FAILURE_AFTER_ALL_PRODUCTION_CHECKS_PASSED",
+        "syntheticIssueNumber": 17,
+        "syntheticIssueUrl": "https://github.com/Leokings/liquidity-arena/issues/17",
+        "syntheticIssueOpenedAt": "2026-08-21T07:59:29Z",
+        "recoveryRunId": "32461245006",
+        "recoveryJobId": "96708451794",
+        "recoveryHeadCommit": "a1c773ae36a882c043c6b167a1324d1d558ac60f",
+        "recoveryStatus": "SUCCESS",
+        "recoveryStartedAt": "2026-08-21T08:01:23Z",
+        "recoveryCompletedAt": "2026-08-21T08:01:39Z",
+        "syntheticIssueClosedAt": "2026-08-21T08:01:35Z",
+        "recoveryCommentUrl": "https://github.com/Leokings/liquidity-arena/issues/17#issuecomment-5367061156",
+        "deliveryVerification": "PASS_ISSUE_OPEN_RECOVERY_COMMENT_AND_CLOSE"
+      }
     },
     "liveOperationCountAtCanaryCompletion": 6,
     "liveVerifiedOperationCountAtCanaryCompletion": 6,
@@ -974,7 +1146,10 @@
     "liveOperationCountAfterSecondActionBearingScheduledRun": 10,
     "liveVerifiedOperationCountAfterSecondActionBearingScheduledRun": 10,
     "liveUnresolvedOperationCountAfterSecondActionBearingScheduledRun": 0,
-    "rolloutStatus": "PASS_ACTION_BEARING_CANARY_AND_TWO_RESTORED_ACTION_BEARING_SCHEDULED_CYCLES_V7_ACTIVE_V6_DISABLED_EXTENDED_SOAK_AND_EXTERNAL_ALERT_DELIVERY_PENDING",
+    "liveOperationCountAfterPostSoakManualRun": 64,
+    "liveVerifiedOperationCountAfterPostSoakManualRun": 64,
+    "liveUnresolvedOperationCountAfterPostSoakManualRun": 0,
+    "rolloutStatus": "PASS_24_HOUR_DELIVERED_RUN_SOAK_POST_SOAK_HARDENING_REPAIR_MANUAL_KEEPER_AND_GITHUB_NATIVE_WATCHDOG_DELIVERY_SCHEDULE_DELIVERY_REMAINS_OPEN_THIRD_PARTY_PAGER_OPTIONAL",
     "invariants": {
       "fencedGlobalSignerLeaseRequired": true,
       "prepareMustCommitBeforeBroadcast": true,
@@ -1057,9 +1232,9 @@
       "bundleBytes": 188376,
       "bundleSha256": "37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba",
       "evidenceScope": "HISTORICAL_PRODUCTION_ARTIFACT_THAT_EXECUTED_FIRST_RESTORED_SCHEDULED_RUN_32329108358",
-      "successorVerificationStatus": "SATISFIED_BY_CURRENT_HARDENED_PRODUCTION_RUNTIME_ARTIFACT"
+      "successorVerificationStatus": "SATISFIED_BY_HISTORICAL_STREAM_HARDENED_AND_CURRENT_PRODUCTION_RUNTIME_ARTIFACTS"
     },
-    "currentHardenedProductionRuntimeArtifact": {
+    "historicalStreamHardenedProductionRuntimeArtifact": {
       "sourceCommit": "c32727f386f3e3f23d4a3d9a9d1e14a838655ff7",
       "githubDeploymentId": "5995889896",
       "githubDeploymentStatus": "success",
@@ -1114,8 +1289,72 @@
         "readyEpochCoverage": "PASS",
         "readyLegacyV6PlayerLiabilityAtto": "0"
       },
-      "evidenceScope": "CURRENT_VERIFIED_HARDENED_PRODUCTION_RUNTIME_ARTIFACT",
-      "docsOnlySuccessorPolicy": "RECORD_RUNTIME_BUNDLE_IDENTITY_WITHOUT_RECURSIVE_PENDING_ARTIFACT_CLAIM"
+      "evidenceScope": "HISTORICAL_VERIFIED_STREAM_HARDENED_PRODUCTION_RUNTIME_ARTIFACT",
+      "docsOnlySuccessorPolicy": "SUPERSEDED_BY_INITIAL_POST_SOAK_PRODUCTION_RUNTIME_ARTIFACT"
+    },
+    "initialPostSoakProductionRuntimeArtifact": {
+      "sourceCommit": "abef30d7268b34331528c470cc2a06eefe50ba33",
+      "githubDeploymentId": "6017361124",
+      "githubDeploymentStatus": "success",
+      "vercelDeploymentId": "dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6",
+      "vercelDeploymentUrl": "https://liquidity-arena-oadqjhtxc-leokings588-5902s-projects.vercel.app",
+      "productionAlias": "https://liquidity-arena.vercel.app",
+      "vercelStatus": "READY",
+      "ci": {
+        "runId": "32458652480",
+        "status": "SUCCESS",
+        "browserAndOperatorJobId": "96700917346",
+        "browserAndOperatorStatus": "SUCCESS",
+        "intelligentContractsJobId": "96700917084",
+        "intelligentContractsStatus": "SUCCESS"
+      },
+      "bundleFile": "/assets/market-B8kYJwYW.js",
+      "bundleBytes": 191540,
+      "bundleEtag": "W/\"aed8cd3722fd07b7762e4331cd94d235\"",
+      "bundleSha256": "2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709",
+      "publicEndpointVerification": {
+        "healthzStatus": 200,
+        "readyzStatus": 200,
+        "historyHealthStatus": 200,
+        "proofViewStatus": 200,
+        "historyIntegrityVerifiedTerminalOperationCount": 32,
+        "historyIntegrityVerifiedResolveOperationCount": 32,
+        "historyIntegrityVerifiedTimeoutOperationCount": 0,
+        "historyIntegrityMissingDurableEpochCount": 0,
+        "historyIntegrityStaleDurableEpochCount": 0,
+        "historyIntegrityMissingSnapshotCount": 0,
+        "activeV7PlayerLiabilityAtto": "2000000000000000000",
+        "activeV7PlayerLiabilityBlocking": false,
+        "readyLegacyV6PlayerLiabilityAtto": "0"
+      },
+      "evidenceScope": "HISTORICAL_INITIAL_POST_SOAK_PRODUCTION_RUNTIME_ARTIFACT"
+    },
+    "currentProductionRuntimeArtifact": {
+      "sourceCommit": "a1c773ae36a882c043c6b167a1324d1d558ac60f",
+      "githubDeploymentId": "6017754639",
+      "githubDeploymentStatus": "success",
+      "vercelDeploymentId": "dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K",
+      "vercelDeploymentUrl": "https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app",
+      "productionAlias": "https://liquidity-arena.vercel.app",
+      "vercelStatus": "READY_PROMOTED",
+      "ci": {
+        "runId": "32461039766",
+        "event": "push",
+        "status": "SUCCESS",
+        "browserAndOperatorJobId": "96707863823",
+        "browserAndOperatorTestCount": "393/393",
+        "buildModuleCount": 477,
+        "dependencyAuditHighOrCriticalCount": 0,
+        "intelligentContractsJobId": "96707864002",
+        "directTestCount": 37,
+        "genvmLint": "PASS"
+      },
+      "bundleFile": "/assets/market-BoHfo81C.js",
+      "bundleBytes": 193040,
+      "bundleEtag": "\"fa10949a324593024ea6c209eb3a0cc3\"",
+      "bundleSha256": "82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa",
+      "syntheticWatchdogDelivery": "PASS_ISSUE_17_OPEN_RECOVERY_COMMENT_AND_CLOSE",
+      "evidenceScope": "CURRENT_VERIFIED_PRODUCTION_RUNTIME_ARTIFACT"
     }
   },
   "verification": {
@@ -1129,12 +1368,12 @@
     "recordedWorkflowCreatedEpochCount": 9,
     "minimumRecordedEpochCount": 36,
     "dedicatedKeeperLimitedExecution": "PASS_TWO_FINALIZED_OPEN_EPOCHS",
-    "defaultBranchKeeperWorkflow": "PASS_MANUAL_SCHEMA_V3_JOURNAL_CANARY_AND_TWO_RESTORED_ACTION_BEARING_SCHEDULED_RUNS_WORKFLOW_338089019_ACTIVE_EXTENDED_SOAK_AND_EXTERNAL_ALERT_DELIVERY_PENDING",
+    "defaultBranchKeeperWorkflow": "PASS_24_HOUR_DELIVERED_RUN_SOAK_25_OF_52_NOMINAL_SCHEDULE_RECORDS_POST_SOAK_HARDENING_MANUAL_RUN_AND_GITHUB_NATIVE_WATCHDOG_DELIVERY_THIRD_PARTY_PAGER_OPTIONAL",
     "legacyV6ScheduledDrainWorkflowRunId": "32297047031",
     "legacyV6ScheduledDrainWorkflow": "HISTORICAL_PASS_LIVE_WORKFLOW_338089016_DISABLED_MANUALLY_ZERO_PLAYER_LIABILITY_MAIN_SOURCE_WORKFLOW_DISPATCH_ONLY",
     "currentReceiptVerifierCiRunId": "32308815377",
     "currentReceiptVerifierCi": "PASS_BOTH_JOBS",
-    "currentVercelDeployment": "PASS_READY_HARDENED_RUNTIME_ARTIFACT_DPL_63B8HRPD8HYS7CTJITZEKGKGDRWJ_SOURCE_C32727F",
+    "currentVercelDeployment": "PASS_READY_PROMOTED_RUNTIME_ARTIFACT_DPL_9DPV89RJGBSJYFO3JGMMBEMTPV6K_SOURCE_A1C773A",
     "keeperReceiptGraceMainCommit": "958e51743a821606ca78881e6bcc8fb0a34a8e8f",
     "keeperReceiptGraceCiRunId": "32310160397",
     "keeperReceiptGraceCi": "PASS_BOTH_JOBS_FIRST_LIVE_SCHEDULED_RUN_FAILED_LOOKUP_BUT_BOTH_EXACT_WRITES_LATER_FINALIZED_AND_APPLIED",
@@ -1144,9 +1383,15 @@
     "firstQualifyingRestoredScheduleRunId": "32329108358",
     "firstQualifyingRestoredScheduleRun": "PASS_TWO_VERIFIED_OPERATIONS_POST_RUN_JOURNAL_8_OF_8_VERIFIED_ZERO_UNRESOLVED_HISTORY_GREEN",
     "secondActionBearingRestoredScheduleRunId": "32332196428",
-    "secondActionBearingRestoredScheduleRun": "PASS_TWO_VERIFIED_OPERATIONS_POST_RUN_JOURNAL_10_OF_10_VERIFIED_ZERO_UNRESOLVED_HISTORY_GREEN_EXTENDED_SOAK_AND_EXTERNAL_ALERT_DELIVERY_PENDING",
+    "secondActionBearingRestoredScheduleRun": "HISTORICAL_PASS_TWO_VERIFIED_OPERATIONS_POST_RUN_JOURNAL_10_OF_10_VERIFIED_ZERO_UNRESOLVED_HISTORY_GREEN",
     "currentHardenedRuntimeCiRunId": "32332498286",
     "currentHardenedRuntimeVerification": "PASS_SHARED_SSE_CANCELLATION_CLEANUP_BROWSER_STRESS_PUBLIC_ENDPOINTS_AND_BUNDLE_IDENTITY",
+    "postSoakHardeningMainCommit": "abef30d7268b34331528c470cc2a06eefe50ba33",
+    "postSoakHardeningCiRunId": "32458652480",
+    "postSoakHardeningCi": "PASS_BOTH_JOBS",
+    "postSoakManualKeeperRunId": "32459740369",
+    "postSoakManualKeeperRun": "PASS_TWO_VERIFIED_OPERATIONS_JOURNAL_64_OF_64_VERIFIED_ZERO_UNRESOLVED_HISTORY_32_OF_32_ZERO_GAPS",
+    "operationsWatchdog": "PASS_GITHUB_NATIVE_HEALTHY_SYNTHETIC_ISSUE_OPEN_RECOVERY_COMMENT_AND_CLOSE_THIRD_PARTY_PAGER_OPTIONAL",
     "claimDeliveryMonitorDeploymentModes": ["v6", "v7"],
     "dedicatedKeeperRotation": "PASS_FINALIZED_AND_EXACT_CONFIG_READBACK",
     "fundedCanary": "PASS_SETTLED_DELIVERED_AND_FEE_WITHDRAWN"

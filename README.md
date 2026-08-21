@@ -57,8 +57,48 @@ was 35, including eight workflow-created epochs. A second action-bearing schedul
 reconcile job `96314848434` and history job `96315355338` on source `2664e739`. It verified exact
 attempt-1 RESOLVE `1787198400` (`0xebc44786…99dd`) and CREATE `1787292000`
 (`0x3d4b235c…8a88`) operations. The production journal read back 10 operations, all VERIFIED, with
-zero unresolved; evidenced coverage is now at least 36 epochs, nine workflow-created. This is useful
-incremental soak evidence, but extended scheduled soak and external alert delivery remain pending.
+zero unresolved; evidenced coverage was then at least 36 epochs, nine workflow-created.
+
+The 24-hour scheduler checkpoint closed at approximately `2026-08-21T06:50Z`. All 25 scheduled V7
+run records succeeded (50/50 jobs), and all 52 journal actions were VERIFIED—26 resolves and 26
+creates—with zero unresolved operations. Neon read back 62/62 VERIFIED operations before post-soak
+maintenance. This proves every delivered run and action in the window, but not every nominal cron
+delivery: the former minute-3/minute-13 schedule declared 52 slots while GitHub emitted only 25 run
+records (48.08%), with a longest observed gap of `01:39:05`. Catch-up run
+[`32439590155`](https://github.com/Leokings/liquidity-arena/actions/runs/32439590155) safely verified
+four actions through the journal.
+
+[PR #15](https://github.com/Leokings/liquidity-arena/pull/15) merged as
+`abef30d7268b34331528c470cc2a06eefe50ba33` at `2026-08-21T07:26:39Z`. It changes V7 to one hourly
+minute-27 trigger, gives all serialized writer workflows a durable `queue: max` concurrency queue,
+projects up to three V7 epochs per run, makes history configuration mandatory, adds projection-
+integrity health, reports active V7 player liability without blocking readiness, and adds a
+GitHub-native issue watchdog. Three sequential repair runs—`32458718433`/job `96701115201`,
+`32459026957`/job `96702015382`, and `32459340292`/job `96702933162`—all passed, synchronizing
+3/3, 2/2, and 2/2 epochs/snapshots with no proof failures or rejections. Integrity moved from 31
+verified terminal operations with three missing and one stale durable epoch to 31/31 complete with
+zero missing, stale, or missing-snapshot rows.
+
+Post-merge manual keeper run
+[`32459740369`](https://github.com/Leokings/liquidity-arena/actions/runs/32459740369) passed reconcile
+job `96704099506` and history job `96704818464`. It VERIFIED RESOLVE `1787295600`, operation
+`4d0a94692338f4650a64ed6d44b8ae21eb3ee2c0ec3b0937eb77408cffc55cf9`, transaction
+`0x6b2928291db52738ddcceb0500b7790ad46098a09e9c058effdeb9ba9e022bea`, and CREATE `1787389200`,
+operation `f55fa63b8e598172435ec284d7eb82e6db2c8aeb6f368188bc6f58452e172252`, transaction
+`0x2075252b008d239da9bee85ff7186b0548da20570db8d319a0ed1ce1d4f25d73`. Both exact post-states
+matched RESOLVED and OPEN, and history synchronized 3/3 epochs/snapshots at
+`2026-08-21T07:45:20.943Z`. The journal is now 64/64 VERIFIED with zero unresolved. Public
+`/api/history-health` returns `200` with 32/32 verified terminal/resolve operations and zero timeout,
+missing, stale, or missing-snapshot rows. Watchdog manual run `32459656268`/job `96703858691` and
+automatic `workflow_run` `32460047757`/job `96704995526` both passed. Synthetic failure run
+[`32461072315`](https://github.com/Leokings/liquidity-arena/actions/runs/32461072315), job
+`96707962137`, then passed all production checks, intentionally injected a failure, and opened
+[issue #17](https://github.com/Leokings/liquidity-arena/issues/17) at `2026-08-21T07:59:29Z`.
+Healthy recovery run `32461245006`/job `96708451794` succeeded and closed the issue at
+`2026-08-21T08:01:35Z` with an
+[automated recovery comment](https://github.com/Leokings/liquidity-arena/issues/17#issuecomment-5367061156).
+GitHub-native alert delivery and recovery are therefore proven end to end. An optional independent
+third-party pager is not configured.
 
 The public site at [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app) now targets V7.
 V6 at
@@ -76,15 +116,17 @@ main now keeps only `workflow_dispatch` for that legacy drain.
 | Surface | Current state |
 | --- | --- |
 | V7 contract | Deployed and finalized on StudioNet |
-| V7 hourly coverage | At least 36 exact-hour epochs read back: 25 seeded targets, 2 local dedicated-keeper creates, and 9 workflow-created epochs |
+| V7 hourly coverage | 24-hour checkpoint: 25/25 delivered scheduled runs and 52/52 actions passed; 25 of 52 nominal cron slots produced records, so delivery reliability remains monitored |
 | V7 funded canary | Complete: settlement, three claim deliveries, loser rejection, conservation, and fee withdrawal verified |
 | Dedicated V7 keeper rotation | Complete: finalized on-chain and exact config/repository address verified |
-| V7 keeper workflow | Workflow `338089019` is active; restored scheduled runs `32329108358` and `32332196428` each passed reconcile and history with two VERIFIED operations |
-| Public Vercel browser | V7 active and READY; V6 legacy recovery remains readable with zero known liability |
+| V7 keeper workflow | Workflow `338089019` is active on minute 27; writer jobs share durable `queue: max`; post-merge run `32459740369` passed both jobs |
+| Public Vercel browser | V7 active and READY on source `a1c773a`; V6 legacy recovery remains readable with zero known liability |
 | V6 | Public app/automation new writes disabled; owner creation capability remains and must not be used |
-| Durable settled-epoch history | Repeated production projection and selected proof backfill passed; V7 E19 exposes 9 finalized proofs, while outage recovery and broader proof coverage remain pending |
-| Keeper journal | Operational authority active: manual recovery canary and two restored scheduled cycles passed; Neon read-back is 10/10 VERIFIED with 0 unresolved |
-| Proof view | Merged in [PR #6](https://github.com/Leokings/liquidity-arena/pull/6) and present in the current verified hardened runtime artifact |
+| Durable settled-epoch history | Repair backfill and integrity health passed: 32 verified V7 resolves, 0 missing/stale/snapshot gaps; outage recovery and broader proof coverage remain pending |
+| Keeper journal | Operational authority active; 64/64 operations VERIFIED, 0 unresolved after the post-soak manual run |
+| Active V7 player liability | 2 GEN, representing two eligible unclaimed refunds; reported as an outstanding participant obligation, not a readiness failure |
+| Operations watchdog | Healthy, synthetic-failure, issue-open, recovery, and issue-close paths pass; optional independent pager not configured |
+| Proof view | Merged in [PR #6](https://github.com/Leokings/liquidity-arena/pull/6) and present in the current production runtime artifact |
 
 The last fully enumerated pre-journal production artifact was Vercel deployment
 `dpl_7qDFq9UxkT4oatbuqJXaNooYYUWi`
@@ -107,7 +149,7 @@ deployment `5994871034`, sourced from `81850e3c814cd541d392fdeecf4dacca753d25e6`
 `/assets/market-BQWvq82y.js` is 188376 bytes with SHA-256
 `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`.
 
-The current verified hardened production runtime is READY Vercel deployment
+The historical stream-hardened production runtime was READY Vercel deployment
 `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
 [its immutable URL](https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app),
 GitHub deployment `5995889896`, sourced from
@@ -122,6 +164,27 @@ with no extra stream, exactly one HTTP-200 SSE request on each of two rapid relo
 with no STALE state or browser error, and an immediate separate curl returning HTTP 200 with live
 BTC/ETH/BNB/SOL/XRP events. Public health, readiness, history health, and proof view returned HTTP
 200; readiness reported chain `0xf22f`, the exact V7/keeper, current coverage, and zero V6 liability.
+
+The initial post-soak production artifact was READY Vercel deployment
+`dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6` at
+[its immutable URL](https://liquidity-arena-oadqjhtxc-leokings588-5902s-projects.vercel.app), GitHub
+deployment `6017361124`, source/merge
+`abef30d7268b34331528c470cc2a06eefe50ba33`. Bundle `/assets/market-B8kYJwYW.js` is 191540 bytes,
+has ETag `W/"aed8cd3722fd07b7762e4331cd94d235"`, and SHA-256
+`2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709`. Public health, readiness,
+history-health, and proof surfaces returned HTTP 200 after repair. Readiness reports the 2 GEN active
+player liability as two unclaimed eligible refunds without treating that positive obligation as an
+availability failure.
+
+The current production artifact, including synthetic watchdog injection support from PR #16, is
+READY and promoted as Vercel deployment `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
+[its immutable URL](https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app), GitHub
+deployment `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main-push CI run
+`32461039766` passed browser/operator job `96707863823` (393/393 tests, 477-module build, audit 0)
+and contracts job `96707864002` (V6/V7 lint and 37 direct tests). Bundle
+`/assets/market-BoHfo81C.js` is 193040 bytes, has ETag
+`"fa10949a324593024ea6c209eb3a0cc3"`, and SHA-256
+`82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
 
 The 24-target full-day seed covers epoch IDs `1787169600` through `1787252400`. Its first and final
 creation transactions are `0x7b94b2d0…7726` and `0x443afcf7…7677f`; the separate canary epoch
@@ -209,7 +272,8 @@ The owner key is not a workflow credential. The current keeper is the dedicated 
 encrypted keeper keystore/password secrets, and repository variable `V7_KEEPER_ADDRESS` records the
 same public address. Successful default-branch runs now prove the runtime signer/profile and observed
 coverage; two local finalized creates independently prove the dedicated account's limited on-chain
-keeper authority. Continuous availability remains a monitoring obligation.
+keeper authority. The completed 24-hour checkpoint proves delivered-run execution, while the 25/52
+nominal GitHub schedule-delivery ratio remains an availability monitoring obligation.
 
 That runtime preflight is now proven by reconcile job `96218469576` in run `32299468899`. It checked
 the exact contract profile and imported signer and correctly planned no actions because coverage was
@@ -243,7 +307,9 @@ active workflow write authority; artifacts and caches remain non-authoritative. 
 `32329108358` then verified one resolve and one create. Independent receipt/post-state checks passed,
 and the production journal read back eight operations, all VERIFIED, with zero unresolved. Scheduled
 run `32332196428` subsequently verified another exact resolve/create pair; Neon then read back 10/10
-VERIFIED operations with zero unresolved.
+VERIFIED operations with zero unresolved. The dated 24-hour checkpoint later read 62/62 VERIFIED;
+post-merge run `32459740369` added one resolve and one create, producing the current 64/64 VERIFIED
+and zero-unresolved state.
 
 ## Run and verify locally
 
@@ -283,7 +349,9 @@ After public V7 cutover:
 1. keep V6 legacy reads/claims available and retain a tested rollback without re-enabling V6 writes;
 2. rehearse database outage/recovery and extend transaction-proof coverage beyond the selected V7
    deployment/canary/fee evidence;
-3. continue coverage/journal/role/finality alerting and long-run scheduled soak;
+3. continue coverage/journal/role/finality alerting, investigate the 25/52 nominal GitHub cron-
+   delivery ratio; GitHub-native issue delivery/recovery is proven, while an independent third-party
+   pager remains an optional open enhancement;
 4. complete timeout evidence, independent security review, browser/wallet soak, and provider
    data-use/legal review.
 
@@ -305,6 +373,14 @@ part of this selected backfill. The fee parent is correctly absent from an epoch
 delivery evidence. Database outage recovery is still pending. Earlier scheduled run `32298454771`
 had successful reconciliation while its history job hit the StudioNet provider quota; later bounded
 syncs supersede that incident. Scheduled V6 drain run `32297047031` also passed.
+
+The post-soak history repair used three serialized V7-only workflow-dispatch batches:
+`32458718433` (3 epochs/snapshots), `32459026957` (2/2), and `32459340292` (2/2). All passed with
+zero proof failures or rejections. The integrity gate changed from 31 verified terminal operations,
+three missing durable epochs, one stale epoch, and zero missing snapshots to 31/31 with zero gaps.
+Manual keeper run `32459740369` then projected 3/3 at `2026-08-21T07:45:20.943Z`; the live integrity
+read-back is now 32 terminal operations, all `resolve_epoch`, with zero timeout, missing, stale, or
+missing-snapshot rows.
 
 Manual authoritative-journal run `32325583494` later passed reconcile job `96296050506` and history
 job `96297112208`. Its history read at `2026-08-20T02:49:02.975Z` synchronized two deployments, two

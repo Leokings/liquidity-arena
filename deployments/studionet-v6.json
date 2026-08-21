@@ -413,8 +413,53 @@
         "postRunJournalOperationCount": 10,
         "postRunVerifiedOperationCount": 10,
         "postRunUnresolvedOperationCount": 0,
-        "extendedSoakAndExternalAlertDelivery": "PENDING"
+        "extendedSoakAndExternalAlertDelivery": "SUPERSEDED_BY_24_HOUR_DELIVERED_RUN_AUDIT"
       }
+    },
+    "postSoakV7Evidence": {
+      "cutoffApproximate": "2026-08-21T06:50:00Z",
+      "scheduledRunRecordCount": 25,
+      "scheduledRunSuccessCount": 25,
+      "jobCount": 50,
+      "jobSuccessCount": 50,
+      "verifiedActionCount": 52,
+      "resolveActionCount": 26,
+      "createActionCount": 26,
+      "nominalCronSlotCount": 52,
+      "observedScheduleRecordCount": 25,
+      "longestObservedScheduleGap": "01:39:05",
+      "postSoakMergeCommit": "abef30d7268b34331528c470cc2a06eefe50ba33",
+      "postSoakManualRunId": "32459740369",
+      "journalOperationCount": 64,
+      "journalVerifiedOperationCount": 64,
+      "journalUnresolvedOperationCount": 0,
+      "historyIntegrity": {
+        "verifiedTerminalOperationCount": 32,
+        "verifiedResolveOperationCount": 32,
+        "verifiedTimeoutOperationCount": 0,
+        "missingDurableEpochCount": 0,
+        "staleDurableEpochCount": 0,
+        "missingSnapshotCount": 0
+      },
+      "activeV7PlayerLiabilityAtto": "2000000000000000000",
+      "activeV7PlayerLiabilityBlockingReadiness": false,
+      "githubNativeWatchdogHealthyPath": "PASS_MANUAL_AND_AUTOMATIC",
+      "githubNativeWatchdogDelivery": {
+        "syntheticFailureRunId": "32461072315",
+        "syntheticFailureJobId": "96707962137",
+        "syntheticFailureHeadCommit": "a1c773ae36a882c043c6b167a1324d1d558ac60f",
+        "syntheticIssueNumber": 17,
+        "syntheticIssueUrl": "https://github.com/Leokings/liquidity-arena/issues/17",
+        "syntheticIssueOpenedAt": "2026-08-21T07:59:29Z",
+        "recoveryRunId": "32461245006",
+        "recoveryJobId": "96708451794",
+        "recoveryStatus": "SUCCESS",
+        "syntheticIssueClosedAt": "2026-08-21T08:01:35Z",
+        "recoveryCommentUrl": "https://github.com/Leokings/liquidity-arena/issues/17#issuecomment-5367061156",
+        "status": "PASS_ISSUE_OPEN_RECOVERY_COMMENT_AND_CLOSE"
+      },
+      "independentThirdPartyPagerConfigured": false,
+      "independentThirdPartyPagerOptional": true
     }
   },
   "vercel": {
@@ -491,9 +536,9 @@
       "bundleBytes": 188376,
       "bundleSha256": "37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba",
       "evidenceScope": "HISTORICAL_PRODUCTION_ARTIFACT_THAT_EXECUTED_FIRST_RESTORED_V7_SCHEDULED_RUN_32329108358",
-      "successorVerificationStatus": "SATISFIED_BY_CURRENT_HARDENED_PRODUCTION_RUNTIME_ARTIFACT"
+      "successorVerificationStatus": "SATISFIED_BY_HISTORICAL_STREAM_HARDENED_AND_CURRENT_PRODUCTION_RUNTIME_ARTIFACTS"
     },
-    "currentHardenedProductionRuntimeArtifact": {
+    "historicalStreamHardenedProductionRuntimeArtifact": {
       "sourceCommit": "c32727f386f3e3f23d4a3d9a9d1e14a838655ff7",
       "githubDeploymentId": "5995889896",
       "githubDeploymentStatus": "success",
@@ -517,7 +562,52 @@
       "readyChainId": "0xf22f",
       "readyV7ContractAndKeeper": "PASS_EXACT",
       "readyV6PlayerLiabilityAtto": "0",
-      "evidenceScope": "CURRENT_VERIFIED_HARDENED_PRODUCTION_RUNTIME_ARTIFACT"
+      "evidenceScope": "HISTORICAL_VERIFIED_STREAM_HARDENED_PRODUCTION_RUNTIME_ARTIFACT"
+    },
+    "initialPostSoakProductionRuntimeArtifact": {
+      "sourceCommit": "abef30d7268b34331528c470cc2a06eefe50ba33",
+      "githubDeploymentId": "6017361124",
+      "githubDeploymentStatus": "success",
+      "vercelDeploymentId": "dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6",
+      "vercelDeploymentUrl": "https://liquidity-arena-oadqjhtxc-leokings588-5902s-projects.vercel.app",
+      "status": "READY",
+      "ciRunId": "32458652480",
+      "browserAndOperatorJobId": "96700917346",
+      "intelligentContractsJobId": "96700917084",
+      "ciStatus": "SUCCESS",
+      "bundleFile": "/assets/market-B8kYJwYW.js",
+      "bundleBytes": 191540,
+      "bundleEtag": "W/\"aed8cd3722fd07b7762e4331cd94d235\"",
+      "bundleSha256": "2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709",
+      "healthReadinessHistoryAndProofStatus": 200,
+      "readyV6PlayerLiabilityAtto": "0",
+      "readyActiveV7PlayerLiabilityAtto": "2000000000000000000",
+      "readyActiveV7PlayerLiabilityBlocking": false,
+      "historyIntegrity": "PASS_32_OF_32_TERMINAL_RESOLVE_ZERO_GAPS",
+      "evidenceScope": "HISTORICAL_INITIAL_POST_SOAK_PRODUCTION_RUNTIME_ARTIFACT"
+    },
+    "currentProductionRuntimeArtifact": {
+      "sourceCommit": "a1c773ae36a882c043c6b167a1324d1d558ac60f",
+      "githubDeploymentId": "6017754639",
+      "githubDeploymentStatus": "success",
+      "vercelDeploymentId": "dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K",
+      "vercelDeploymentUrl": "https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app",
+      "status": "READY_PROMOTED",
+      "ciRunId": "32461039766",
+      "ciStatus": "SUCCESS",
+      "browserAndOperatorJobId": "96707863823",
+      "browserAndOperatorTestCount": "393/393",
+      "buildModuleCount": 477,
+      "dependencyAuditHighOrCriticalCount": 0,
+      "intelligentContractsJobId": "96707864002",
+      "directTestCount": 37,
+      "bundleFile": "/assets/market-BoHfo81C.js",
+      "bundleBytes": 193040,
+      "bundleEtag": "\"fa10949a324593024ea6c209eb3a0cc3\"",
+      "bundleSha256": "82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa",
+      "readyV6PlayerLiabilityAtto": "0",
+      "syntheticWatchdogDelivery": "PASS_ISSUE_17_OPEN_RECOVERY_COMMENT_AND_CLOSE",
+      "evidenceScope": "CURRENT_VERIFIED_PRODUCTION_RUNTIME_ARTIFACT"
     },
     "previousV6CompatibilityArtifact": {
       "deploymentId": "dpl_DQEvnGup417wvTxuxzeNfJvySiM5",
@@ -529,7 +619,7 @@
   "remainingLiveEvidence": [
     "24-hour timeout refund path; the unbacked-winner refund path is proven",
     "claim-child failure recovery or a documented protocol delivery guarantee",
-    "extended V7 scheduled-run soak and external alert delivery; manual run 32325583494 plus restored action-bearing scheduled runs 32329108358 and 32332196428 are successful, while V6 workflow 338089016 remains disabled_manually at zero player liability",
+    "GitHub schedule delivery after only 25 of 52 nominal slots produced records; V6 workflow 338089016 remains disabled_manually at zero player liability; an independent third-party pager is optional",
     "durable server-side market telemetry",
     "provider data-use and legal review",
     "independent security review"

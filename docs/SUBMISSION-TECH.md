@@ -18,9 +18,10 @@ pari-mutuel objectives: highest return (`HIGH`) and lowest return (`LOW`).
 | Fee | 2% of losing pool by default; 5% hard cap |
 | Stake limits | 0.1–10 GEN per wallet/objective |
 | Evidence | Binance, OKX, Bybit, Gate, KuCoin; at least 3 complete baskets |
-| Operator | Limited epoch-creation keeper; permissionless resolve/timeout; V7 workflow `338089019` active after journal canary, V6 workflow `338089016` disabled |
-| Keeper write authority | Active authoritative Neon journal: manual canary plus two restored scheduled cycles passed; 10/10 operations VERIFIED, 0 unresolved |
-| Public host | [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app), V7 active/READY with V6 legacy recovery |
+| Operator | Limited epoch-creation keeper; permissionless resolve/timeout; V7 workflow `338089019` active at minute 27 with durable writer queue, V6 workflow `338089016` disabled |
+| Keeper write authority | Active authoritative Neon journal: 64/64 operations VERIFIED, 0 unresolved after the 24-hour checkpoint and post-merge run |
+| Public host | [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app), V7 source `a1c773a` active/READY with V6 legacy recovery |
+| Operations health | Projection integrity 32/32 with zero gaps; GitHub-native synthetic issue delivery/recovery passes; independent pager optional |
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is retained for historical reads, eligible
 resolves/timeouts, and claims. Its due epochs `1787155200` and `1787158800` were resolved on
@@ -117,13 +118,27 @@ historical context and do not reset with the hourly wager round.
 - second scheduled run `32332196428` passed reconcile job `96314848434` and history job
   `96315355338`, verified exact RESOLVE `1787198400` transaction `0xebc44786…99dd` and CREATE
   `1787292000` transaction `0x3d4b235c…8a88`, and left Neon at 10/10 VERIFIED with zero unresolved;
-  evidenced coverage is at least 36 epochs, nine workflow-created, while extended soak/external
-  alert delivery remain pending;
+  evidenced coverage was at least 36 epochs, nine workflow-created at that checkpoint;
+- 24-hour checkpoint ending approximately `2026-08-21T06:50Z`: 25/25 delivered scheduled runs,
+  50/50 jobs, and 52/52 VERIFIED actions (26 resolve, 26 create), with a 62/62 VERIFIED journal and
+  zero unresolved. GitHub emitted only 25 records for 52 nominal slots and the longest gap was
+  `01:39:05`; catch-up run `32439590155` safely verified four actions;
+- PR #15 merge `abef30d7268b34331528c470cc2a06eefe50ba33` changed the cadence to minute 27, added shared
+  durable `queue: max`, required three-epoch V7 projection, integrity health, active-player-liability
+  diagnostics, and a GitHub-native issue watchdog; CI run `32458652480` passed jobs `96700917346`
+  and `96700917084`;
+- repair runs `32458718433`, `32459026957`, and `32459340292` synchronized seven epochs/snapshots
+  and moved integrity from 31 terminal operations with three missing/one stale to 31/31 with no gaps;
+- manual run `32459740369` VERIFIED RESOLVE `1787295600` and CREATE `1787389200`, left Neon at 64/64
+  VERIFIED and zero unresolved, and produced history health 32/32 terminal/resolve with zero gaps;
+- watchdog manual `32459656268` and automatic `32460047757` healthy-path runs passed; synthetic
+  failure `32461072315` opened issue #17, while recovery `32461245006`/`96708451794` rechecked all
+  surfaces, commented, and closed it. An independent third-party pager remains optional;
 - historical first-restored-run artifact was READY Vercel deployment
   `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, GitHub deployment `5994871034`, source
   `81850e3c814cd541d392fdeecf4dacca753d25e6`, bundle `/assets/market-BQWvq82y.js` (188376 bytes),
   SHA-256 `37c3da723120b9d86a3a079e8e099fe86c474eaf152f0c41c6d2b2baf66a83ba`;
-- current verified hardened runtime is READY Vercel deployment `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj`,
+- historical stream-hardened runtime was READY Vercel deployment `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj`,
   GitHub deployment `5995889896`, source `c32727f386f3e3f23d4a3d9a9d1e14a838655ff7`; CI
   `32332498286` passed jobs `96315684498` and `96315684590`; bundle `/assets/market-DTvIR-Xr.js`
   is 191538 bytes, SHA-256 `7056bef680f18a8e98af1b21822f91f3630644b75a639c83398e1b31601f8e00`;
@@ -131,6 +146,15 @@ historical context and do not reset with the hourly wager round.
   HTTP-200 stream for ROUND→4H, one per rapid reload, LIVE/FRESH without STALE/errors, immediate
   independent HTTP-200 five-asset events, about 240 steady Studio calls/hour under the cap of four
   concurrent streams per IP;
+- initial post-soak runtime was READY Vercel deployment `dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6`, GitHub
+  deployment `6017361124`, source `abef30d7268b34331528c470cc2a06eefe50ba33`; bundle
+  `/assets/market-B8kYJwYW.js` is 191540 bytes with SHA-256
+  `2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709`;
+- current synthetic-watchdog runtime is READY/PROMOTED Vercel deployment
+  `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K`, GitHub deployment `6017754639`, source
+  `a1c773ae36a882c043c6b167a1324d1d558ac60f`; main CI `32461039766` passed, and bundle
+  `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
+  `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`;
 - historical scheduled V6 drain run `32297047031` completed successfully without creating any epoch;
   the later zero-liability audit retired recurring execution and live workflow `338089016` is now
   `disabled_manually`;
@@ -192,8 +216,11 @@ production-safety claim:
   one previously submitted hash was recovered without resubmission. PR #11 restored the V7 schedule
   and workflow `338089019` is active, while V6 workflow `338089016` remains disabled. Restored
   scheduled runs `32329108358` and `32332196428` each passed with two VERIFIED operations and green
-  history. Extended soak/external alert delivery, live timeout evidence, and rollback rehearsal
-  remain;
+  history. The later 24-hour delivered-run audit, projection repair/integrity gate, and GitHub-native
+  watchdog delivery/recovery are complete. GitHub schedule delivery (25/52 nominal records), live
+  timeout evidence, and rollback rehearsal remain; independent third-party paging is optional;
+- active V7 player liability is 2 GEN across two eligible unclaimed refunds; it is an outstanding
+  participant obligation and intentionally does not fail service readiness;
 - independent security and provider data-use/legal review remain.
 
 Observed StudioNet finalization has commonly been under one minute, but this is not an SLA. Reviewers
@@ -205,8 +232,8 @@ must be told that StudioNet is temporary test infrastructure and faucet GEN has 
    recovery.
 2. Continue public browser/wallet soak and prove that V6 recovery stays accessible while the app
    routes no new V6 writes; monitor that the retained owner creation capability remains unused.
-3. Continue scheduled journal, coverage, finality, and role-drift monitoring while V6 remains
-   disabled at zero liability.
+3. Monitor minute-27 GitHub delivery and preserve scheduled journal/coverage/finality/role checks
+   while V6 remains disabled at zero liability; optionally add an independent third-party pager.
 4. Record a 24-hour timeout proof or clearly retain it as a known demo limitation.
 5. Complete independent security and provider/legal review, screenshots, demo video, repository
    cleanup, and rollback evidence.
@@ -225,8 +252,20 @@ and the alias has since received the journal API, receipt-recovery fixes, and sc
 The historical artifact that executed first restored run `32329108358` was READY deployment
 `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ` at
 `https://liquidity-arena-dz2a8196a-leokings588-5902s-projects.vercel.app`, with the source and bundle
-identity recorded above. The current verified hardened runtime is
+identity recorded above. The historical stream-hardened runtime was
 `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` at
 `https://liquidity-arena-hvic9e8w8-leokings588-5902s-projects.vercel.app`; health, readiness,
 history-health, and proof view returned HTTP 200, with readiness matching chain `0xf22f`, exact
 V7/keeper/coverage, and zero V6 liability.
+
+The initial post-soak runtime was `dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6` at
+`https://liquidity-arena-oadqjhtxc-leokings588-5902s-projects.vercel.app`, GitHub deployment
+`6017361124`, source `abef30d7268b34331528c470cc2a06eefe50ba33`. Public surfaces return HTTP
+200 after repair; history integrity is 32/32 with zero gaps, and readiness reports the non-blocking
+2 GEN outstanding active-player liability.
+
+The current production runtime is `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
+`https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`, GitHub deployment
+`6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main-push CI `32461039766`
+passed; bundle `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
+`82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
