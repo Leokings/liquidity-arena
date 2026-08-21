@@ -251,6 +251,27 @@ export function normalizeV6Entry(raw) {
   });
 }
 
+export function normalizeVerifiedClaimQuote(raw, {
+  epochEndTimestamp,
+  objective,
+  account: expectedAccount,
+} = {}) {
+  const expectedEpoch = integer(epochEndTimestamp, 'Expected claim epoch', { minimum: 1 });
+  const expectedObjective = oneOf(objective, new Set(V6_OBJECTIVES), 'Expected claim objective');
+  const normalizedAccount = address(expectedAccount, 'Expected claim account');
+  const quote = normalizeV6Entry(raw);
+  if (quote.epochEndTimestamp !== expectedEpoch) {
+    throw new Error('Claim quote belongs to a different epoch.');
+  }
+  if (quote.objective !== expectedObjective) {
+    throw new Error('Claim quote belongs to a different objective.');
+  }
+  if (quote.account.toLowerCase() !== normalizedAccount.toLowerCase()) {
+    throw new Error('Claim quote belongs to a different wallet account.');
+  }
+  return quote;
+}
+
 export function v6WagerGate({ epoch, entry = null, objective, assetId, amountAtto, nowSeconds }) {
   if (!epoch) return Object.freeze({ allowed: false, reason: 'Epoch is unavailable.' });
   const normalizedObjective = String(objective || '').trim().toUpperCase();

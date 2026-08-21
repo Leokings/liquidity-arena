@@ -125,7 +125,10 @@ value transfer. The system verifies:
 
 The monitoring process is read-only. It cannot safely replay a claim whose child is ambiguous,
 because a delayed first child could later pay and turn a retry into a double payment. A protocol-safe
-recovery design remains required before real value.
+recovery design remains required before real value. V7 has no upgrader or retry state, and the
+current 2 GEN across two eligible unclaimed refunds remains participant liability. This unresolved
+protocol P1 and the proposed fresh V8/idempotent-escrow state machine are specified in
+[`V8-PAYOUT-RECOVERY.md`](V8-PAYOUT-RECOVERY.md).
 
 ## 8. Roles
 
@@ -177,6 +180,11 @@ PR #15 merge `abef30d7268b34331528c470cc2a06eefe50ba33` therefore moved to one m
 durable `queue: max` writer serialization, required V7-only three-epoch projection, integrity health,
 active-player-liability reporting, and a GitHub-native issue watchdog. Synthetic failure/recovery
 later proved issue delivery end to end; independent third-party alert delivery remains optional.
+The independent Cloudflare backup is now live on Worker version `536e6476…cea7`. It dispatched
+keeper run `32473485508`, which passed reconciliation plus 3/3 history projection and VERIFIED
+RESOLVE `0x62331f…c746` and CREATE `0x310fc6…5445`; watchdog run `32473776356` passed. A later
+minute-57 trigger logged `CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded`, proving its
+conditional no-duplicate path.
 
 ## 9. Visualization
 
@@ -201,6 +209,21 @@ The browser uses an allowlisted deployment registry:
 - a query may select only a known `v7` or `v6` alias, never inject a raw contract;
 - pending transaction records retain deployment identity across refresh;
 - finalized V7 and V6 histories are labeled by protocol/address.
+
+As of 2026-08-21, the current worktree adds a prominent pre-modal aggregate claim CTA, same-
+deployment navigation without reload, explicitly labeled cross-deployment reload/reconnect,
+nonsecret exact reload intent, and large in-modal actions. Unrelated asset/balance failures preserve
+valid claims. The pre-write quote is intent: the gateway rechecks exact quote identity, wallet
+account, and StudioNet immediately before writing. Finalized actual proceeds must be at least the
+quote; exact child delivery is verified against the actual amount, which activity/recovery stores.
+Aggregates are verified-current only when all known rows load and every deployment read
+succeeds. Incomplete current pagination may show an explicit partial lower bound with `LOAD OLDER`;
+failed or refreshing cached deployments instead remain neutral `LAST VERIFIED`/`PARTIAL` evidence
+with retry controls and no false `≥` lower bound. It passes 208/208 market tests, 80/80 focused claim
+tests, 22/22 Playwright cases (11 journeys across `chromium`/`mobile-chromium`, Desktop Chrome/Pixel
+7, one worker), 432/432 full tests, a 477-module build, and audit 0. This remains release-candidate
+behavior until merged,
+deployed, and exercised with a live StudioNet wallet.
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is operationally drained: due epochs `1787155200`,
 `1787158800`, `1787162400`, and `1787166000` were resolved on 2026-08-19. Supported public app and

@@ -74,7 +74,34 @@ primary scheduler at minute 27; Cloudflare checks at minute 37 and dispatches th
 workflow only if the current UTC hour has no active or successful reconciliation. It independently
 checks the watchdog at minute 57. Cloudflare receives only a one-repository GitHub Actions dispatch
 token—never a keeper key, journal secret, Neon credential, or contract authority. Activation and
-first-trigger evidence must be recorded after the Worker is deployed.
+first-trigger evidence are now recorded. Worker version `536e6476-3c4e-4b93-a454-700f55d6cea7`
+dispatched keeper run
+[`32473485508`](https://github.com/Leokings/liquidity-arena/actions/runs/32473485508), which passed
+reconciliation and 3/3 epoch/snapshot history projection while verifying RESOLVE `0x62331f…c746`
+and CREATE `0x310fc6…5445`. Watchdog run
+[`32473776356`](https://github.com/Leokings/liquidity-arena/actions/runs/32473776356) also passed.
+The observed minute-57 Worker log emitted `CLOUDFLARE_BACKUP_SKIPPED` with reason
+`current_hour_run_succeeded`, proving the conditional no-duplicate path.
+
+As of 2026-08-21, a claim/refund discoverability fix is complete only in the current release-
+candidate worktree. A prominent pre-modal CTA exposes a truth-labeled aggregate count, type, and GEN
+amount (the fully verified two-refund journey renders `CLAIM 2 REFUNDS · 2 GEN`) with 44px-minimum
+mobile controls; same-deployment `OPEN & CLAIM` navigation preserves the document and wallet session; cross-
+deployment claims explicitly require a reload/reconnect, with the exact V7-to-V6 LOW journey enabled
+after reconnect; and reload links retain a nonsecret exact deployment/epoch/objective intent. The
+pre-write quote is intent, not final accounting: immediately before writing, the gateway rechecks
+the exact quote identity, wallet account, and StudioNet; finalized actual proceeds must be at least
+the quote; exact child delivery is verified against that actual amount; and activity/recovery stores
+the actual amount. Below-quote finalization fails closed. Unrelated asset/balance failures do not
+erase a valid claim, and validated pagination distinguishes verified-current results from neutral
+cached `LAST VERIFIED`/`PARTIAL`
+results with retry controls; failed or refreshing cached deployments never advertise a false `≥`
+lower bound, and a zero-known incomplete state prompts `CHECK`/`RETRY` instead of declaring zero.
+Local evidence is 208/208 market tests, 80/80 focused claim tests, and 22/22 Playwright cases (11
+journeys across `chromium`/`mobile-chromium`, Desktop Chrome/Pixel 7, one worker), plus 432/432 full
+tests, a 477-module build, and zero audit findings. This claim UX is **not yet merged, deployed, or
+live-wallet tested** and must not be described as present on the public alias until that evidence
+exists.
 
 [PR #15](https://github.com/Leokings/liquidity-arena/pull/15) merged as
 `abef30d7268b34331528c470cc2a06eefe50ba33` at `2026-08-21T07:26:39Z`. It changes V7 to one hourly
@@ -134,7 +161,8 @@ main now keeps only `workflow_dispatch` for that legacy drain.
 | Keeper journal | Operational authority active; 64/64 operations VERIFIED, 0 unresolved after the post-soak manual run |
 | Active V7 player liability | 2 GEN, representing two eligible unclaimed refunds; reported as an outstanding participant obligation, not a readiness failure |
 | Operations watchdog | Healthy, synthetic-failure, issue-open, recovery, and issue-close paths pass; optional independent pager not configured |
-| Independent backup scheduler | Cloudflare Worker implementation and tests are present; production activation/first-trigger evidence is pending |
+| Independent backup scheduler | Live and evidenced: keeper run `32473485508`, watchdog run `32473776356`, and minute-57 conditional skip on Worker version `536e6476…cea7` |
+| Claim/refund UX hardening | 2026-08-21 local release candidate only: market 208/208, focused 80/80, Playwright 22/22 (11 `chromium`/`mobile-chromium` journeys, one worker), full 432/432, build 477 modules, audit 0; PR/merge, deploy, and live-wallet evidence remain |
 | Proof view | Merged in [PR #6](https://github.com/Leokings/liquidity-arena/pull/6) and present in the current production runtime artifact |
 
 The last fully enumerated pre-journal production artifact was Vercel deployment
@@ -362,8 +390,13 @@ After public V7 cutover:
    deployment/canary/fee evidence;
 3. continue coverage/journal/role/finality alerting, investigate the 25/52 nominal GitHub cron-
    delivery ratio; GitHub-native issue delivery/recovery is proven, while an independent third-party
-   pager remains an optional open enhancement;
-4. complete timeout evidence, independent security review, browser/wallet soak, and provider
+   pager remains an optional open enhancement; the independent Cloudflare backup is active and its
+   keeper-dispatch plus watchdog-skip paths are proven;
+4. merge, deploy, and live-wallet test the claim/refund UX release candidate;
+5. retain the active 2 GEN participant obligation and treat ambiguous asynchronous child recovery as
+   an unresolved protocol P1; the proposed V8 state machine is documented in
+   [the payout-recovery design](docs/V8-PAYOUT-RECOVERY.md);
+6. complete timeout evidence, independent security review, browser/wallet soak, and provider
    data-use/legal review.
 
 Initial history run `32299468899`, job `96218806119`, synchronized two deployments, two epochs, and

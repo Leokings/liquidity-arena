@@ -35,6 +35,12 @@ function normalizeRecord(raw, now) {
     ? null
     : String(raw.amountAtto).trim();
   if (amountAtto !== null && !/^\d+$/.test(amountAtto)) throw new TypeError('Activity amount must be an attoGEN integer.');
+  const quotedAmountAtto = raw.quotedAmountAtto === undefined || raw.quotedAmountAtto === null
+    ? null
+    : String(raw.quotedAmountAtto).trim();
+  if (quotedAmountAtto !== null && !/^\d+$/.test(quotedAmountAtto)) {
+    throw new TypeError('Activity quoted amount must be an attoGEN integer.');
+  }
   const objective = optionalUpperText(raw.objective);
   if (objective !== null && !OBJECTIVES.has(objective)) throw new RangeError('Activity objective is invalid.');
   const rawChildHash = String(raw.childHash || '').trim().toLowerCase();
@@ -66,6 +72,7 @@ function normalizeRecord(raw, now) {
     assetId: optionalUpperText(raw.assetId),
     objective,
     amountAtto,
+    quotedAmountAtto: type === 'CLAIM' ? quotedAmountAtto : null,
     childHash: type === 'CLAIM' ? childHash : null,
     deliveryStatus: type === 'CLAIM' ? deliveryStatus : null,
     createdAt,
@@ -122,6 +129,13 @@ export function createActivityStore({ storage = globalThis.localStorage, now = D
         ) {
           throw new Error('Activity child transaction hash conflicts with the persisted claim.');
         }
+        if (
+          previous.quotedAmountAtto
+          && incoming.quotedAmountAtto
+          && previous.quotedAmountAtto !== incoming.quotedAmountAtto
+        ) {
+          throw new Error('Activity claim quote conflicts with the persisted signing intent.');
+        }
         const progressed = STATUS_RANK[incoming.status] >= STATUS_RANK[previous.status];
         const status = progressed ? incoming.status : previous.status;
         const deliveryStatus = previous.deliveryStatus === 'DELIVERED'
@@ -136,6 +150,7 @@ export function createActivityStore({ storage = globalThis.localStorage, now = D
           contractAddress: previous.contractAddress,
           deploymentAlias: previous.deploymentAlias || incoming.deploymentAlias,
           status,
+          quotedAmountAtto: previous.quotedAmountAtto || incoming.quotedAmountAtto,
           childHash: previous.childHash || incoming.childHash,
           deliveryStatus,
           createdAt: previous.createdAt,

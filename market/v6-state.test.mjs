@@ -7,6 +7,7 @@ import {
   normalizeV6Config,
   normalizeV6Entry,
   normalizeV6Epoch,
+  normalizeVerifiedClaimQuote,
   v6ClaimGate,
   v6TimeoutGate,
   v6WagerGate,
@@ -110,4 +111,43 @@ test('V6 wager, claim, and timeout gates enforce their exact boundaries', () => 
   assert.equal(v6ClaimGate({ ...entry, eligible: true, amountAtto: 150n }).allowed, true);
   assert.equal(v6TimeoutGate(epoch, E + 86_399).allowed, false);
   assert.equal(v6TimeoutGate(epoch, E + 86_400).allowed, true);
+});
+
+test('claim quotes fail closed unless epoch, objective, and connected account all match', () => {
+  const account = `0x${'a'.repeat(40)}`;
+  const quote = {
+    epoch_end_timestamp: E,
+    objective: 'HIGH',
+    account: `0x${'A'.repeat(40)}`,
+    choice_asset_id: 'BTC',
+    stake_atto: 200,
+    settlement_mode: 'REFUND_UNBACKED_WINNER',
+    eligible: true,
+    claimed: false,
+    claimed_atto: 0,
+    amount_atto: 200,
+    includes_rounding_remainder: false,
+  };
+  const expected = { epochEndTimestamp: E, objective: 'HIGH', account };
+
+  const normalized = normalizeVerifiedClaimQuote(quote, expected);
+  assert.equal(normalized.epochEndTimestamp, E);
+  assert.equal(normalized.objective, 'HIGH');
+  assert.equal(normalized.account, `0x${'A'.repeat(40)}`);
+  assert.throws(
+    () => normalizeVerifiedClaimQuote({ ...quote, epoch_end_timestamp: E + 3_600 }, expected),
+    /different epoch/,
+  );
+  assert.throws(
+    () => normalizeVerifiedClaimQuote({ ...quote, objective: 'LOW' }, expected),
+    /different objective/,
+  );
+  assert.throws(
+    () => normalizeVerifiedClaimQuote({ ...quote, account: `0x${'b'.repeat(40)}` }, expected),
+    /different wallet account/,
+  );
+  assert.throws(
+    () => normalizeVerifiedClaimQuote({ ...quote, account: 'malformed' }, expected),
+    /different wallet account/,
+  );
 });

@@ -617,10 +617,53 @@
       "status": "READY_ROLLBACK_ARTIFACT"
     }
   },
+  "crossDeploymentReleaseCandidateUpdate20260821": {
+    "scope": "SHARED_FRONTEND_CLAIM_RUNTIME_AND_DOCUMENTATION_NO_V6_CONTRACT_OR_DEPLOYMENT_CHANGE",
+    "v6RuntimeStatus": {
+      "playerLiabilityAtto": "0",
+      "recurringDrainWorkflowState": "disabled_manually",
+      "recurringEpochCreationAutomationEnabled": false,
+      "publicUiNewWagersEnabled": false,
+      "ownerCreateEpochCapabilityStillExistsOnChain": true,
+      "directEntryCapabilityForAnyOwnerCreatedOpenEpochStillExistsOnChain": true
+    },
+    "cloudflareBackup": {
+      "status": "LIVE_EVIDENCED_FOR_V7_KEEPER_AND_WATCHDOG_ONLY",
+      "workerVersionId": "536e6476-3c4e-4b93-a454-700f55d6cea7",
+      "keeperWorkflowDispatchRunId": "32473485508",
+      "watchdogRunId": "32473776356",
+      "watchdogRunEvent": "workflow_run",
+      "conditionalSkipEvent": "CLOUDFLARE_BACKUP_SKIPPED",
+      "conditionalSkipReason": "current_hour_run_succeeded"
+    },
+    "claimUx": {
+      "status": "LOCAL_TESTED_NOT_MERGED_NOT_DEPLOYED_NOT_LIVE_WALLET_TESTED",
+      "evidenceRecordedOn": "2026-08-21",
+      "legacyV6HistoryAndClaimRecoveryPreserved": true,
+      "crossDeploymentV7ToV6LowReconnectJourney": "PASS_LOCAL_PLAYWRIGHT",
+      "marketTests": "208/208",
+      "focusedClaimTests": "80/80",
+      "playwrightCases": "22/22",
+      "playwrightJourneyCount": 11,
+      "playwrightWorkerCount": 1,
+      "playwrightProjects": ["chromium", "mobile-chromium"],
+      "playwrightDeviceProfiles": ["Desktop Chrome", "Pixel 7"],
+      "fullNpmTests": "432/432",
+      "buildModuleCount": 477,
+      "npmAuditFindings": 0,
+      "aggregateTruthModel": "SAME_LOCAL_RELEASE_CANDIDATE_MODEL_AS_V7_NEUTRAL_CACHED_RESULTS_NO_FALSE_LOWER_BOUND",
+      "moneyPath": "PREWRITE_QUOTE_IS_INTENT_ACCOUNT_AND_STUDIONET_RECHECKED_ACTUAL_AT_LEAST_QUOTE_CHILD_AND_ACTIVITY_USE_ACTUAL",
+      "productionArtifactIdsChanged": false
+    },
+    "activeV7ParticipantObligationAtto": "2000000000000000000",
+    "activeV7EligibleUnclaimedRefundCount": 2,
+    "v7PayoutRecoveryRisk": "P1_UNRESOLVED_PROTOCOL_LIMITATION",
+    "v8DesignDocument": "docs/V8-PAYOUT-RECOVERY.md"
+  },
   "remainingLiveEvidence": [
     "24-hour timeout refund path; the unbacked-winner refund path is proven",
     "claim-child failure recovery or a documented protocol delivery guarantee",
-    "GitHub schedule delivery after only 25 of 52 nominal slots produced records; V6 workflow 338089016 remains disabled_manually at zero player liability; an independent third-party pager is optional",
+    "GitHub schedule delivery after only 25 of 52 nominal slots produced records; the V7 Cloudflare keeper-dispatch and watchdog conditional-skip paths are live and evidenced; V6 workflow 338089016 remains disabled_manually at zero player liability; an independent third-party pager is optional",
     "durable server-side market telemetry",
     "provider data-use and legal review",
     "independent security review"

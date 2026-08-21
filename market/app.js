@@ -27,15 +27,20 @@ import {
   V6_ASSETS,
   V6_POLICY,
   normalizeArenaConfig,
-  normalizeV6Entry,
   normalizeV6Epoch,
+  normalizeVerifiedClaimQuote,
   v6ClaimGate,
   v6TimeoutGate,
   v6WagerGate,
 } from './v6-state.js';
 import {
+  clearWalletClaimIntentHref,
   normalizeWalletPositionPage,
+  reconcileWalletPositionSnapshot,
+  WalletPositionRetryError,
   walletClaimTarget,
+  walletClaimIntentFromHref,
+  walletClaimSummary,
   walletPositionPageWindow,
   walletPositionPresentation,
 } from './wallet-positions.js';
@@ -56,6 +61,7 @@ const EXPECTED_CONTRACT_PROTOCOL = ACTIVE_DEPLOYMENT.protocolVersion;
 const TARGET_ARENA_WAGERING_MESSAGE = `Wagering requires the verified active ${EXPECTED_CONTRACT_PROTOCOL} StudioNet deployment.`;
 const TARGET_V6_POLICY = V6_POLICY;
 const ROUND_REFRESH_MS = 15_000;
+const WALLET_HISTORY_READ_ATTEMPTS = 2;
 const NETWORK_PRESENTATIONS = Object.freeze({
   studionet: Object.freeze({
     label: 'STUDIONET',
@@ -442,6 +448,13 @@ class LiquidityArenaApp {
     this.objectiveSelector = requestedObjective?.toLowerCase() === 'lowest'
       ? 'LOW'
       : 'HIGH';
+    const routedClaimIntent = walletClaimIntentFromHref(location.href);
+    this.pendingClaimIntent = !this.deploymentSelectionError
+      && routedClaimIntent?.deploymentAlias === this.deployment.alias
+      && routedClaimIntent?.epochEndTimestamp === this.explicitEpochEndTimestamp
+      && routedClaimIntent?.objective === this.objectiveSelector
+      ? routedClaimIntent
+      : null;
     this.contractConfig = null;
     this.contractConfigsByDeployment = new Map();
     this.roundAsset = null;
@@ -452,12 +465,20 @@ class LiquidityArenaApp {
     this.onchainPositionCount = 0;
     this.onchainPositionsByDeployment = new Map();
     this.onchainPositionCountsByDeployment = new Map();
+    this.onchainHistoryErrorsByDeployment = new Map();
+    this.onchainHistoryAccount = null;
     this.onchainHistoryLoading = false;
+    this.onchainHistoryRequestId = 0;
     this.activityStore = createActivityStore();
     this.activityReconcilePromise = null;
     this.positionLoading = false;
     this.positionReadError = false;
+    this.positionAuxiliaryReadError = '';
+    this.roundAssetReadFailed = false;
+    this.walletBalanceReadFailed = false;
     this.positionRequestId = 0;
+    this.roundAssetRequestId = 0;
+    this.walletConnectionPromise = null;
     this.gateways = new Map(DEPLOYMENT_REGISTRY.all.map((deployment) => [
       deployment.alias,
       new GenLayerGateway({
@@ -476,6 +497,7 @@ class LiquidityArenaApp {
     });
 
     this._bindEvents();
+    if (this.pendingClaimIntent) $('#prediction-modal').hidden = false;
     this._applyNetworkPresentation();
     this._renderPredictionChoices();
     this._updateContractUi();
@@ -488,6 +510,7 @@ class LiquidityArenaApp {
       }
     }, ROUND_REFRESH_MS);
     void this._reconcileActivity();
+    if (this.pendingClaimIntent) void this._resumeClaimIntent();
   }
 
   _bindEvents() {
@@ -511,8 +534,30 @@ class LiquidityArenaApp {
     $('#wallet-button').addEventListener('click', () => this.connectWallet());
     $('#submit-prediction').addEventListener('click', () => this.submitPrediction());
     $('#claim-wager').addEventListener('click', () => this.claimWager());
+    $('#claim-reconnect')?.addEventListener('click', async () => {
+      await this.connectWallet();
+    });
+    $('#position-refresh')?.addEventListener('click', async () => {
+      try {
+        await this._loadPositionState();
+        this.modalNotice = 'Wallet position verification recovered.';
+      } catch (error) {
+        this.modalNotice = error instanceof Error
+          ? error.message
+          : 'Wallet position verification is still unavailable.';
+      }
+      this._renderPredictionState();
+      this._focusClaimSection();
+    });
     $('#unlock-refund').addEventListener('click', () => this.unlockEmergencyRefund());
     $('#load-more-positions')?.addEventListener('click', () => this._loadWalletHistory({ append: true }));
+    const handleClaimNavigation = (event) => this._handleClaimNavigation(event);
+    $('#activity-list')?.addEventListener('click', handleClaimNavigation);
+    $('#claim-summary-actions')?.addEventListener('click', handleClaimNavigation);
+    $('#wallet-history-errors')?.addEventListener('click', (event) => {
+      const retry = event.target.closest('button[data-retry-deployment]');
+      if (retry) void this._loadWalletHistory({ deploymentAlias: retry.dataset.retryDeployment });
+    });
     $('#how-button').addEventListener('click', () => this.openHow());
     $('#battle-objective-controls')?.addEventListener('click', (event) => {
       const button = event.target.closest('button[data-objective]');
@@ -538,6 +583,7 @@ class LiquidityArenaApp {
         this.closeHow();
       }
     });
+    window.addEventListener('popstate', () => this._restoreRouteClaimIntent());
   }
 
   _updateClock() {
@@ -854,99 +900,209 @@ class LiquidityArenaApp {
 
   _clearPositionState() {
     this.positionRequestId += 1;
+    this.roundAssetRequestId += 1;
     this.roundAsset = null;
     this.walletBalanceAtto = null;
     this.entry = null;
     this.claimQuote = null;
     this.positionLoading = false;
     this.positionReadError = false;
+    this.positionAuxiliaryReadError = '';
+    this.roundAssetReadFailed = false;
+    this.walletBalanceReadFailed = false;
   }
 
-  async _loadWalletHistory({ append = false } = {}) {
+  _syncPositionAuxiliaryReadError() {
+    const failures = [
+      this.roundAssetReadFailed ? 'round asset' : '',
+      this.walletBalanceReadFailed ? 'wallet balance' : '',
+    ].filter(Boolean);
+    this.positionAuxiliaryReadError = failures.length > 0
+      ? `${failures.join(' and ')} could not be refreshed.`
+      : '';
+  }
+
+  async _loadWalletHistory({ append = false, deploymentAlias = null } = {}) {
     if (!this.gateway.connected) {
       this.onchainPositions = [];
       this.onchainPositionCount = 0;
       this.onchainPositionsByDeployment.clear();
       this.onchainPositionCountsByDeployment.clear();
+      this.onchainHistoryErrorsByDeployment.clear();
+      this.onchainHistoryAccount = null;
       this.onchainHistoryLoading = false;
+      this.onchainHistoryRequestId += 1;
       this._renderActivity();
       return;
     }
     if (this.onchainHistoryLoading) return;
-    this.onchainHistoryLoading = true;
-    this._renderActivity();
-    if (!append) {
+    const account = this.gateway.account;
+    if (this.onchainHistoryAccount !== account) {
+      this.onchainPositions = [];
+      this.onchainPositionCount = 0;
       this.onchainPositionsByDeployment.clear();
       this.onchainPositionCountsByDeployment.clear();
+      this.onchainHistoryErrorsByDeployment.clear();
+      this.onchainHistoryAccount = account;
     }
-    const account = this.gateway.account;
-    await Promise.allSettled(DEPLOYMENT_REGISTRY.all.map(async (deployment) => {
+    const historyRequestId = ++this.onchainHistoryRequestId;
+    this.onchainHistoryLoading = true;
+    this._renderActivity();
+    const requestedAlias = deploymentAlias;
+    const deployments = requestedAlias
+      ? [DEPLOYMENT_REGISTRY.get(requestedAlias)]
+      : DEPLOYMENT_REGISTRY.all;
+    await Promise.all(deployments.map(async (deployment) => {
       const historyGateway = this.gateways.get(deployment.alias);
-      const count = await historyGateway.readWalletPositionCount(account);
       const previous = this.onchainPositionsByDeployment.get(deployment.alias) || [];
-      const window = walletPositionPageWindow({
-        total: count,
-        loaded: append ? previous.length : 0,
-      });
-      const page = window.limit > 0
-        ? await historyGateway.readWalletPositionPage(account, window.offset, window.limit)
-        : { positions: [] };
-      const positions = normalizeWalletPositionPage(page?.positions, deployment);
-      this.onchainPositionCountsByDeployment.set(deployment.alias, count);
-      this.onchainPositionsByDeployment.set(
-        deployment.alias,
-        append ? [...previous, ...positions] : positions,
-      );
+      const previousCount = this.onchainPositionCountsByDeployment.get(deployment.alias)
+        ?? previous.length;
+      try {
+        let snapshot = null;
+        let appendAttempt = append;
+        for (let attempt = 0; attempt < WALLET_HISTORY_READ_ATTEMPTS; attempt += 1) {
+          const count = await historyGateway.readWalletPositionCount(account);
+          const effectiveAppend = appendAttempt && count === previousCount;
+          const window = walletPositionPageWindow({
+            total: count,
+            loaded: effectiveAppend ? previous.length : 0,
+          });
+          const rawPage = window.limit > 0
+            ? await historyGateway.readWalletPositionPage(account, window.offset, window.limit)
+            : {
+                account,
+                offset: window.offset,
+                next_offset: window.offset,
+                total: count,
+                positions: [],
+              };
+          try {
+            const page = normalizeWalletPositionPage(rawPage, deployment, {
+              account,
+              offset: window.offset,
+              limit: window.limit,
+              expectedTotal: count,
+            });
+            snapshot = reconcileWalletPositionSnapshot({
+              previousPositions: previous,
+              previousCount,
+              nextPage: page,
+              observedCount: count,
+              append: effectiveAppend,
+            });
+            break;
+          } catch (error) {
+            const retryable = error instanceof WalletPositionRetryError || error?.retryable === true;
+            if (!retryable || attempt + 1 >= WALLET_HISTORY_READ_ATTEMPTS) throw error;
+            if (error.refreshNewest) appendAttempt = false;
+          }
+        }
+        if (!snapshot) throw new Error('Wallet position history could not be verified consistently.');
+        if (historyRequestId !== this.onchainHistoryRequestId
+          || !this.gateway.connected || this.gateway.account !== account) return;
+        this.onchainPositionCountsByDeployment.set(deployment.alias, snapshot.count);
+        this.onchainPositionsByDeployment.set(deployment.alias, snapshot.positions);
+        this.onchainHistoryErrorsByDeployment.delete(deployment.alias);
+      } catch (error) {
+        if (historyRequestId !== this.onchainHistoryRequestId
+          || !this.gateway.connected || this.gateway.account !== account) return;
+        const snapshot = reconcileWalletPositionSnapshot({
+          previousPositions: previous,
+          previousCount,
+          error,
+        });
+        this.onchainPositionCountsByDeployment.set(deployment.alias, snapshot.count);
+        this.onchainPositionsByDeployment.set(deployment.alias, snapshot.positions);
+        this.onchainHistoryErrorsByDeployment.set(
+          deployment.alias,
+          `${deployment.alias.toUpperCase()} position history could not be refreshed. Last verified rows remain visible.`,
+        );
+      }
     }));
+    if (historyRequestId !== this.onchainHistoryRequestId) return;
+    if (this.gateway.connected && this.gateway.account === account) this._rebuildWalletHistory();
+    this.onchainHistoryLoading = false;
+    this._renderActivity();
+  }
+
+  _rebuildWalletHistory() {
     this.onchainPositionCount = [...this.onchainPositionCountsByDeployment.values()]
       .reduce((sum, count) => sum + count, 0);
     this.onchainPositions = [...this.onchainPositionsByDeployment.values()]
       .flat()
       .sort((left, right) => right.epochEndTimestamp - left.epochEndTimestamp
         || left.deploymentAlias.localeCompare(right.deploymentAlias));
-    this.onchainHistoryLoading = false;
-    this._renderActivity();
   }
 
   async _loadPositionState() {
     if (!this.round) return;
     const positionRequestId = ++this.positionRequestId;
+    const roundAssetRequestId = ++this.roundAssetRequestId;
+    const round = this.round;
+    const account = this.gateway.connected ? this.gateway.account : null;
     this.positionLoading = true;
     this.positionReadError = false;
+    this.positionAuxiliaryReadError = '';
+    this.roundAssetReadFailed = false;
+    this.walletBalanceReadFailed = false;
     this._renderPredictionState();
     try {
       const selectedAsset = getMarketAsset(this.selectedPrediction || this.selectedId);
-      const fallbackAssetId = this.round.assetIds.find((assetId) =>
+      const fallbackAssetId = round.assetIds.find((assetId) =>
         MARKET_ASSETS.some((asset) => asset.contractId === assetId));
-      const contractAssetId = this.round.assetIds.includes(selectedAsset?.contractId)
+      const contractAssetId = round.assetIds.includes(selectedAsset?.contractId)
         ? selectedAsset.contractId
         : fallbackAssetId;
-      const reads = [
+      const [assetResult, balanceResult, quoteResult] = await Promise.allSettled([
         contractAssetId
-          ? this.gateway.readEpochAsset(this.round.epochEndTimestamp, contractAssetId)
+          ? this.gateway.readEpochAsset(round.epochEndTimestamp, contractAssetId)
           : Promise.resolve(null),
-      ];
-      if (this.gateway.connected) {
-        reads.push(
-          this.gateway.readBalance(),
-          this.gateway.readEpochEntry(this.round.epochEndTimestamp, this.objectiveSelector),
-          this.gateway.readEpochClaimQuote(this.round.epochEndTimestamp, this.objectiveSelector),
-        );
-      }
-      const [rawAsset, rawBalance = null, rawEntry = null, rawQuote = null] = await Promise.all(reads);
+        account ? this.gateway.readBalance(account) : Promise.resolve(null),
+        account
+          ? this.gateway.readEpochClaimQuote(round.epochEndTimestamp, round.objective, account)
+          : Promise.resolve(null),
+      ]);
       if (positionRequestId !== this.positionRequestId) return;
-      this.roundAsset = rawAsset ? v6AssetView(rawAsset, this.objectiveSelector) : null;
-      this.walletBalanceAtto = typeof rawBalance === 'bigint' ? rawBalance : null;
-      this.entry = rawEntry ? normalizeV6Entry(rawEntry) : null;
-      this.claimQuote = rawQuote ? normalizeV6Entry(rawQuote) : null;
-      if (this.entry?.epochEndTimestamp && this.entry.epochEndTimestamp !== this.round.epochEndTimestamp) {
-        throw new Error('Wallet position belongs to a different epoch.');
+
+      if (roundAssetRequestId === this.roundAssetRequestId) {
+        try {
+          if (assetResult.status !== 'fulfilled' || !assetResult.value) {
+            this.roundAsset = null;
+            this.roundAssetReadFailed = true;
+          } else {
+            this.roundAsset = v6AssetView(assetResult.value, round.objective);
+            this.roundAssetReadFailed = false;
+          }
+        } catch {
+          this.roundAsset = null;
+          this.roundAssetReadFailed = true;
+        }
+      }
+      this.walletBalanceAtto = balanceResult.status === 'fulfilled'
+        && typeof balanceResult.value === 'bigint'
+        ? balanceResult.value
+        : null;
+      this.walletBalanceReadFailed = this.walletBalanceAtto === null;
+      this._syncPositionAuxiliaryReadError();
+
+      if (account) {
+        if (!this.gateway.connected || this.gateway.account?.toLowerCase() !== account.toLowerCase()) return;
+        if (quoteResult.status === 'rejected') throw quoteResult.reason;
+        if (!quoteResult.value) throw new Error('Wallet claim quote is unavailable.');
+        const quote = normalizeVerifiedClaimQuote(quoteResult.value, {
+          epochEndTimestamp: round.epochEndTimestamp,
+          objective: round.objective,
+          account,
+        });
+        this.entry = quote;
+        this.claimQuote = quote;
+      } else {
+        this.entry = null;
+        this.claimQuote = null;
       }
       this.positionReadError = false;
     } catch (error) {
       if (positionRequestId !== this.positionRequestId) return;
-      this.roundAsset = null;
-      this.walletBalanceAtto = null;
       this.entry = null;
       this.claimQuote = null;
       this.positionReadError = true;
@@ -961,23 +1117,28 @@ class LiquidityArenaApp {
 
   async _refreshRoundAsset() {
     if (!this.round) return;
+    const requestId = ++this.roundAssetRequestId;
     const asset = getMarketAsset(this.selectedPrediction || this.selectedId);
     if (!asset?.contractId || !this.round.assetIds.includes(asset.contractId)) {
       this.roundAsset = null;
+      this.roundAssetReadFailed = false;
+      this._syncPositionAuxiliaryReadError();
       this._renderPredictionState();
       return;
     }
-    const requestId = ++this.positionRequestId;
     try {
-    const rawAsset = await this.gateway.readEpochAsset(this.round.epochEndTimestamp, asset.contractId);
-      if (requestId !== this.positionRequestId) return;
+      const rawAsset = await this.gateway.readEpochAsset(this.round.epochEndTimestamp, asset.contractId);
+      if (requestId !== this.roundAssetRequestId) return;
       this.roundAsset = v6AssetView(rawAsset, this.objectiveSelector);
+      this.roundAssetReadFailed = false;
+      this._syncPositionAuxiliaryReadError();
     } catch {
-      if (requestId !== this.positionRequestId) return;
+      if (requestId !== this.roundAssetRequestId) return;
       this.roundAsset = null;
-      this.positionReadError = true;
+      this.roundAssetReadFailed = true;
+      this._syncPositionAuxiliaryReadError();
     } finally {
-      if (requestId === this.positionRequestId) this._renderPredictionState();
+      if (requestId === this.roundAssetRequestId) this._renderPredictionState();
     }
   }
 
@@ -987,14 +1148,140 @@ class LiquidityArenaApp {
     this.onchainPositionCount = 0;
     this.onchainPositionsByDeployment.clear();
     this.onchainPositionCountsByDeployment.clear();
+    this.onchainHistoryErrorsByDeployment.clear();
+    this.onchainHistoryAccount = null;
     this.onchainHistoryLoading = false;
+    this.onchainHistoryRequestId += 1;
     $('#wallet-label').textContent = 'CONNECT GENLAYER';
-    this.modalNotice = `Wallet account or network changed. Reconnect to ${this.networkPresentation.name} before moving test GEN.`;
+    this.modalNotice = this.pendingClaimIntent
+      ? `Reconnect to ${this.networkPresentation.name} to verify and claim this exact position.`
+      : `Wallet account or network changed. Reconnect to ${this.networkPresentation.name} before moving test GEN.`;
     this._renderPredictionState();
+  }
+
+  _handleClaimNavigation(event) {
+    const link = event.target.closest('a[data-claim-deployment][data-claim-epoch][data-claim-objective]');
+    if (!link || event.defaultPrevented || event.button !== 0
+      || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const intent = walletClaimIntentFromHref(link.href);
+    if (!intent || intent.deploymentAlias !== this.deployment.alias) return;
+    event.preventDefault();
+    void this._openClaimIntent(intent);
+  }
+
+  async _openClaimIntent(intent, { updateRoute = true } = {}) {
+    const url = new URL(location.href);
+    url.searchParams.delete('contract');
+    url.searchParams.set('feed', 'live');
+    url.searchParams.set('deployment', intent.deploymentAlias);
+    url.searchParams.set('epoch', String(intent.epochEndTimestamp));
+    url.searchParams.set('objective', intent.objective === 'LOW' ? 'lowest' : 'highest');
+    url.searchParams.set('claim', '1');
+    const normalizedIntent = walletClaimIntentFromHref(url.href);
+    if (!normalizedIntent || normalizedIntent.deploymentAlias !== this.deployment.alias) return;
+
+    const staleLoad = this.roundLoadPromise;
+    const targetChanged = this.explicitEpochEndTimestamp !== normalizedIntent.epochEndTimestamp
+      || this.objectiveSelector !== normalizedIntent.objective;
+    const feedChanged = this.feedMode !== 'live';
+    const modalWasHidden = $('#prediction-modal').hidden;
+    this.pendingClaimIntent = normalizedIntent;
+    this.explicitEpochEndTimestamp = normalizedIntent.epochEndTimestamp;
+    this.objectiveSelector = normalizedIntent.objective;
+    $('#prediction-modal').hidden = false;
+    // Replace the current route so browser Back never revives stale in-memory
+    // epoch/objective state while the wallet session remains on this page.
+    if (updateRoute && url.href !== location.href) history.replaceState(null, '', url);
+
+    if (targetChanged) {
+      this.roundRequestId += 1;
+      this.round = null;
+      this.contractConfig = null;
+      this.roundLoading = true;
+      this.roundReadError = false;
+      this._clearPositionState();
+    }
+    if (feedChanged) {
+      this.feedMode = 'live';
+      this.openWindow(this.window);
+    } else {
+      this._renderPredictionState();
+    }
+    if (staleLoad) {
+      try {
+        await staleLoad;
+      } catch {
+        // A superseded round read is replaced with the exact claim target below.
+      }
+    }
+    if (this.pendingClaimIntent !== normalizedIntent) return;
+    if (this.round?.epochEndTimestamp !== normalizedIntent.epochEndTimestamp
+      || this.round?.objective !== normalizedIntent.objective) {
+      await this._loadRound();
+    } else if (modalWasHidden && this.gateway.connected) {
+      try {
+        await this._loadPositionState();
+      } catch {
+        // The modal retains its retry/reconnect state if this wallet read fails.
+      }
+    }
+    if (this.pendingClaimIntent !== normalizedIntent) return;
+    this.modalNotice = this.gateway.connected
+      ? this.positionReadError
+        ? `Opened ${this.deployment.alias.toUpperCase()} round ${normalizedIntent.epochEndTimestamp} ${normalizedIntent.objective}, but the wallet position could not be verified. Retry below; claiming remains disabled.`
+        : `Opened ${this.deployment.alias.toUpperCase()} round ${normalizedIntent.epochEndTimestamp} ${normalizedIntent.objective}. Verify the amount below before claiming.`
+      : `Reconnect your ${this.networkPresentation.name} wallet to verify and claim this exact ${normalizedIntent.objective} position.`;
+    this._renderPredictionState();
+    this._focusClaimSection();
+  }
+
+  async _resumeClaimIntent() {
+    if (!this.pendingClaimIntent) return;
+    await this._openClaimIntent(this.pendingClaimIntent, { updateRoute: false });
+  }
+
+  _restoreRouteClaimIntent() {
+    const intent = walletClaimIntentFromHref(location.href);
+    if (!intent) {
+      this.pendingClaimIntent = null;
+      this._renderPredictionState();
+      return;
+    }
+    if (intent.deploymentAlias !== this.deployment.alias) {
+      location.reload();
+      return;
+    }
+    void this._openClaimIntent(intent, { updateRoute: false });
+  }
+
+  _clearClaimIntentRoute() {
+    if (!this.pendingClaimIntent && !new URL(location.href).searchParams.has('claim')) return;
+    this.pendingClaimIntent = null;
+    history.replaceState(null, '', clearWalletClaimIntentHref(location.href));
+  }
+
+  _focusClaimSection() {
+    requestAnimationFrame(() => {
+      const section = $('#wallet-position');
+      const reconnect = $('#claim-reconnect');
+      const claim = $('#claim-wager');
+      const refresh = $('#position-refresh');
+      const focusTarget = reconnect && !reconnect.hidden
+        ? reconnect
+        : claim && !claim.disabled
+          ? claim
+          : refresh && !refresh.hidden ? refresh : section;
+      section?.scrollIntoView({
+        block: 'center',
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      });
+      focusTarget?.focus({ preventScroll: true });
+    });
   }
 
   async selectObjective(nextObjective) {
     if (!['HIGH', 'LOW'].includes(nextObjective) || nextObjective === this.objectiveSelector) return;
+    this._clearClaimIntentRoute();
     const staleLoad = this.roundLoadPromise;
     this.objectiveSelector = nextObjective;
     // Invalidate any background read that started for the previous objective.
@@ -1053,6 +1340,127 @@ class LiquidityArenaApp {
     return { allowed: true, amount, message: '' };
   }
 
+  _walletClaimOverview() {
+    const connected = Boolean(this.gateway.account);
+    const positions = connected ? this.onchainPositions : [];
+    const summary = walletClaimSummary(positions);
+    const loadedCount = positions.length;
+    const knownCount = connected ? this.onchainPositionCount : 0;
+    const failedDeploymentCount = connected
+      ? this.onchainHistoryErrorsByDeployment.size
+      : 0;
+    const incomplete = connected && knownCount > loadedCount;
+    const refreshing = connected && this.onchainHistoryLoading;
+    const uncertain = failedDeploymentCount > 0 || refreshing;
+    const lowerBound = incomplete && !uncertain;
+    const partial = incomplete || uncertain;
+    return Object.freeze({
+      summary,
+      loadedCount,
+      knownCount,
+      failedDeploymentCount,
+      incomplete,
+      refreshing,
+      uncertain,
+      lowerBound,
+      partial,
+    });
+  }
+
+  _renderPrimaryPredictionCta(gate = this._roundGate(
+    getMarketAsset(this.selectedPrediction || this.selectedId)?.contractId,
+  )) {
+    const button = $('#prediction-button');
+    const kicker = $('#prediction-kicker');
+    const label = $('#prediction-label');
+    const availability = $('#prediction-availability');
+    const overview = this._walletClaimOverview();
+    const { summary } = overview;
+    const historyNeedsAttention = overview.partial;
+    button.disabled = Boolean(this.deploymentSelectionError)
+      || (this.roundLoading && summary.count === 0 && !historyNeedsAttention);
+    button.dataset.claimSummary = summary.count > 0
+      ? (historyNeedsAttention ? 'partial' : 'ready')
+      : (historyNeedsAttention ? 'check' : 'none');
+    button.dataset.verification = overview.uncertain
+      ? 'last-verified'
+      : historyNeedsAttention
+        ? 'partial'
+        : 'verified';
+    if (summary.count > 0) {
+      const kinds = [
+        summary.refundCount > 0
+          ? `${summary.refundCount} REFUND${summary.refundCount === 1 ? '' : 'S'}`
+          : '',
+        summary.payoutCount > 0
+          ? `${summary.payoutCount} PAYOUT${summary.payoutCount === 1 ? '' : 'S'}`
+          : '',
+      ].filter(Boolean);
+      const countAndKinds = kinds.length === 1
+        ? kinds[0]
+        : `${summary.count} · ${kinds.join(' + ')}`;
+      kicker.textContent = historyNeedsAttention
+        ? `WALLET CLAIMS · ${overview.failedDeploymentCount > 0
+          ? 'LAST VERIFIED / PARTIAL'
+          : overview.refreshing
+            ? 'LAST VERIFIED / REFRESHING'
+            : 'PARTIAL HISTORY'}`
+        : 'WALLET CLAIMS · VERIFIED ON-CHAIN';
+      label.textContent = overview.uncertain
+        ? `REVIEW ${countAndKinds} · ${displayGen(summary.amountAtto, 6)} LAST VERIFIED`
+        : overview.lowerBound
+          ? `CLAIM AT LEAST ${countAndKinds} · ≥${displayGen(summary.amountAtto, 6)}`
+          : `CLAIM ${countAndKinds} · ${displayGen(summary.amountAtto, 6)}`;
+      availability.textContent = overview.failedDeploymentCount > 0
+        ? 'One or more deployment histories could not be refreshed. These claims are last verified; retry history before treating this as the complete wallet total.'
+        : overview.refreshing
+          ? 'Wallet history is refreshing. Displayed claim candidates are last verified and must be refreshed before treating them as currently available.'
+          : overview.incomplete
+            ? `Showing ${overview.loadedCount} of ${overview.knownCount} known positions. Open the claim panel to claim these rows or load older positions before treating the aggregate as complete.`
+            : 'Verified refunds or payouts are ready. Open the claim panel and choose the exact position.';
+      availability.dataset.state = historyNeedsAttention ? 'closed' : 'open';
+      button.title = overview.uncertain
+        ? `${summary.count} last-verified wallet claim candidate${summary.count === 1 ? '' : 's'}; refresh before signing`
+        : historyNeedsAttention
+          ? `${summary.count} loaded wallet claim${summary.count === 1 ? '' : 's'}; history is incomplete`
+        : `${summary.count} wallet claim${summary.count === 1 ? '' : 's'} ready`;
+      return;
+    }
+    if (historyNeedsAttention) {
+      kicker.textContent = overview.failedDeploymentCount > 0
+        ? 'WALLET CLAIMS · HISTORY RETRY REQUIRED'
+        : overview.incomplete
+          ? 'WALLET CLAIMS · PARTIAL HISTORY'
+          : 'WALLET CLAIMS · REFRESHING';
+      label.textContent = overview.failedDeploymentCount > 0
+        ? 'CHECK / RETRY CLAIM HISTORY'
+        : overview.incomplete
+          ? `CHECK ${Math.max(0, overview.knownCount - overview.loadedCount)} OLDER POSITION${overview.knownCount - overview.loadedCount === 1 ? '' : 'S'} FOR CLAIMS`
+          : 'CHECKING WALLET CLAIMS';
+      availability.textContent = overview.failedDeploymentCount > 0
+        ? 'A deployment history is unavailable, so zero loaded claims does not prove that no refund or payout exists. Open the claim panel and retry.'
+        : overview.incomplete
+          ? `Only ${overview.loadedCount} of ${overview.knownCount} known positions are loaded. Open the claim panel and load older rows before concluding there is nothing to claim.`
+          : 'Wallet history is refreshing. Open the claim panel to watch verification progress.';
+      availability.dataset.state = 'closed';
+      button.title = 'Wallet claim history is incomplete; open to retry or load older positions';
+      return;
+    }
+    kicker.textContent = `${this.deployment.alias.toUpperCase()} · ${this.objectiveSelector} RETURN · TEST GEN`;
+    label.textContent = this.roundLoading
+      ? 'VERIFYING EPOCH'
+      : this.round?.wageringEnabled
+        ? `PLACE ${this.deployment.alias.toUpperCase()} WAGER`
+        : 'VIEW POSITION / CLAIM';
+    availability.textContent = this.roundLoading
+      ? `Reading the ${this.deployment.alias.toUpperCase()} epoch and exact contract configuration.`
+      : gate.allowed
+        ? `Wagering closes ${formatRoundTime(this.round.entryDeadlineTimestamp)}. Fee snapshot: ${(this.round.platformFeeBps / 100).toFixed(2)}% of the losing pool only.`
+        : (this.modalNotice || gate.message);
+    availability.dataset.state = gate.allowed ? 'open' : 'closed';
+    button.removeAttribute('title');
+  }
+
   _renderPredictionState() {
     const schedule = arenaEpochState(Date.now());
     const target = schedule.operationalEpoch;
@@ -1076,22 +1484,9 @@ class LiquidityArenaApp {
       ? `${this.round.phase.replaceAll('_', ' ')} · ON-CHAIN`
       : `${schedule.operationalPhase.replaceAll('_', ' ')} · AWAITING CONTRACT`;
 
-    const predictionButton = $('#prediction-button');
     const selectedContractId = getMarketAsset(this.selectedPrediction || this.selectedId)?.contractId;
     const gate = this._roundGate(selectedContractId);
-    predictionButton.disabled = this.roundLoading || Boolean(this.deploymentSelectionError);
-    $('#prediction-kicker').textContent = `${this.deployment.alias.toUpperCase()} · ${this.objectiveSelector} RETURN · TEST GEN`;
-    $('#prediction-label').textContent = this.roundLoading
-      ? 'VERIFYING EPOCH'
-      : this.round?.wageringEnabled
-        ? `PLACE ${this.deployment.alias.toUpperCase()} WAGER`
-        : 'VIEW POSITION / CLAIM';
-    $('#prediction-availability').textContent = this.roundLoading
-      ? `Reading the ${this.deployment.alias.toUpperCase()} epoch and exact contract configuration.`
-      : gate.allowed
-        ? `Wagering closes ${formatRoundTime(this.round.entryDeadlineTimestamp)}. Fee snapshot: ${(this.round.platformFeeBps / 100).toFixed(2)}% of the losing pool only.`
-        : (this.modalNotice || gate.message);
-    $('#prediction-availability').dataset.state = gate.allowed ? 'open' : 'closed';
+    this._renderPrimaryPredictionCta(gate);
 
     document.querySelectorAll('input[name="prediction-asset"]').forEach((input) => {
       const asset = getMarketAsset(input.value);
@@ -1112,7 +1507,10 @@ class LiquidityArenaApp {
         ? `WAGER ${this.objectiveSelector} · ${instrumentCode(getMarketAsset(this.selectedPrediction))}`
         : 'SELECT AN ASSET';
     $('#stake-error').textContent = gate.allowed && !stake.allowed ? stake.message : '';
-    $('#modal-status').textContent = this.modalNotice
+    $('#modal-status').textContent = (this.positionAuxiliaryReadError && this.claimQuote
+        ? `Claim-critical position data remains verified; ${this.positionAuxiliaryReadError}`
+        : '')
+      || this.modalNotice
       || (gate.allowed ? this.networkPresentation.finalityNotice : gate.message);
     this._renderWagerFinancials(stake, selectedContractId);
     this._renderBattleCard();
@@ -1146,10 +1544,19 @@ class LiquidityArenaApp {
         : v6ClaimGate(this.claimQuote);
     const position = $('#wallet-position');
     const claimButton = $('#claim-wager');
+    const reconnectButton = $('#claim-reconnect');
+    const positionRefresh = $('#position-refresh');
     const unlockButton = $('#unlock-refund');
     $('#position-choice').textContent = contractAssetLabel(this.entry?.choiceAssetId);
     $('#position-stake').textContent = displayGen(this.entry?.stakeAtto, 6);
     $('#position-claimable').textContent = displayGen(this.claimQuote?.amountAtto, 6);
+    reconnectButton.hidden = !this.pendingClaimIntent || this.gateway.connected;
+    reconnectButton.disabled = Boolean(this.walletConnectionPromise);
+    reconnectButton.textContent = this.pendingClaimIntent
+      ? `RECONNECT WALLET TO CLAIM ${this.pendingClaimIntent.objective} POSITION`
+      : 'RECONNECT WALLET TO VERIFY & CLAIM';
+    positionRefresh.hidden = !this.gateway.connected || !this.positionReadError;
+    positionRefresh.disabled = this.positionLoading;
     claimButton.disabled = this.claimingWager || this.submittingPrediction || this.activatingEmergencyRefund || !claim.allowed;
     if (this.claimingWager) {
       position.dataset.state = 'pending';
@@ -1168,7 +1575,7 @@ class LiquidityArenaApp {
           ? 'CLAIMED'
           : this.gateway.connected
             ? (hasPosition ? 'POSITION RECORDED' : 'NO POSITION')
-            : 'CONNECT WALLET';
+            : this.pendingClaimIntent ? 'RECONNECT TO CLAIM' : 'CONNECT WALLET';
       claimButton.textContent = claim.reason.toUpperCase();
     }
     const emergency = this.round
@@ -1250,16 +1657,21 @@ class LiquidityArenaApp {
               record.objective,
               record.account,
             );
-            const claimedAtto = BigInt(entry?.claimed_atto || 0);
-            const expectedAtto = BigInt(record.amountAtto || 0);
+            const claimedAtto = BigInt(
+              entry?.claimed_amount_atto ?? entry?.claimed_atto ?? 0,
+            );
+            const signingQuoteText = record.quotedAmountAtto ?? record.amountAtto;
+            const signingQuoteAtto = signingQuoteText === null
+              ? null
+              : BigInt(signingQuoteText);
             const parentStateVerified = entry?.claimed === true
               && claimedAtto > 0n
-              && claimedAtto >= expectedAtto;
+              && (signingQuoteAtto === null || claimedAtto >= signingQuoteAtto);
             if (parentStateVerified) {
               try {
                 const delivery = await recordGateway.verifyClaimDelivery(record.hash, {
                   recipient: record.account,
-                  minimumValueAtto: expectedAtto,
+                  minimumValueAtto: claimedAtto,
                   parentTransaction: transaction,
                   expectedChildHash: record.childHash,
                   discoveryRetries: 0,
@@ -1268,6 +1680,8 @@ class LiquidityArenaApp {
                 this.activityStore.upsert({
                   ...record,
                   deploymentAlias: deployment.alias,
+                  quotedAmountAtto: signingQuoteAtto?.toString() ?? null,
+                  amountAtto: claimedAtto.toString(),
                   childHash: delivery.childHash,
                   deliveryStatus: 'DELIVERED',
                   status: 'FINALIZED',
@@ -1277,12 +1691,25 @@ class LiquidityArenaApp {
                 this.activityStore.upsert({
                   ...record,
                   deploymentAlias: deployment.alias,
+                  quotedAmountAtto: signingQuoteAtto?.toString() ?? null,
+                  amountAtto: claimedAtto.toString(),
                   childHash: error?.childHash || record.childHash,
                   deliveryStatus: 'REVIEW',
                   status: 'REVIEW',
                 });
                 return;
               }
+            }
+            if (entry?.claimed === true && claimedAtto > 0n) {
+              this.activityStore.upsert({
+                ...record,
+                deploymentAlias: deployment.alias,
+                quotedAmountAtto: signingQuoteAtto?.toString() ?? null,
+                amountAtto: claimedAtto.toString(),
+                deliveryStatus: 'REVIEW',
+                status: 'REVIEW',
+              });
+              return;
             }
           } else if (record.type === 'TIMEOUT_REFUND') {
             const epoch = await recordGateway.readEpoch(Number(record.roundId));
@@ -1317,15 +1744,99 @@ class LiquidityArenaApp {
       limit: 12,
     }) : [];
     const positions = this.gateway.account ? this.onchainPositions : [];
+    const claimOverview = this._walletClaimOverview();
+    const claimable = claimOverview.summary;
     const loadMore = $('#load-more-positions');
     if (loadMore) {
       const remaining = Math.max(0, this.onchainPositionCount - positions.length);
+      const nextLoadCount = DEPLOYMENT_REGISTRY.all.reduce((sum, deployment) => {
+        const deploymentPositions = this.onchainPositionsByDeployment.get(deployment.alias) || [];
+        const deploymentCount = this.onchainPositionCountsByDeployment.get(deployment.alias)
+          ?? deploymentPositions.length;
+        return sum + walletPositionPageWindow({
+          total: deploymentCount,
+          loaded: deploymentPositions.length,
+        }).limit;
+      }, 0);
       loadMore.hidden = !this.gateway.account || remaining === 0;
       loadMore.disabled = this.onchainHistoryLoading;
+      loadMore.dataset.loadCount = String(nextLoadCount);
       loadMore.textContent = this.onchainHistoryLoading
-        ? 'LOADING OLDER POSITIONS…'
-        : `LOAD ${Math.min(50, remaining)} OLDER POSITION${Math.min(50, remaining) === 1 ? '' : 'S'} · ${remaining} REMAIN`;
+        ? `LOADING UP TO ${nextLoadCount} OLDER POSITION${nextLoadCount === 1 ? '' : 'S'}…`
+        : `LOAD UP TO ${nextLoadCount} OLDER POSITION${nextLoadCount === 1 ? '' : 'S'} · ${remaining} REMAIN`;
     }
+    const claimSummary = $('#claim-summary');
+    const claimSummaryActions = $('#claim-summary-actions');
+    claimSummary.hidden = claimable.count === 0;
+    claimSummary.dataset.verification = claimOverview.uncertain
+      ? 'last-verified'
+      : claimOverview.incomplete
+        ? 'partial'
+        : 'verified';
+    $('#claim-summary-total').textContent = claimOverview.uncertain
+      ? `${displayGen(claimable.amountAtto, 6)} · LAST VERIFIED`
+      : `${claimOverview.lowerBound ? '≥' : ''}${displayGen(claimable.amountAtto, 6)}`;
+    const claimKinds = [
+      claimable.refundCount > 0
+        ? `${claimable.refundCount} refund${claimable.refundCount === 1 ? '' : 's'}`
+        : '',
+      claimable.payoutCount > 0
+        ? `${claimable.payoutCount} payout${claimable.payoutCount === 1 ? '' : 's'}`
+        : '',
+    ].filter(Boolean).join(' + ');
+    const claimSummaryCopy = claimable.count === 0
+      ? ''
+      : claimOverview.failedDeploymentCount > 0
+        ? `${claimable.count} position${claimable.count === 1 ? ' was' : 's were'} last verified as claimable (${claimKinds}). Availability may have changed elsewhere; retry failed history, and every opened row gets an exact fresh quote before signing.`
+        : claimOverview.refreshing
+          ? `${claimable.count} last-verified position${claimable.count === 1 ? ' is' : 's are'} shown (${claimKinds}) while wallet history refreshes. Availability may have changed elsewhere; opening one refreshes its exact quote before signing.`
+          : claimOverview.incomplete
+            ? `${claimable.count} loaded position${claimable.count === 1 ? ' is' : 's are'} ready (${claimKinds}). This is a lower bound from ${claimOverview.loadedCount} of ${claimOverview.knownCount} known positions; load older rows for a complete aggregate.`
+            : `${claimable.count} verified on-chain position${claimable.count === 1 ? ' is' : 's are'} ready (${claimKinds}). Each claim still requires your wallet confirmation.`;
+    $('#claim-summary-copy').textContent = claimSummaryCopy;
+    claimSummaryActions.replaceChildren();
+    for (const entry of claimable.positions) {
+      const positionDeployment = DEPLOYMENT_REGISTRY.get(entry.deploymentAlias);
+      const presentation = walletPositionPresentation(entry, positionDeployment, location.href);
+      const row = document.createElement('div');
+      row.setAttribute('role', 'listitem');
+      const action = document.createElement('a');
+      action.className = 'claim-summary-action';
+      action.href = presentation.href;
+      action.dataset.claimDeployment = positionDeployment.alias;
+      action.dataset.claimEpoch = String(presentation.claimTarget.epochEndTimestamp);
+      action.dataset.claimObjective = presentation.claimTarget.objective;
+      const claimKind = entry.settlementMode.startsWith('REFUND_') ? 'REFUND' : 'PAYOUT';
+      const crossDeployment = positionDeployment.alias !== this.deployment.alias;
+      action.textContent = crossDeployment
+        ? `OPEN ${positionDeployment.alias.toUpperCase()} & RECONNECT TO CLAIM · ${displayGen(entry.amountAtto, 6)}`
+        : `CLAIM ${claimKind} · ${displayGen(entry.amountAtto, 6)}`;
+      action.setAttribute(
+        'aria-label',
+        crossDeployment
+          ? `Open ${positionDeployment.alias.toUpperCase()} and reconnect to claim ${claimKind.toLowerCase()} of ${displayGen(entry.amountAtto, 6)} for ${contractAssetLabel(entry.choiceAssetId)} ${entry.objective}, round ${entry.epochEndTimestamp}`
+          : `Claim ${claimKind.toLowerCase()} of ${displayGen(entry.amountAtto, 6)} for ${contractAssetLabel(entry.choiceAssetId)} ${entry.objective}, round ${entry.epochEndTimestamp}, ${positionDeployment.alias.toUpperCase()}`,
+      );
+      const detail = document.createElement('span');
+      detail.textContent = `${positionDeployment.alias.toUpperCase()} · ${contractAssetLabel(entry.choiceAssetId)} ${entry.objective} · ROUND ${entry.epochEndTimestamp}`;
+      row.append(action, detail);
+      claimSummaryActions.append(row);
+    }
+    const historyErrors = $('#wallet-history-errors');
+    historyErrors.replaceChildren();
+    for (const [deploymentAlias, message] of this.onchainHistoryErrorsByDeployment) {
+      const row = document.createElement('p');
+      const copy = document.createElement('span');
+      copy.textContent = message;
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.dataset.retryDeployment = deploymentAlias;
+      retry.disabled = this.onchainHistoryLoading;
+      retry.textContent = `RETRY ${deploymentAlias.toUpperCase()} HISTORY`;
+      row.append(copy, retry);
+      historyErrors.append(row);
+    }
+    historyErrors.hidden = this.onchainHistoryErrorsByDeployment.size === 0;
     list.replaceChildren();
     empty.hidden = records.length > 0 || positions.length > 0;
     reminder.hidden = claim?.allowed !== true;
@@ -1374,6 +1885,7 @@ class LiquidityArenaApp {
         const roundLink = document.createElement('a');
         const roundUrl = new URL(location.href);
         roundUrl.searchParams.delete('contract');
+        roundUrl.searchParams.delete('claim');
         roundUrl.searchParams.set('feed', 'live');
         roundUrl.searchParams.set('deployment', recordDeployment.alias);
         roundUrl.searchParams.set('epoch', record.roundId);
@@ -1393,18 +1905,32 @@ class LiquidityArenaApp {
       const presentation = walletPositionPresentation(entry, positionDeployment, location.href);
       const item = document.createElement('li');
       item.dataset.status = presentation.dataStatus;
+      const lastVerified = this.onchainHistoryErrorsByDeployment.has(entry.deploymentAlias);
+      item.dataset.verification = lastVerified ? 'last-verified' : 'verified';
       const summary = document.createElement('span');
-      summary.textContent = `${positionDeployment.alias.toUpperCase()} ON-CHAIN · ${entry.objective} · ${contractAssetLabel(entry.choiceAssetId)} · ${displayGen(entry.stakeAtto, 6)} · ${presentation.status}`;
+      summary.textContent = `${positionDeployment.alias.toUpperCase()} ${lastVerified ? 'LAST VERIFIED' : 'ON-CHAIN'} · ${entry.objective} · ${contractAssetLabel(entry.choiceAssetId)} · ${displayGen(entry.stakeAtto, 6)} · ${presentation.status}`;
       const actions = document.createElement('span');
       actions.className = 'activity-actions';
       const open = document.createElement('a');
       open.href = presentation.href;
       open.textContent = presentation.actionText;
       open.title = presentation.actionTitle;
+      const claimIntent = walletClaimIntentFromHref(presentation.href);
+      if (claimIntent) {
+        open.className = 'wallet-position-action';
+        open.dataset.claimDeployment = claimIntent.deploymentAlias;
+        open.dataset.claimEpoch = String(claimIntent.epochEndTimestamp);
+        open.dataset.claimObjective = claimIntent.objective;
+        open.setAttribute(
+          'aria-label',
+          `${presentation.actionText.toLowerCase()} ${entry.objective} ${contractAssetLabel(entry.choiceAssetId)} position for round ${entry.epochEndTimestamp}`,
+        );
+      }
       actions.append(open);
       item.append(summary, actions);
       list.append(item);
     }
+    this._renderPrimaryPredictionCta();
   }
 
   _renderBattleCard() {
@@ -1911,7 +2437,10 @@ class LiquidityArenaApp {
     $('.prediction-modal .modal-close')?.focus();
   }
 
-  closePrediction() { $('#prediction-modal').hidden = true; }
+  closePrediction() {
+    $('#prediction-modal').hidden = true;
+    this._clearClaimIntentRoute();
+  }
   openHow() { $('#how-modal').hidden = false; $('.how-modal .modal-close').focus(); }
   closeHow() { $('#how-modal').hidden = true; }
 
@@ -1920,33 +2449,50 @@ class LiquidityArenaApp {
     this._renderPredictionState();
   }
 
+  _setWalletConnectionControls(connecting) {
+    $('#wallet-button').disabled = connecting;
+    const reconnect = $('#claim-reconnect');
+    if (reconnect) reconnect.disabled = connecting;
+  }
+
   async connectWallet() {
-    const button = $('#wallet-button');
-    button.disabled = true;
+    if (this.walletConnectionPromise) return this.walletConnectionPromise;
+    this._setWalletConnectionControls(true);
     $('#wallet-label').textContent = 'CONNECTING…';
+    const connection = this._connectWalletOnce();
+    this.walletConnectionPromise = connection;
+    try {
+      return await connection;
+    } finally {
+      if (this.walletConnectionPromise === connection) this.walletConnectionPromise = null;
+      this._setWalletConnectionControls(false);
+      this._renderPredictionState();
+    }
+  }
+
+  async _connectWalletOnce() {
     try {
       const account = await this.gateway.connect();
       $('#wallet-label').textContent = account.label;
-      button.title = `${account.walletName ? `${account.walletName} · ` : ''}${account.address}`;
+      $('#wallet-button').title = `${account.walletName ? `${account.walletName} · ` : ''}${account.address}`;
       this.modalNotice = `Connected to ${account.network} chain ${account.chainId} as ${account.label}. ${this.deployment.newWagersEnabled ? 'Test-GEN wagers and claims' : 'Legacy claims and timeout refunds'} are public and wallet-linked.`;
       await this._reconcileActivity();
       await this._loadWalletHistory();
       if (this.round) {
         try {
           await this._loadPositionState();
-        } catch {
-          this.modalNotice = 'Wallet connected, but its balance, position, or claim quote could not be verified. Money actions remain disabled.';
+        } catch (error) {
+          this.modalNotice = `Wallet connected, but its claim quote could not be verified. ${error?.message || 'Money actions remain disabled.'}`;
         }
       }
       this._renderPredictionState();
+      if (this.pendingClaimIntent) this._focusClaimSection();
       this.toast(`${account.walletName ? `${account.walletName} · ` : ''}${this.networkPresentation.name} wallet connected: ${account.label}`);
     } catch (error) {
       $('#wallet-label').textContent = 'CONNECT GENLAYER';
       this.modalNotice = error.message;
       this._renderPredictionState();
       this.toast(error.message);
-    } finally {
-      button.disabled = false;
     }
   }
 
@@ -2023,7 +2569,7 @@ class LiquidityArenaApp {
       roundId: String(claimTarget.epochEndTimestamp),
       assetId: this.entry?.choiceAssetId || null,
       objective: claimTarget.objective,
-      amountAtto: this.claimQuote?.amountAtto?.toString() || null,
+      amountAtto: null,
       deliveryStatus: 'PENDING',
     };
     try {
@@ -2034,6 +2580,7 @@ class LiquidityArenaApp {
             hash,
             account: submission.account,
             contractAddress: submission.contractAddress,
+            quotedAmountAtto: submission.quotedAmountAtto,
           };
           this._recordActivity({ ...activity, hash, status: 'SUBMITTED' });
         },
@@ -2042,6 +2589,8 @@ class LiquidityArenaApp {
             ...activity,
             account: submission.account,
             contractAddress: submission.contractAddress,
+            quotedAmountAtto: submission.quotedAmountAtto || activity.quotedAmountAtto,
+            amountAtto: submission.actualAmountAtto || activity.amountAtto,
             childHash,
             deliveryStatus: 'PENDING',
           };
@@ -2051,10 +2600,13 @@ class LiquidityArenaApp {
       this._recordActivity({
         ...activity,
         hash: result.hash,
+        quotedAmountAtto: result.quotedAmountAtto,
+        amountAtto: result.actualAmountAtto,
         childHash: result.delivery.childHash,
         deliveryStatus: 'DELIVERED',
         status: 'FINALIZED',
       });
+      this._clearClaimIntentRoute();
       this.modalNotice = `CLAIM + TRANSFER FINALIZED & VERIFIED · ${result.delivery.childHash.slice(0, 10)}…${result.delivery.childHash.slice(-6)}`;
       this.toast(`Test-GEN claim child transfer finalized and verified on ${this.networkPresentation.name}.`);
       await this._loadRound({ background: true });
@@ -2063,6 +2615,8 @@ class LiquidityArenaApp {
       if (error?.hash) this._recordActivity({
         ...activity,
         hash: error.hash,
+        quotedAmountAtto: error?.quotedAmountAtto || activity.quotedAmountAtto,
+        amountAtto: error?.actualAmountAtto || activity.amountAtto,
         childHash: error?.childHash || activity.childHash,
         deliveryStatus: error?.deliveryStatus || 'REVIEW',
         status: 'REVIEW',
