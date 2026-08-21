@@ -83,8 +83,8 @@ and CREATE `0x310fc6…5445`. Watchdog run
 The observed minute-57 Worker log emitted `CLOUDFLARE_BACKUP_SKIPPED` with reason
 `current_hour_run_succeeded`, proving the conditional no-duplicate path.
 
-As of 2026-08-21, a claim/refund discoverability fix is complete only in the current release-
-candidate worktree. A prominent pre-modal CTA exposes a truth-labeled aggregate count, type, and GEN
+Core claim/refund hardening from PR #21 is now merged and deployed; the modal focus-containment
+follow-up is tracked separately below. A prominent pre-modal CTA exposes a truth-labeled aggregate count, type, and GEN
 amount (the fully verified two-refund journey renders `CLAIM 2 REFUNDS · 2 GEN`) with 44px-minimum
 mobile controls; same-deployment `OPEN & CLAIM` navigation preserves the document and wallet session; cross-
 deployment claims explicitly require a reload/reconnect, with the exact V7-to-V6 LOW journey enabled
@@ -97,11 +97,86 @@ erase a valid claim, and validated pagination distinguishes verified-current res
 cached `LAST VERIFIED`/`PARTIAL`
 results with retry controls; failed or refreshing cached deployments never advertise a false `≥`
 lower bound, and a zero-known incomplete state prompts `CHECK`/`RETRY` instead of declaring zero.
-Local evidence is 208/208 market tests, 80/80 focused claim tests, and 22/22 Playwright cases (11
-journeys across `chromium`/`mobile-chromium`, Desktop Chrome/Pixel 7, one worker), plus 432/432 full
-tests, a 477-module build, and zero audit findings. This claim UX is **not yet merged, deployed, or
-live-wallet tested** and must not be described as present on the public alias until that evidence
-exists.
+Final accessibility release evidence is 210/210 market tests, 7/7 focused claim tests, and 24/24
+Playwright cases (12 journeys across `chromium`/`mobile-chromium`, Desktop Chrome/Pixel 7, one
+worker), plus 434/434 full
+tests, a 477-module build, and zero audit findings.
+
+An internal independent Codex diff review approved the four-file modal focus-containment fix with no
+remaining P0/P1/P2 in scope. It contains keyboard focus, restores exact opener/background inert and `aria-hidden` state,
+and guards nested/async focus races. [PR #26](https://github.com/Leokings/liquidity-arena/pull/26)
+merged at `2026-08-21T14:55:40Z` as `881e74895a31cb3cf82c078f4252110306684f30`
+from head commit `fdbea7a96eb130aaf616f6c7ab76e9386b55ec39`. Main CI run `32494801072`
+passed browser/operator job `96810573370` and contracts job `96810573060`; CodeQL run `32494801089`
+passed JavaScript/TypeScript job `96810573794` and Python job `96810574148`. Successful GitHub
+deployment `6023788676` and READY production Vercel deployment
+`dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr`, build `bld_6ru8isp7p`, form the last runtime-changing
+production checkpoint from exact source `881e74895a31cb3cf82c078f4252110306684f30` on Node 24.x. At
+its verification checkpoint, the
+[immutable deployment](https://liquidity-arena-7bkvfta05-leokings588-5902s-projects.vercel.app)
+and public alias served identical `/assets/market-Cbg1BCfB.js` bytes: 225141 bytes, ETag
+`"7e1bea4635aa5da15eae5805c486d4c1"`, SHA-256
+`33a2cfa7b48970660b09bf8b3a455dd3740f09efe65f0e33b5a0707321f95bbf`; HTML is 17986 bytes.
+At that artifact/browser verification checkpoint, health was OK; readiness matched exact
+V7/keeper/coverage and all five feeds while reporting the active 2 GEN liability as non-blocking.
+History was ready at schema 1/journal 3 with
+39 terminal/39 resolve/0 timeout operations and zero missing, stale, or missing-snapshot gaps at the
+artifact/browser verification snapshot. Later documentation validation at
+`2026-08-21T15:16:17.648Z` observed HTTP 200 ready, journal 3, 40 terminal/40 resolve/0 timeout, and
+zero missing, stale, or missing-snapshot gaps.
+An independent read-only Codex production-browser audit passed with P0/P1/P2 all zero.
+
+[PR #21](https://github.com/Leokings/liquidity-arena/pull/21) merged at `2026-08-21T13:47:56Z` as
+exact squash commit `5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475`. CI run
+[`32488727873`](https://github.com/Leokings/liquidity-arena/actions/runs/32488727873), CodeQL run
+[`32488727758`](https://github.com/Leokings/liquidity-arena/actions/runs/32488727758), and
+Cloudflare scheduler CI run
+[`32488727814`](https://github.com/Leokings/liquidity-arena/actions/runs/32488727814) all passed.
+Dependabot alerts and automated security updates, SHA-pin enforcement, required conversation
+resolution, and required browser/operator, contracts, and both CodeQL checks are enabled;
+dependency-graph run `32489288312` succeeded.
+Production GitHub deployment `6022675081` succeeded and Vercel deployment
+`dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx` was READY/PROMOTED at the
+[immutable deployment](https://liquidity-arena-eujqytbxd-leokings588-5902s-projects.vercel.app).
+At that verification checkpoint, the immutable deployment and [public alias](https://liquidity-arena.vercel.app) served
+`/assets/market-CfuCPKfs.js`, 219197 bytes, ETag
+`W/"830736d362d152a9ebb18e01b9b268a1"` for the gzip representation, SHA-256
+`de89b5ae0947c35f384e5de0ff806b774947cf416f5e9dd9c0f7b51848232f87`.
+
+On the preceding PR #21 artifact, production `/healthz`, `/readyz`, and `/api/history-health`
+returned HTTP 200; readiness reported chain `0xf22f`, the exact V7 contract/keeper, and the
+non-blocking 2 GEN liability. The recorded post-merge history snapshot was 39 terminal/39 resolve/0
+timeout operations with zero missing or stale rows; later keeper cycles may advance that count.
+The in-app browser opened
+the exact V7 HIGH claim route for epoch `1787205600` and rendered the exact epoch,
+`RESOLVED · ON-CHAIN`, `VIEW POSITION / CLAIM`, an enabled
+`RECONNECT WALLET TO CLAIM HIGH POSITION`, and a connected Binance stream. The first ten minutes had
+no error-level or HTTP 500 logs. This verifies the deployed route and reconnect UI only: **a live
+user wallet signature, claim transaction, and resulting child transfer remain untested and
+pending**.
+On the replacement artifact, the immutable HIGH and alias LOW epoch-`1787205600` claim routes opened
+the correct dialog/objective/reconnect focus; every background sibling was inert and
+`aria-hidden`. Forward/reverse edge wraps stayed contained for 24 desktop and 12 mobile moves;
+Escape fell back to `#prediction-button`, and selected-orb/backdrop closes restored the exact opener.
+At 412x915 the document and viewport widths were 412, modal bounds were x18..394, the CTA remained
+visible, and there was no horizontal overflow. Both routes had zero site-origin warnings/errors;
+only MetaMask-extension warnings were excluded. No wallet action or signature was submitted.
+
+The post-merge Cloudflare cycle is complete. On the tick scheduled for `2026-08-21T14:37:29Z`, Worker
+version `536e6476-3c4e-4b93-a454-700f55d6cea7` logged `CLOUDFLARE_BACKUP_SKIPPED` at
+`2026-08-21T14:37:30.115Z` for the keeper with
+`current_hour_run_succeeded`: native GitHub scheduled run
+[`32490379141`](https://github.com/Leokings/liquidity-arena/actions/runs/32490379141) on `5ac2c1f`
+passed reconcile job `96796351916` and history job `96797302128`, verifying RESOLVE
+`0x9d808082…b7742` to `RESOLVED` and CREATE `0x6df7394b…945f9` to `OPEN`, with 1 deployment, 3
+epochs, 3 snapshots, and 0 proofs projected. Downstream watchdog run
+[`32490747878`](https://github.com/Leokings/liquidity-arena/actions/runs/32490747878), job
+`96797531668`, succeeded.
+
+The pytest advisory [GHSA-6w46-j5rx-g56g](https://github.com/advisories/GHSA-6w46-j5rx-g56g) was
+fixed by [PR #22](https://github.com/Leokings/liquidity-arena/pull/22), merged at
+`2026-08-21T14:37:16Z` as `e79192eb25294bb59dc0dd31b55dee97085a464f`; the Dependabot alert was
+marked fixed at `2026-08-21T14:38:20Z`.
 
 [PR #15](https://github.com/Leokings/liquidity-arena/pull/15) merged as
 `abef30d7268b34331528c470cc2a06eefe50ba33` at `2026-08-21T07:26:39Z`. It changes V7 to one hourly
@@ -122,9 +197,10 @@ job `96704099506` and history job `96704818464`. It VERIFIED RESOLVE `1787295600
 operation `f55fa63b8e598172435ec284d7eb82e6db2c8aeb6f368188bc6f58452e172252`, transaction
 `0x2075252b008d239da9bee85ff7186b0548da20570db8d319a0ed1ce1d4f25d73`. Both exact post-states
 matched RESOLVED and OPEN, and history synchronized 3/3 epochs/snapshots at
-`2026-08-21T07:45:20.943Z`. The journal is now 64/64 VERIFIED with zero unresolved. Public
-`/api/history-health` returns `200` with 32/32 verified terminal/resolve operations and zero timeout,
-missing, stale, or missing-snapshot rows. Watchdog manual run `32459656268`/job `96703858691` and
+`2026-08-21T07:45:20.943Z`. At that checkpoint the journal was 64/64 VERIFIED with zero unresolved,
+and public history integrity was 32/32. The later Cloudflare cycle recorded a 39/39 snapshot with
+zero timeout, missing, stale, or missing-snapshot rows. Watchdog manual run
+`32459656268`/job `96703858691` and
 automatic `workflow_run` `32460047757`/job `96704995526` both passed. Synthetic failure run
 [`32461072315`](https://github.com/Leokings/liquidity-arena/actions/runs/32461072315), job
 `96707962137`, then passed all production checks, intentionally injected a failure, and opened
@@ -155,14 +231,14 @@ main now keeps only `workflow_dispatch` for that legacy drain.
 | V7 funded canary | Complete: settlement, three claim deliveries, loser rejection, conservation, and fee withdrawal verified |
 | Dedicated V7 keeper rotation | Complete: finalized on-chain and exact config/repository address verified |
 | V7 keeper workflow | Workflow `338089019` is active on minute 27; writer jobs share durable `queue: max`; post-merge run `32459740369` passed both jobs |
-| Public Vercel browser | V7 active and READY; runtime guarantees last changed at source `a1c773a`, while later docs-only publication deployments may own the alias; V6 legacy recovery remains readable with zero known liability |
+| Public Vercel browser | Last runtime-changing checkpoint: source `881e748`, READY production deployment `dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr`, and exact bundle identity verified on alias plus immutable URL at verification; HIGH/LOW desktop/mobile modal focus verification passed with P0/P1/P2 all zero |
 | V6 | Public app/automation new writes disabled; owner creation capability remains and must not be used |
-| Durable settled-epoch history | Repair backfill and integrity health passed: 32 verified V7 resolves, 0 missing/stale/snapshot gaps; outage recovery and broader proof coverage remain pending |
-| Keeper journal | Operational authority active; 64/64 operations VERIFIED, 0 unresolved after the post-soak manual run |
+| Durable settled-epoch history | Artifact/browser snapshot 39/39/0 with zero gaps; later docs validation at `2026-08-21T15:16:17.648Z` observed HTTP 200 ready, journal 3, 40/40/0, zero gaps; outage recovery and broader proof coverage remain pending |
+| Keeper journal | Operational authority active; dated post-soak manual checkpoint 64/64 VERIFIED and 0 unresolved; later cycles have exact per-operation evidence |
 | Active V7 player liability | 2 GEN, representing two eligible unclaimed refunds; reported as an outstanding participant obligation, not a readiness failure |
 | Operations watchdog | Healthy, synthetic-failure, issue-open, recovery, and issue-close paths pass; optional independent pager not configured |
-| Independent backup scheduler | Live and evidenced: keeper run `32473485508`, watchdog run `32473776356`, and minute-57 conditional skip on Worker version `536e6476…cea7` |
-| Claim/refund UX hardening | 2026-08-21 local release candidate only: market 208/208, focused 80/80, Playwright 22/22 (11 `chromium`/`mobile-chromium` journeys, one worker), full 432/432, build 477 modules, audit 0; PR/merge, deploy, and live-wallet evidence remain |
+| Independent backup scheduler | Prior evidence remains valid; the post-merge minute-37 Worker skipped for successful run `32490379141`, downstream watchdog `32490747878` passed, and that run's history snapshot was 39/39/0 with zero gaps |
+| Claim/refund UX hardening | Core UX merged in PR #21. Accessibility PR #26 merged, passed CI/CodeQL, deployed from `881e748`, and passed an independent read-only Codex production focus audit. Gates: market 210/210, focused 7/7, Playwright 24/24, full 434/434, build 477, audit 0; live wallet signature/claim transaction/child transfer remain untested |
 | Proof view | Merged in [PR #6](https://github.com/Leokings/liquidity-arena/pull/6) and present in the current production runtime artifact |
 
 The last fully enumerated pre-journal production artifact was Vercel deployment
@@ -213,8 +289,9 @@ history-health, and proof surfaces returned HTTP 200 after repair. Readiness rep
 player liability as two unclaimed eligible refunds without treating that positive obligation as an
 availability failure.
 
-The last runtime-changing production artifact and synthetic-watchdog evidence checkpoint from PR #16
-was READY and promoted as Vercel deployment `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
+The previous runtime-changing production artifact and synthetic-watchdog evidence checkpoint from
+PR #16, before the PR #21 claim release, was READY and promoted as Vercel deployment
+`dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
 [its immutable URL](https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app), GitHub
 deployment `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main-push CI run
 `32461039766` passed browser/operator job `96707863823` (393/393 tests, 477-module build, audit 0)
@@ -222,8 +299,10 @@ and contracts job `96707864002` (V6/V7 lint and 37 direct tests). Bundle
 `/assets/market-BoHfo81C.js` is 193040 bytes, has ETag
 `"fa10949a324593024ea6c209eb3a0cc3"`, and SHA-256
 `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
-This immutable checkpoint is not a claim that the public alias still targets it: later documentation-only
-publication deployments may supersede the alias without changing the recorded runtime guarantees.
+This immutable checkpoint is not a claim that the public alias still targets it. Later evidence-publication
+deployments may supersede the alias and produce different artifact bytes because the deployment registries are
+serverless build inputs; they do not retroactively change this checkpoint. Any behavior-affecting consumed registry-field
+change requires separate validation.
 
 The 24-target full-day seed covers epoch IDs `1787169600` through `1787252400`. Its first and final
 creation transactions are `0x7b94b2d0…7726` and `0x443afcf7…7677f`; the separate canary epoch
@@ -347,8 +426,9 @@ active workflow write authority; artifacts and caches remain non-authoritative. 
 and the production journal read back eight operations, all VERIFIED, with zero unresolved. Scheduled
 run `32332196428` subsequently verified another exact resolve/create pair; Neon then read back 10/10
 VERIFIED operations with zero unresolved. The dated 24-hour checkpoint later read 62/62 VERIFIED;
-post-merge run `32459740369` added one resolve and one create, producing the current 64/64 VERIFIED
-and zero-unresolved state.
+post-merge run `32459740369` added one resolve and one create, producing a dated 64/64 VERIFIED,
+zero-unresolved checkpoint. Later keeper cycles are evidenced by their exact operations rather than
+an unverified aggregate journal count.
 
 ## Run and verify locally
 
@@ -392,7 +472,8 @@ After public V7 cutover:
    delivery ratio; GitHub-native issue delivery/recovery is proven, while an independent third-party
    pager remains an optional open enhancement; the independent Cloudflare backup is active and its
    keeper-dispatch plus watchdog-skip paths are proven;
-4. merge, deploy, and live-wallet test the claim/refund UX release candidate;
+4. record a live user-wallet signature, claim transaction, and exact child delivery for the deployed
+   claim UX;
 5. retain the active 2 GEN participant obligation and treat ambiguous asynchronous child recovery as
    an unresolved protocol P1; the proposed V8 state machine is documented in
    [the payout-recovery design](docs/V8-PAYOUT-RECOVERY.md);
@@ -422,9 +503,9 @@ The post-soak history repair used three serialized V7-only workflow-dispatch bat
 `32458718433` (3 epochs/snapshots), `32459026957` (2/2), and `32459340292` (2/2). All passed with
 zero proof failures or rejections. The integrity gate changed from 31 verified terminal operations,
 three missing durable epochs, one stale epoch, and zero missing snapshots to 31/31 with zero gaps.
-Manual keeper run `32459740369` then projected 3/3 at `2026-08-21T07:45:20.943Z`; the live integrity
-read-back is now 32 terminal operations, all `resolve_epoch`, with zero timeout, missing, stale, or
-missing-snapshot rows.
+Manual keeper run `32459740369` then projected 3/3 at `2026-08-21T07:45:20.943Z`; that checkpoint's
+integrity read-back was 32 terminal operations, all `resolve_epoch`, with zero timeout, missing,
+stale, or missing-snapshot rows.
 
 Manual authoritative-journal run `32325583494` later passed reconcile job `96296050506` and history
 job `96297112208`. Its history read at `2026-08-20T02:49:02.975Z` synchronized two deployments, two

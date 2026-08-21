@@ -198,6 +198,12 @@ Worker version `536e6476…cea7`: keeper workflow-dispatch run `32473485508` pas
 and 3/3 history projection with VERIFIED RESOLVE `0x62331f…c746` and CREATE `0x310fc6…5445`;
 watchdog run `32473776356` passed; and the following minute-57 invocation logged
 `CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded` instead of duplicating the healthy run.
+The post-merge minute-37 cycle also passes: on the tick scheduled for `2026-08-21T14:37:29Z`, the
+Worker logged the skip at `2026-08-21T14:37:30.115Z` because successful current-hour native GitHub
+scheduled run `32490379141` on `5ac2c1f` had VERIFIED one RESOLVE
+and one CREATE; jobs `96796351916`/`96797302128` projected 1/3/3/0, downstream watchdog
+`32490747878`/`96797531668` passed, and integrity reached 39 terminal, 39 resolve, 0 timeout with zero
+gaps.
 
 Readiness shares the same deployment configuration as the server. For V7 it checks chain, contract
 identity, roles, stake and fee policy, exact-hour coverage, and all five live feeds. V6 legacy and
@@ -205,21 +211,42 @@ active V7 player liability are reported separately and do not turn unreadable va
 zeros. The current V7 liability is 2 GEN across two eligible unclaimed refunds; this is a participant
 obligation and is deliberately non-blocking for service readiness.
 
-As of 2026-08-21, the claim/refund navigation changes in the current worktree are a release
-candidate, not deployed architecture. The pre-modal CTA exposes a truth-labeled aggregate or check
-state; same-deployment navigation remains inside the SPA; cross-deployment navigation explicitly
-reloads and reconnects; and reloads preserve nonsecret exact claim intent. The pre-write quote is
-intent: immediately before writing, the gateway rechecks exact quote identity, wallet account, and
-StudioNet. Finalized actual proceeds must be at least the quote; exact child delivery is verified
-against the actual amount, and activity/recovery stores that actual amount. Aggregates are verified-
-current only after all known rows load and every deployment read succeeds. Incomplete current
-pagination can show an explicit partial lower bound with `LOAD OLDER`;
-failed or refreshing cached deployments instead use neutral `LAST VERIFIED`/`PARTIAL` labels and
-retry controls, never a false `≥` lower bound; a zero-known incomplete result prompts `CHECK`/`RETRY`
-instead of asserting zero eligibility. Local evidence is 208/208 market tests, 80/80 focused claim
-tests, and 22/22 Playwright cases (11 journeys across `chromium`/`mobile-chromium`, Desktop Chrome/
-Pixel 7, one worker), plus 432/432 full tests, a 477-module build, and zero audit findings. PR/merge,
-deploy, and live-wallet evidence remain required.
+As of 2026-08-21, the claim/refund navigation changes are merged and deployed. [PR
+#21](https://github.com/Leokings/liquidity-arena/pull/21) merged at
+`5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475`; CI run
+[`32488727873`](https://github.com/Leokings/liquidity-arena/actions/runs/32488727873), CodeQL run
+[`32488727758`](https://github.com/Leokings/liquidity-arena/actions/runs/32488727758), and Cloudflare
+scheduler CI run [`32488727814`](https://github.com/Leokings/liquidity-arena/actions/runs/32488727814)
+succeeded. Production deployment `dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx` is READY/PROMOTED from that exact
+source. Its pre-modal CTA exposes a truth-labeled aggregate or check state; same-deployment
+navigation remains inside the SPA; cross-deployment navigation explicitly reloads and reconnects;
+and reloads preserve nonsecret exact claim intent. The pre-write quote is intent: immediately before
+writing, the gateway rechecks exact quote identity, wallet account, and StudioNet. Finalized actual
+proceeds must be at least the quote; exact child delivery is verified against the actual amount, and
+activity/recovery stores that actual amount. Aggregates are verified-current only after all known
+rows load and every deployment read succeeds. Incomplete current pagination can show an explicit
+partial lower bound with `LOAD OLDER`; failed or refreshing cached deployments instead use neutral
+`LAST VERIFIED`/`PARTIAL` labels and retry controls, never a false `≥` lower bound; a zero-known
+incomplete result prompts `CHECK`/`RETRY` instead of asserting zero eligibility. Final release
+evidence is 210/210 market tests, 7/7 focused claim tests, 24/24 Playwright cases (12 journeys across
+`chromium`/`mobile-chromium`, Desktop Chrome/Pixel 7, one worker), 434/434 full tests, a 477-module
+build, and zero audit findings. Production browser verification reached the exact V7 HIGH deep link
+for epoch `1787205600` and exposed its enabled reconnect-to-claim action. This does not prove a value
+transfer: a live user-wallet signature, finalized claim transaction, and exact child delivery remain
+untested. The modal focus-containment fix approved by an internal independent Codex diff review merged in [PR
+#26](https://github.com/Leokings/liquidity-arena/pull/26) at `2026-08-21T14:55:40Z` as
+`881e74895a31cb3cf82c078f4252110306684f30`; main CI `32494801072` and CodeQL `32494801089` have
+passed jobs `96810573370`/`96810573060` and `96810573794`/`96810574148`, respectively. Successful
+GitHub deployment `6023788676` and READY Vercel deployment `dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr`
+form the last runtime-changing checkpoint from exact source `881e748`; its verified bundle identity is recorded in the deployment
+registries. Health/readiness are green at exact V7/keeper/coverage/five feeds; the artifact/browser
+history snapshot was 39/39/0 with zero gaps. Later documentation validation at
+`2026-08-21T15:16:17.648Z` observed HTTP 200 ready, journal 3, 40/40/0, and zero gaps. An independent
+read-only Codex immutable-HIGH/alias-LOW desktop/mobile focus audit passed with
+P0/P1/P2 all zero, including containment, wrap, Escape fallback, opener restore, mobile layout,
+and zero site-origin errors. Pytest advisory
+[GHSA-6w46-j5rx-g56g](https://github.com/advisories/GHSA-6w46-j5rx-g56g) was fixed by PR #22 merge
+`e79192eb25294bb59dc0dd31b55dee97085a464f`.
 
 ## Visualization and history
 
@@ -265,9 +292,10 @@ missing snapshots. Serialized V7-only repair runs `32458718433`, `32459026957`, 
 synchronized 3/3, 2/2, and 2/2 epochs/snapshots with no proof failures or rejections and closed all
 four gaps. Manual keeper run `32459740369` then VERIFIED RESOLVE `1787295600` and CREATE
 `1787389200`; dependent history job `96704818464` synchronized 3/3 at
-`2026-08-21T07:45:20.943Z`. The current journal is 64/64 VERIFIED with zero unresolved, and public
-history-health is `200` at 32/32 terminal/resolve operations with zero timeout, missing, stale, or
-missing-snapshot rows.
+`2026-08-21T07:45:20.943Z`. That checkpoint read 64/64 journal operations VERIFIED with zero
+unresolved and 32/32 history integrity. The recorded post-merge public history-health snapshot was
+`200` at 39/39/0 with zero timeout, missing, stale, or missing-snapshot rows; later keeper cycles are recorded by exact
+operations without asserting a new aggregate journal count.
 
 ## V6 compatibility boundary
 
@@ -305,8 +333,9 @@ recorded above.
 The manual canary and two restored scheduled action-bearing cycles raised the dated evidenced live
 read-back total to at least 36 exact-hour epochs: 25 seeded, two local dedicated-keeper creates, and
 nine workflow-created epochs. Neon held 10 journal operations, all VERIFIED, with zero unresolved
-after the second scheduled run. The later 24-hour checkpoint and post-merge manual run supersede
-that operational count with 64/64 VERIFIED and zero unresolved.
+after the second scheduled run. The later 24-hour checkpoint and post-merge manual run superseded
+that operational count with a dated 64/64 VERIFIED, zero-unresolved checkpoint; subsequent exact
+operations are recorded separately.
 
 The funded canary resolved with transaction
 `0xc2c86fdb37da9569e67eae00a15b6864ddab05364e92f4d6c0c4c75d6a4aab66` from four qualified venues.
@@ -361,7 +390,7 @@ issue #17 after an injected failure, and recovery run `32461245006`/job `9670845
 surface, closed the issue, and posted the recovery comment. This proves GitHub-native delivery;
 an independent pager remains an optional enhancement.
 
-The last runtime-changing production artifact and synthetic-watchdog evidence checkpoint was the
+The previous runtime-changing production artifact and synthetic-watchdog evidence checkpoint was the
 READY/PROMOTED Vercel deployment
 `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
 `https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`, GitHub deployment
@@ -370,8 +399,10 @@ READY/PROMOTED Vercel deployment
 direct tests). Bundle `/assets/market-BoHfo81C.js` is 193040 bytes, ETag
 `"fa10949a324593024ea6c209eb3a0cc3"`, SHA-256
 `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
-This immutable checkpoint does not assert that the public alias still targets it; later documentation-only
-publication deployments may supersede the alias without changing the recorded runtime guarantees.
+This immutable checkpoint does not assert that the public alias still targets it. Later evidence-publication
+deployments may supersede the alias and produce different artifact bytes because the deployment registries are
+serverless build inputs; they do not retroactively change this checkpoint. Any behavior-affecting consumed
+registry-field change requires separate validation.
 
 Main commit `958e51743a821606ca78881e6bcc8fb0a34a8e8f` separately extends keeper receipt propagation to
 seven attempts on the same hash, using 315 seconds of outer backoff and no write resubmission; CI run
@@ -400,8 +431,9 @@ delivery.
   GitHub-native alert path and independent Cloudflare keeper-dispatch/watchdog-skip paths are proven,
   while a third-party pager remains optional; live V6 workflow remains disabled at zero player liability;
 - database-outage recovery and proof coverage beyond the selected V7 deployment/canary/fee set;
-- merge/deploy/live-wallet evidence for the claim/refund UX candidate, continued public
-  browser/wallet soak, and a rollback rehearsal that never re-enables V6 writes;
+- a live StudioNet user-wallet signature, finalized claim transaction, and exact child-delivery
+  proof, continued public browser/wallet soak,
+  and a rollback rehearsal that never re-enables V6 writes;
 - live 24-hour timeout evidence and safe asynchronous-child recovery. V7 has no upgrader and no
   safe retry state; this protocol P1 and a proposed V8 idempotent-escrow state machine are documented
   in [the payout-recovery design](docs/V8-PAYOUT-RECOVERY.md);

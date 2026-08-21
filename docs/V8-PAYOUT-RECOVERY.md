@@ -7,6 +7,43 @@ test-token contract and currently reports 2 GEN of player liability across two e
 refunds. Those refunds remain V7 obligations and must not be copied, marked paid, or retried by an
 off-chain operator.
 
+Application-level discovery and routing are a separate concern. Core claim/refund UX from
+[PR #21](https://github.com/Leokings/liquidity-arena/pull/21) merged at
+`2026-08-21T13:47:56Z` as `5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475` and was production-deployed
+through READY/PROMOTED Vercel deployment `dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx`. Production inspection proved
+the exact V7 HIGH epoch-`1787205600` deep link, resolved/on-chain state, visible claim entry, and
+enabled reconnect-to-claim action. It did not include a user wallet signature, claim transaction,
+or child-transfer proof and therefore does not discharge either refund or mitigate the protocol P1.
+
+The four-file modal focus-containment follow-up was approved by an internal independent Codex diff review and merged in
+[PR #26](https://github.com/Leokings/liquidity-arena/pull/26) at `2026-08-21T14:55:40Z` as
+`881e74895a31cb3cf82c078f4252110306684f30`. Its settled evidence is 7/7 focused claim,
+210/210 market, 434/434 full, and 24/24 Playwright cases (12 journeys across
+`chromium`/`mobile-chromium`, Desktop Chrome/Pixel 7, one worker), plus a 477-module build and audit
+0. Successful GitHub deployment `6023788676` and READY Vercel deployment
+`dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr` form the last runtime-changing checkpoint from exact source
+`881e748`; main CI `32494801072` and CodeQL
+`32494801089` passed. An independent read-only Codex desktop/mobile production focus audit passed with
+P0/P1/P2 all zero, but no wallet action or signature was submitted. These UI gates do not establish a
+live signed claim or safe asynchronous-child recovery.
+An evidence-publication successor may move the alias and differ in artifact bytes because the deployment
+registries are serverless build inputs; it does not retroactively alter the last runtime-changing checkpoint.
+
+Post-merge operations evidence is healthy but likewise does not change payout semantics: native
+GitHub scheduled current-hour run `32490379141`, recognized and safe-skipped by Cloudflare, VERIFIED
+its exact RESOLVE and CREATE operations; history job
+`96797302128` synchronized 1 deployment/3 epochs/3 snapshots/0 proofs, watchdog run `32490747878`
+succeeded, and Worker version `536e6476-3c4e-4b93-a454-700f55d6cea7` emitted
+`CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded` on the tick scheduled for
+`2026-08-21T14:37:29Z`, logging at `2026-08-21T14:37:30.115Z`. History integrity
+at that recorded snapshot was 39/39 with zero missing/stale durable rows or snapshots. Later
+documentation validation at `2026-08-21T15:16:17.648Z` observed HTTP 200 ready, journal 3, 40/40/0,
+and zero gaps. Separately, pytest advisory
+[GHSA-6w46-j5rx-g56g](https://github.com/advisories/GHSA-6w46-j5rx-g56g) was fixed by
+[PR #22](https://github.com/Leokings/liquidity-arena/pull/22), merged as
+`e79192eb25294bb59dc0dd31b55dee97085a464f`; the Dependabot alert recorded fixed at
+`2026-08-21T14:38:20Z`.
+
 V7 cannot be repaired in place. `LiquidityArenaV7.py` registers no upgrader and exposes no upgrade
 method; GenLayer contracts without an authorized upgrade path are immutable after construction. See
 the official [GenLayer upgradability documentation](https://docs.genlayer.com/developers/intelligent-contracts/features/upgradability).

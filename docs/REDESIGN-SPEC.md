@@ -184,7 +184,11 @@ The independent Cloudflare backup is now live on Worker version `536e6476…cea7
 keeper run `32473485508`, which passed reconciliation plus 3/3 history projection and VERIFIED
 RESOLVE `0x62331f…c746` and CREATE `0x310fc6…5445`; watchdog run `32473776356` passed. A later
 minute-57 trigger logged `CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded`, proving its
-conditional no-duplicate path.
+conditional no-duplicate path. The post-merge tick scheduled for `2026-08-21T14:37:29Z` logged its
+skip at `2026-08-21T14:37:30.115Z` for successful source-`5ac2c1f` run `32490379141`;
+reconcile/history jobs
+`96796351916`/`96797302128` VERIFIED exact RESOLVE/CREATE post-states and projected 1/3/3/0,
+watchdog `32490747878`/`96797531668` passed, and integrity is 39/39/0 with zero gaps.
 
 ## 9. Visualization
 
@@ -210,7 +214,7 @@ The browser uses an allowlisted deployment registry:
 - pending transaction records retain deployment identity across refresh;
 - finalized V7 and V6 histories are labeled by protocol/address.
 
-As of 2026-08-21, the current worktree adds a prominent pre-modal aggregate claim CTA, same-
+As of 2026-08-21, the deployed runtime adds a prominent pre-modal aggregate claim CTA, same-
 deployment navigation without reload, explicitly labeled cross-deployment reload/reconnect,
 nonsecret exact reload intent, and large in-modal actions. Unrelated asset/balance failures preserve
 valid claims. The pre-write quote is intent: the gateway rechecks exact quote identity, wallet
@@ -219,11 +223,29 @@ quote; exact child delivery is verified against the actual amount, which activit
 Aggregates are verified-current only when all known rows load and every deployment read
 succeeds. Incomplete current pagination may show an explicit partial lower bound with `LOAD OLDER`;
 failed or refreshing cached deployments instead remain neutral `LAST VERIFIED`/`PARTIAL` evidence
-with retry controls and no false `≥` lower bound. It passes 208/208 market tests, 80/80 focused claim
-tests, 22/22 Playwright cases (11 journeys across `chromium`/`mobile-chromium`, Desktop Chrome/Pixel
-7, one worker), 432/432 full tests, a 477-module build, and audit 0. This remains release-candidate
-behavior until merged,
-deployed, and exercised with a live StudioNet wallet.
+with retry controls and no false `≥` lower bound. Final release gates are 210/210 market tests,
+7/7 focused claim tests, 24/24 Playwright cases (12 journeys across
+`chromium`/`mobile-chromium`, Desktop Chrome/Pixel 7, one worker), 434/434 full tests, a 477-module
+build, and audit 0. [PR
+#21](https://github.com/Leokings/liquidity-arena/pull/21) merged this behavior as exact source
+`5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475`; CI, CodeQL, and Cloudflare scheduler CI passed, and
+Vercel deployment `dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx` is READY/PROMOTED. Production browser
+verification proved the exact V7 HIGH epoch-`1787205600` route and enabled reconnect action. A live
+user-wallet signature, finalized claim transaction, and exact child delivery remain untested. The
+modal containment fix approved by an internal independent Codex diff review merged in [PR
+#26](https://github.com/Leokings/liquidity-arena/pull/26) at `2026-08-21T14:55:40Z` as
+`881e74895a31cb3cf82c078f4252110306684f30`. Main CI `32494801072` and CodeQL `32494801089` have
+passed their browser/operator, contracts, JS/TS, and Python jobs. GitHub deployment `6023788676` and
+READY Vercel deployment `dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr` form the last runtime-changing checkpoint
+from exact source `881e748`; health/readiness/history passed at verification. An independent
+read-only Codex immutable-HIGH/alias-LOW desktop/mobile focus audit passed with
+P0/P1/P2 all zero. Pytest advisory
+`GHSA-6w46-j5rx-g56g` is fixed by
+PR #22 merge `e79192e`.
+
+The artifact/browser history snapshot was 39/39/0 with zero gaps. Later documentation validation at
+`2026-08-21T15:16:17.648Z` observed HTTP 200 ready, journal 3, 40 terminal/40 resolve/0 timeout, and
+zero missing, stale, or missing-snapshot gaps. Both observations are time-qualified.
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is operationally drained: due epochs `1787155200`,
 `1787158800`, `1787162400`, and `1787166000` were resolved on 2026-08-19. Supported public app and
@@ -235,10 +257,13 @@ funded canary, exact public readiness, and proof view from merged PR #6 are depl
 soak and rollback discipline remain ongoing obligations. Historical READY schedule-restoration
 artifact `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ` executed first restored run `32329108358`; historical
 stream-hardened runtime `dpl_63B8Hrpd8HyS7CTjitTzEKGKdrWj` is retained as a dated checkpoint. The
-initial post-soak runtime is `dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6` from source `abef30d`. The last
+initial post-soak runtime is `dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6` from source `abef30d`. The previous
 runtime-changing synthetic-watchdog checkpoint is `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` from source
-`a1c773a`. Exact
-identities are recorded below.
+`a1c773a`. The previous core-claim artifact is `dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx` from `5ac2c1f`.
+The last runtime-changing artifact is `dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr` from `881e748`; at its
+verification checkpoint, the immutable deployment and public alias served identical bundle bytes. Exact identities are recorded
+in the deployment registries; production focus verification passed without a wallet action or
+signature.
 
 ## 11. Keeper and readiness
 
@@ -310,8 +335,9 @@ terminal operations with three missing durable epochs, one stale epoch, and zero
 Serialized V7-only repair runs `32458718433`, `32459026957`, and `32459340292` synchronized seven
 epochs/snapshots without proof failures or rejections and closed every gap. Post-merge keeper run
 `32459740369` VERIFIED one resolve and one create and synchronized 3/3 epochs/snapshots; journal
-read-back is 64/64 VERIFIED, zero unresolved, while history-health is HTTP 200 at 32/32 terminal/
-resolve operations and zero missing, stale, or missing-snapshot rows.
+read-back was 64/64 VERIFIED, zero unresolved. The recorded post-merge history-health snapshot is
+HTTP 200 at 39/39 terminal/resolve operations, zero timeouts, and zero missing, stale, or
+missing-snapshot rows.
 
 Monitor public health/readiness, exact-hour coverage, exchange source status, finality lag, keeper
 failures, role/config drift, parent/child delivery, V6 legacy liability, and history ingestion lag.
@@ -367,7 +393,8 @@ Tests and review must cover:
   25 emitted records, with a longest `01:39:05` gap; catch-up run `32439590155` verified four actions;
 - post-soak hardening/repair: PR #15 merged as `abef30d7268b34331528c470cc2a06eefe50ba33`; three repair
   runs closed three missing and one stale durable epoch, and manual run `32459740369` left the journal
-  at 64/64 VERIFIED with history health 32/32 terminal/resolve and zero gaps;
+  at a dated 64/64 VERIFIED checkpoint with history health 32/32 terminal/resolve and zero gaps;
+  the later post-merge history snapshot is 39/39/0 with zero gaps;
 - funded V7 canary: complete—resolution `0xc2c86fdb…ab66`, three exact claim deliveries, expected
   loser rejection, 1.748 GEN conserved, and exact 0.002 GEN fee withdrawal delivered;
 - Neon production migrations: history v1 and keeper-journal v2/v3 applied; six-table/four-index history
@@ -403,15 +430,16 @@ Tests and review must cover:
   `2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709`. Public surfaces return HTTP
   200; active V7 player liability is 2 GEN across two eligible unclaimed refunds and is non-blocking.
 
-- last runtime-changing production artifact and synthetic-watchdog evidence checkpoint:
+- previous runtime-changing production artifact and synthetic-watchdog evidence checkpoint:
   READY/PROMOTED `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
   `https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`, GitHub deployment
   `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`; main CI run `32461039766`
   passed, and `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
   `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
-  This immutable checkpoint does not assert that the public alias still targets it; later
-  documentation-only publication deployments may supersede the alias without changing the recorded
-  runtime guarantees.
+  This immutable checkpoint does not assert that the public alias still targets it. Later evidence-publication
+  deployments may supersede the alias and produce different artifact bytes because the deployment registries
+  are serverless build inputs; they do not retroactively change this checkpoint. Any behavior-affecting
+  consumed registry-field change requires separate validation.
 
 Observed StudioNet finality is not an SLA. The recorded deploy finalized in about 36 seconds, but the
 system always waits for actual finality rather than a timer.

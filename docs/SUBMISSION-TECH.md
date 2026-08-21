@@ -19,23 +19,35 @@ pari-mutuel objectives: highest return (`HIGH`) and lowest return (`LOW`).
 | Stake limits | 0.1–10 GEN per wallet/objective |
 | Evidence | Binance, OKX, Bybit, Gate, KuCoin; at least 3 complete baskets |
 | Operator | Limited epoch-creation keeper; permissionless resolve/timeout; V7 workflow `338089019` active at minute 27 with durable writer queue, V6 workflow `338089016` disabled |
-| Keeper write authority | Active authoritative Neon journal: 64/64 operations VERIFIED, 0 unresolved after the 24-hour checkpoint and post-merge run |
-| Public host | [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app), V7 active/READY; runtime guarantees last changed at source `a1c773a`, while later docs-only publication deployments may own the alias; V6 legacy recovery remains readable |
-| Operations health | Projection integrity 32/32 with zero gaps; live Cloudflare keeper dispatch, downstream watchdog success, and conditional-skip paths pass; independent pager optional |
+| Keeper write authority | Active authoritative Neon journal: dated post-soak manual checkpoint 64/64 VERIFIED and 0 unresolved; later minute-37 cycles independently VERIFIED their exact RESOLVE and CREATE operations |
+| Public host | [liquidity-arena.vercel.app](https://liquidity-arena.vercel.app); last runtime-changing checkpoint was V7 active/READY at exact source `881e74895a31cb3cf82c078f4252110306684f30`, while later evidence-publication successors may move the alias; V6 legacy recovery remains readable |
+| Operations health | Artifact/browser history snapshot 39/39/0 with zero gaps; docs validation at `2026-08-21T15:16:17.648Z` observed HTTP 200 ready, journal 3, 40/40/0, zero gaps; Cloudflare dispatch/watchdog/skip paths pass |
 
-As of 2026-08-21, the current claim/refund UX fix is a release candidate, not the public artifact
-described in this table. Its prominent pre-modal CTA exposes a truth-labeled aggregate or check
-state; it preserves same-deployment wallet sessions, labels cross-deployment reload/reconnect, and
-carries nonsecret exact claim intent through reload. The pre-write quote is intent: immediately
-before writing, the runtime rechecks exact quote identity, wallet account, and StudioNet. Finalized
-actual proceeds must be at least the quote; the exact child plus persisted activity/recovery use that
-actual amount.
+As of 2026-08-21, the core claim/refund UX is merged through
+[PR #21](https://github.com/Leokings/liquidity-arena/pull/21) at exact source
+`5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475` and remains included in the last runtime-changing
+artifact and later evidence-publication successors described in this table. Its prominent pre-modal CTA exposes a truth-labeled aggregate or check state; it preserves
+same-deployment wallet sessions, labels cross-deployment reload/reconnect, and carries nonsecret
+exact claim intent through reload. The pre-write quote is intent: immediately before writing, the
+runtime rechecks exact quote identity, wallet account, and StudioNet. Finalized actual proceeds must
+be at least the quote; the exact child plus persisted activity/recovery use that actual amount.
 Aggregates are verified-current only after all known rows load and all deployment reads succeed;
 failed or refreshing cached deployments remain neutral `LAST VERIFIED`/`PARTIAL` evidence with
-retry controls and no false `≥` lower bound. Local evidence is 208/208 market tests, 80/80 focused
-claim tests, 22/22 Playwright cases (11 journeys across `chromium`/`mobile-chromium`, Desktop
-Chrome/Pixel 7, one worker), 432/432 full tests, a 477-module build, and audit 0. PR/merge,
-deployment, and live-wallet proof remain required.
+retry controls and no false `>=` lower bound. Production browser evidence confirms the exact V7
+HIGH deep link for epoch `1787205600`, its `RESOLVED · ON-CHAIN` state, visible
+`VIEW POSITION / CLAIM`, and enabled `RECONNECT WALLET TO CLAIM HIGH POSITION` action. It does not
+include a user wallet signature, claim transaction, or child-transfer proof.
+
+The four-file modal focus-containment follow-up approved by an internal independent Codex diff review merged in
+[PR #26](https://github.com/Leokings/liquidity-arena/pull/26) at `2026-08-21T14:55:40Z` as
+`881e74895a31cb3cf82c078f4252110306684f30`, from head commit
+`fdbea7a96eb130aaf616f6c7ab76e9386b55ec39`. Its settled release evidence is 210/210 market
+tests, 7/7 focused claim tests, 24/24 Playwright cases (12 journeys across
+`chromium`/`mobile-chromium`, Desktop Chrome/Pixel 7, one worker), 434/434 full tests, a
+477-module build, and audit 0. Main CI `32494801072` passed jobs
+`96810573370`/`96810573060`, and CodeQL `32494801089` passed jobs
+`96810573794`/`96810574148`. The replacement production artifact is recorded below; live browser
+verification of the focus behavior by an independent read-only Codex browser audit passed with P0/P1/P2 all zero.
 
 V6 `0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1` is retained for historical reads, eligible
 resolves/timeouts, and claims. Its due epochs `1787155200` and `1787158800` were resolved on
@@ -148,6 +160,32 @@ historical context and do not reset with the hourly wager round.
 - watchdog manual `32459656268` and automatic `32460047757` healthy-path runs passed; synthetic
   failure `32461072315` opened issue #17, while recovery `32461245006`/`96708451794` rechecked all
   surfaces, commented, and closed it. An independent third-party pager remains optional;
+- core claim UX PR #21 merged at `2026-08-21T13:47:56Z`; CI run `32488727873`, CodeQL run
+  `32488727758`, Cloudflare scheduler CI run `32488727814`, and production GitHub deployment
+  `6022675081` all succeeded. READY/PROMOTED Vercel deployment
+  `dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx` remains at immutable URL
+  `https://liquidity-arena-eujqytbxd-leokings588-5902s-projects.vercel.app`. At its verification
+  checkpoint, the public alias also targeted source `5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475`. Exact bundle
+  `/assets/market-CfuCPKfs.js` is 219197 bytes with SHA-256
+  `de89b5ae0947c35f384e5de0ff806b774947cf416f5e9dd9c0f7b51848232f87` and identical alias/immutable
+  gzip ETag `W/"830736d362d152a9ebb18e01b9b268a1"`;
+- post-merge native GitHub scheduled current-hour run `32490379141` succeeded on source `5ac2c1f`, with reconcile
+  job `96796351916` and history job `96797302128`. It VERIFIED RESOLVE operation
+  `371dec560c77bde5610b57ae7637f2dcbba0c740e4b73d64453a5450c4d06a78` as transaction
+  `0x9d808082d5671911279f581dc7acdeeaad9f9b6b1e1421af40b71dd3e81b7742` and post-state RESOLVED,
+  then CREATE operation `55c4a181c56b92f33aa4291473d82a571b2658ab51503b1503906bb085d295c1` as transaction
+  `0x6df7394bbd77027968a8924bdeb5f9649792e391eed8bc42438b2535f1f945f9` and post-state OPEN. The
+  history job synchronized 1 deployment, 3 epochs, 3 snapshots, and 0 proofs without rejection;
+  watchdog run `32490747878`/job `96797531668` succeeded, and Worker version
+  `536e6476-3c4e-4b93-a454-700f55d6cea7` emitted
+  `CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded` on the tick scheduled for
+  `2026-08-21T14:37:29Z`, logging at `2026-08-21T14:37:30.115Z`. History
+  integrity at that snapshot was 39/39 verified V7 terminal/resolve operations, with zero timeout, missing durable,
+  stale, or missing-snapshot rows;
+- pytest advisory [GHSA-6w46-j5rx-g56g](https://github.com/advisories/GHSA-6w46-j5rx-g56g) was
+  fixed at pytest 9.1.1 by [PR #22](https://github.com/Leokings/liquidity-arena/pull/22), merged at
+  `2026-08-21T14:37:16Z` as `e79192eb25294bb59dc0dd31b55dee97085a464f`; the Dependabot alert
+  recorded fixed at `2026-08-21T14:38:20Z`;
 - historical first-restored-run artifact was READY Vercel deployment
   `dpl_BDKvcX8E2qraEjsUen2b9Lv2gwnJ`, GitHub deployment `5994871034`, source
   `81850e3c814cd541d392fdeecf4dacca753d25e6`, bundle `/assets/market-BQWvq82y.js` (188376 bytes),
@@ -164,14 +202,16 @@ historical context and do not reset with the hourly wager round.
   deployment `6017361124`, source `abef30d7268b34331528c470cc2a06eefe50ba33`; bundle
   `/assets/market-B8kYJwYW.js` is 191540 bytes with SHA-256
   `2dd2d533907116437e6b013abb5e7248fd606efc262988c1f531b3968378c709`;
-- last runtime-changing production artifact and synthetic-watchdog evidence checkpoint was
+- previous runtime-changing production artifact and synthetic-watchdog evidence checkpoint was
   READY/PROMOTED Vercel deployment
   `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K`, GitHub deployment `6017754639`, source
   `a1c773ae36a882c043c6b167a1324d1d558ac60f`; main CI `32461039766` passed, and bundle
   `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
   `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`; this immutable checkpoint
-  does not assert that the public alias still targets it, because later documentation-only publication
-  deployments may supersede the alias without changing the recorded runtime guarantees;
+  does not assert that the public alias still targets it. Later evidence-publication deployments may supersede
+  the alias and produce different artifact bytes because the deployment registries are serverless build inputs;
+  they do not retroactively change this checkpoint, and behavior-affecting consumed registry fields require
+  separate validation;
 - historical scheduled V6 drain run `32297047031` completed successfully without creating any epoch;
   the later zero-liability audit retired recurring execution and live workflow `338089016` is now
   `disabled_manually`;
@@ -234,13 +274,14 @@ production-safety claim:
   and workflow `338089019` is active, while V6 workflow `338089016` remains disabled. Restored
   scheduled runs `32329108358` and `32332196428` each passed with two VERIFIED operations and green
   history. The later 24-hour delivered-run audit, projection repair/integrity gate, and GitHub-native
-  watchdog delivery/recovery are complete. Cloudflare Worker version `536e6476…cea7` subsequently
-  dispatched keeper run `32473485508` (VERIFIED RESOLVE `0x62331f…c746`, CREATE
-  `0x310fc6…5445`, and 3/3 history); downstream `workflow_run` watchdog `32473776356` succeeded;
-  the Worker then logged
-  `CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded` at minute 57. GitHub schedule delivery
-  (25/52 nominal records), live timeout evidence, and rollback rehearsal remain; independent
-  third-party paging is optional;
+  watchdog delivery/recovery are complete. Cloudflare Worker version
+  `536e6476-3c4e-4b93-a454-700f55d6cea7` recognized and safe-skipped successful native scheduled current-hour run `32490379141`, whose
+  exact RESOLVE and CREATE operations finalized VERIFIED and whose history job synchronized 1/3/3/0
+  deployment/epochs/snapshots/proofs; watchdog `32490747878` succeeded. The Worker then logged
+  `CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded` on the tick scheduled for
+  `2026-08-21T14:37:29Z`, logging at `2026-08-21T14:37:30.115Z`. History
+  integrity at that snapshot was 39/39 with zero gaps. GitHub schedule delivery (25/52 nominal records), live timeout
+  evidence, and rollback rehearsal remain; independent third-party paging is optional;
 - active V7 player liability is 2 GEN across two eligible unclaimed refunds; it is an outstanding
   participant obligation and intentionally does not fail service readiness;
 - ambiguous V7 child-transfer recovery is an unresolved protocol P1. V7 is immutable; the proposed
@@ -259,7 +300,7 @@ must be told that StudioNet is temporary test infrastructure and faucet GEN has 
 3. Monitor minute-27 GitHub and the live Cloudflare backup while preserving scheduled
    journal/coverage/finality/role checks and V6's disabled zero-liability posture; optionally add an
    independent third-party pager.
-4. Merge/deploy the claim/refund UX candidate and record a live StudioNet wallet journey.
+4. Record a live StudioNet wallet claim journey.
 5. Record a 24-hour timeout proof or clearly retain it as a known demo limitation.
 6. Resolve or formally accept the V7 child-recovery P1 before any real-value claim.
 7. Complete independent security and provider/legal review, screenshots, demo video, repository
@@ -288,14 +329,44 @@ V7/keeper/coverage, and zero V6 liability.
 The initial post-soak runtime was `dpl_JBPdit52XBSuc5GgcfCQ4fpg77K6` at
 `https://liquidity-arena-oadqjhtxc-leokings588-5902s-projects.vercel.app`, GitHub deployment
 `6017361124`, source `abef30d7268b34331528c470cc2a06eefe50ba33`. Public surfaces return HTTP
-200 after repair; history integrity is 32/32 with zero gaps, and readiness reports the non-blocking
+200 after repair; history integrity at that checkpoint was 32/32 with zero gaps, and readiness reports the non-blocking
 2 GEN outstanding active-player liability.
 
-The last runtime-changing production artifact and synthetic-watchdog evidence checkpoint was
+The previous runtime-changing production artifact and synthetic-watchdog evidence checkpoint was
 `dpl_9DpV89rJGbSJYFo3JgMMbemtPv6K` at
 `https://liquidity-arena-g2v4zho35-leokings588-5902s-projects.vercel.app`, GitHub deployment
 `6017754639`, source `a1c773ae36a882c043c6b167a1324d1d558ac60f`. Main-push CI `32461039766`
 passed; bundle `/assets/market-BoHfo81C.js` is 193040 bytes with SHA-256
 `82ad96f1de5080b13389ee5afa88f78c595bb26c1d920437b7304215dfdcf6aa`.
-This immutable checkpoint does not assert that the public alias still targets it; later documentation-only
-publication deployments may supersede the alias without changing the recorded runtime guarantees.
+This immutable checkpoint does not assert that the public alias still targets it. Later evidence-publication
+deployments may supersede the alias and produce different artifact bytes because the deployment registries are
+serverless build inputs; they do not retroactively change this checkpoint. Any behavior-affecting consumed
+registry-field change requires separate validation.
+
+The previous core-claim production artifact is READY/PROMOTED deployment
+`dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx` at
+`https://liquidity-arena-eujqytbxd-leokings588-5902s-projects.vercel.app`, GitHub deployment
+`6022675081`, exact source `5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475`. Its exact
+`/assets/market-CfuCPKfs.js` bundle is 219197 bytes with SHA-256
+`de89b5ae0947c35f384e5de0ff806b774947cf416f5e9dd9c0f7b51848232f87`; the immutable URL and public
+alias returned identical gzip ETag `W/"830736d362d152a9ebb18e01b9b268a1"`. Health, readiness, and
+history-health returned HTTP 200, and production route inspection confirmed the exact V7 HIGH claim
+intent/reconnect surface without signing a wallet transaction. This artifact predates merged PR
+#26's approved focus-containment fix. Its replacement artifact identity and focus verification are
+recorded below.
+
+The PR #26 last runtime-changing checkpoint is successful GitHub deployment `6023788676` and READY production Vercel
+deployment `dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr`, build `bld_6ru8isp7p`, at
+`https://liquidity-arena-7bkvfta05-leokings588-5902s-projects.vercel.app`, exact source
+`881e74895a31cb3cf82c078f4252110306684f30`, and Node 24.x. At its verification checkpoint, the
+public alias and immutable URL served identical `/assets/market-Cbg1BCfB.js` bytes: 225141 bytes, SHA-256
+`33a2cfa7b48970660b09bf8b3a455dd3740f09efe65f0e33b5a0707321f95bbf`, ETag
+`"7e1bea4635aa5da15eae5805c486d4c1"`; HTML is 17986 bytes. Production focus verification passed.
+Health is OK; readiness matches exact V7/keeper/coverage/five feeds and reports the 2 GEN liability
+as non-blocking. The artifact/browser history snapshot was ready at schema 1/journal 3 with 39/39/0
+and zero gaps; later documentation validation at `2026-08-21T15:16:17.648Z` observed HTTP 200 ready,
+journal 3, 40/40/0, and zero gaps. Immutable HIGH and alias LOW epoch-`1787205600`
+routes passed dialog/objective/reconnect focus, sibling inert/`aria-hidden`, 24 desktop/12 mobile
+edge-wrap moves, Escape fallback, exact opener restore, 412x915 no-overflow layout with visible CTA,
+and zero site-origin warnings/errors. The internal read-only Codex audit verdict was P0=0/P1=0/P2=0; no wallet action
+or signature was submitted.
