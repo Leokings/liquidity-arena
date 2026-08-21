@@ -24,14 +24,57 @@ test('same-deployment claim navigation is an in-app replace, not a wallet-breaki
 
 test('reload claim intent exposes an accessible reconnect and claim focus target', () => {
   assert.match(htmlSource, /id="wallet-position"[^>]*tabindex="-1"/);
+  assert.match(htmlSource, /class="prediction-modal"[^>]*role="dialog"[^>]*aria-modal="true"[^>]*tabindex="-1"/);
   assert.match(htmlSource, /class="claim-reconnect" id="claim-reconnect" type="button" hidden/);
   assert.match(htmlSource, /class="claim-wager" id="claim-wager" type="button"/);
   assert.match(htmlSource, /class="position-refresh" id="position-refresh" type="button" hidden/);
-  assert.match(appSource, /if \(this\.pendingClaimIntent\) \$\('#prediction-modal'\)\.hidden = false/);
+  assert.match(appSource, /if \(this\.pendingClaimIntent\) \{\s*this\._showModal\('prediction-modal', \{ initialFocus: '#claim-reconnect' \}\)/);
   assert.match(appSource, /RECONNECT WALLET TO CLAIM \$\{this\.pendingClaimIntent\.objective\} POSITION/);
   assert.match(appSource, /section\?\.scrollIntoView/);
   assert.match(appSource, /focusTarget\?\.focus\(\{ preventScroll: true \}\)/);
   assert.match(appSource, /positionRefresh\.hidden = !this\.gateway\.connected \|\| !this\.positionReadError/);
+});
+
+test('claim modal traps keyboard focus and isolates every background sibling', () => {
+  const modalSupport = appSource.slice(
+    appSource.indexOf('  _modalRecord(modalId) {'),
+    appSource.indexOf('  _updateClock() {'),
+  );
+  assert.match(modalSupport, /this\.modalStack\.at\(-1\)/);
+  assert.match(modalSupport, /element\.toggleAttribute\('inert', inert\)/);
+  assert.match(modalSupport, /original\.element\.setAttribute\('aria-hidden', 'true'\)/);
+  assert.match(modalSupport, /record\.dialog\.querySelectorAll\(MODAL_FOCUSABLE_SELECTOR\)/);
+  assert.match(modalSupport, /if \(event\.key !== 'Tab'\) return/);
+  assert.match(modalSupport, /event\.shiftKey \? -1 : 1/);
+  assert.match(modalSupport, /record\.dialog\.contains\(event\.target\)/);
+  assert.match(modalSupport, /event\.stopImmediatePropagation\(\)/);
+  assert.match(appSource, /document\.addEventListener\('keydown',[\s\S]*?, true\)/);
+  assert.match(appSource, /document\.addEventListener\('focusin',[\s\S]*?, true\)/);
+  assert.match(appSource, /document\.addEventListener\('click',[\s\S]*?, true\)/);
+});
+
+test('modal close and async claim focus are generation-safe and restore the exact opener', () => {
+  const modalSupport = appSource.slice(
+    appSource.indexOf('  _showModal(modalId,'),
+    appSource.indexOf('  _updateClock() {'),
+  );
+  const predictionLifecycle = appSource.slice(
+    appSource.indexOf('  async openPrediction(opener = null) {'),
+    appSource.indexOf('  _updateSubmitButton() {'),
+  );
+  assert.match(modalSupport, /record\.opener = candidate instanceof HTMLElement/);
+  assert.match(modalSupport, /record\.generation \+= 1/);
+  assert.match(modalSupport, /originalLayerState[\s\S]*?this\._setElementInert\(record\.layer, originalLayerState\.inert\)/);
+  assert.match(modalSupport, /record\.generation !== closeGeneration \|\| !record\.layer\.hidden/);
+  assert.match(modalSupport, /underlying\.dialog\.contains\(opener\)/);
+  assert.match(predictionLifecycle, /opener,\s*initialFocus: '\.prediction-modal \.modal-close'/);
+  assert.match(predictionLifecycle, /record\.generation !== modalGeneration \|\| record\.layer\.hidden/);
+  assert.doesNotMatch(
+    predictionLifecycle.slice(predictionLifecycle.indexOf('await this._loadRound();')),
+    /this\._focusModal/,
+  );
+  assert.match(predictionLifecycle, /if \(this\._hideModal\('prediction-modal'\)\) this\._clearClaimIntentRoute\(\)/);
+  assert.match(appSource, /const modalGeneration = record\.generation;[\s\S]*?record\.generation !== modalGeneration/);
 });
 
 test('claim summary and partial-history recovery have explicit accessible semantics', () => {
