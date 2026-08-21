@@ -166,6 +166,16 @@ scheduled projection, manual history repair, and proof backfill writers all shar
 every gate, and the Neon fenced lease remains the distributed writer authority. A projection job
 must not run after a blocked keeper CLI result.
 
+The independent backup implementation is documented at
+[`ops/cloudflare-keeper-scheduler/README.md`](../ops/cloudflare-keeper-scheduler/README.md). It is a
+Cron-only Cloudflare Worker: minute 37 checks whether the current UTC hour already has an active or
+successful `main` keeper run before conditionally dispatching `studionet-v7-keeper.yml`; minute 57
+does the same for `studionet-ops-watchdog.yml`. Use a new fine-grained GitHub token limited to this
+repository with Actions read/write, stored only through Wrangler's hidden Cloudflare-secret prompt.
+Never provide Cloudflare with the keeper keystore/password, journal secret, Neon URL, owner key, or
+treasury key. Production activation requires Worker deployment, exact Cron Trigger readback, one
+observed `:37`/`:57` cycle, and downstream workflow/journal/history/issue verification.
+
 Environment: `studionet-keeper`
 
 Repository environment variables:

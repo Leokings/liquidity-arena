@@ -19,6 +19,7 @@ permissionless resolve/timeouts.
 | Authoritative keeper journal | Neon-backed fenced global signer lease and append-only pending-operation/hash recovery boundary; it gates keeper writes but never settlement outcomes |
 | Durable history projection | Neon-backed copy of settled public state for browsing and operations; migration, repeated V7/V6 projection, and selected V7 proof backfill passed, outage recovery and broader proof coverage remain pending, and it is never settlement authority |
 | Operations watchdog | GitHub-native checks of readiness, projection integrity, journal health, and keeper recency/conclusion; synthetic issue open/recovery/close delivery is proven; an independent pager is optional and not configured |
+| Backup scheduler | Cron-only Cloudflare Worker checks current-hour GitHub keeper/watchdog runs and conditionally invokes their existing `workflow_dispatch` entry points; it has no GenLayer, Neon, journal, owner, treasury, or keeper credential |
 
 GenLayer validators and the V7 contract are the settlement authority. The live stream, API cache,
 browser animation, keeper plan, and database projection cannot choose or alter a winner.
@@ -183,6 +184,16 @@ observed gap was `01:39:05`. Catch-up run `32439590155` verified four actions sa
 merge `abef30d7268b34331528c470cc2a06eefe50ba33`, replaced that cadence with minute 27 and added
 `queue: max` to the shared concurrency group for all chain/history writers. The queue prevents the
 default pending-run replacement behavior; Neon remains the cross-run fencing authority.
+
+The independent backup scheduler lives in
+[`ops/cloudflare-keeper-scheduler`](ops/cloudflare-keeper-scheduler/README.md). GitHub's minute-27
+keeper and minute-47 watchdog schedules remain primary. At minutes 37 and 57 UTC, Cloudflare lists
+the corresponding `main` workflow runs and skips when the current hour already has an active or
+successful run. Absence or failed runs trigger the existing workflow on `main`. A network failure,
+HTTP 429, or GitHub 5xx errs toward dispatch; HTTP 401/403/404 stops as a configuration fault. Any
+late duplicate is serialized by `queue: max`, fenced by the Neon journal, and revalidated against
+contract state.
+The Worker is a trigger only and cannot sign a transaction.
 
 Readiness shares the same deployment configuration as the server. For V7 it checks chain, contract
 identity, roles, stake and fee policy, exact-hour coverage, and all five live feeds. V6 legacy and

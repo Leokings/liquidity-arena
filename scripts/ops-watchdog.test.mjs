@@ -38,7 +38,11 @@ function healthyFetch(requests) {
       return response({ status: 'ready', ready: true, database: { schemaVersion: 3 } });
     }
     if (parsed.pathname.endsWith('/actions/workflows/studionet-v7-keeper.yml/runs')) {
-      return response({ workflow_runs: [{ created_at: '2026-08-21T06:00:00.000Z', conclusion: 'success' }] });
+      return response({ workflow_runs: [{
+        created_at: '2026-08-21T06:00:00.000Z',
+        conclusion: 'success',
+        event: 'schedule',
+      }] });
     }
     throw new Error(`unexpected URL ${parsed}`);
   };
@@ -83,7 +87,11 @@ test('watchdog fails on a failed workflow event, stale schedule, and degraded hi
         return response({ status: 'degraded', database: { ready: false, integrity: { ready: false } } }, 503);
       }
       if (parsed.pathname.endsWith('/actions/workflows/studionet-v7-keeper.yml/runs')) {
-        return response({ workflow_runs: [{ created_at: '2026-08-21T03:00:00.000Z', conclusion: 'success' }] });
+        return response({ workflow_runs: [{
+          created_at: '2026-08-21T03:00:00.000Z',
+          conclusion: 'success',
+          event: 'schedule',
+        }] });
       }
       return fetchImpl(url, options);
     },
@@ -94,7 +102,7 @@ test('watchdog fails on a failed workflow event, stale schedule, and degraded hi
   assert.equal(result.checks.length, 5);
   assert.equal(result.checks.find(({ name }) => name === 'keeper workflow event').ok, false);
   assert.equal(result.checks.find(({ name }) => name === 'durable history integrity').ok, false);
-  assert.equal(result.checks.find(({ name }) => name === 'recent scheduled keeper run').ok, false);
+  assert.equal(result.checks.find(({ name }) => name === 'recent successful keeper reconciliation').ok, false);
   assert.match(watchdogMarkdown(result), /Overall: \*\*FAIL\*\*/);
 });
 
@@ -111,10 +119,13 @@ test('watchdog stays degraded when the latest scheduled keeper run failed', asyn
       const parsed = new URL(url);
       if (parsed.pathname.endsWith('/actions/workflows/studionet-v7-keeper.yml/runs')) {
         assert.equal(parsed.searchParams.get('status'), 'completed');
+        assert.equal(parsed.searchParams.get('branch'), 'main');
+        assert.equal(parsed.searchParams.has('event'), false);
         return response({
           workflow_runs: [{
             created_at: '2026-08-21T06:30:00.000Z',
             conclusion: 'failure',
+            event: 'schedule',
           }],
         });
       }
@@ -124,9 +135,42 @@ test('watchdog stays degraded when the latest scheduled keeper run failed', asyn
   });
 
   assert.equal(result.healthy, false);
-  const schedule = result.checks.find(({ name }) => name === 'recent scheduled keeper run');
+  const schedule = result.checks.find(({ name }) => name === 'recent successful keeper reconciliation');
   assert.equal(schedule.ok, false);
   assert.match(schedule.detail, /conclusion=failure/);
+});
+
+test('watchdog accepts a recent successful Cloudflare workflow dispatch reconciliation', async () => {
+  const requests = [];
+  const fetchImpl = healthyFetch(requests);
+  const result = await runOpsWatchdog({
+    appUrl: 'https://liquidity-arena.example.test',
+    journalUrl: 'https://liquidity-arena.example.test/api/keeper-journal',
+    journalSecret: SECRET,
+    githubRepository: 'Leokings/liquidity-arena',
+    githubToken: 'github-token-value-long-enough',
+    fetchImpl: async (url, options) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.endsWith('/actions/workflows/studionet-v7-keeper.yml/runs')) {
+        assert.equal(parsed.searchParams.get('branch'), 'main');
+        assert.equal(parsed.searchParams.has('event'), false);
+        return response({
+          workflow_runs: [{
+            created_at: '2026-08-21T06:45:00.000Z',
+            conclusion: 'success',
+            event: 'workflow_dispatch',
+          }],
+        });
+      }
+      return fetchImpl(url, options);
+    },
+    now: () => NOW,
+  });
+
+  assert.equal(result.healthy, true);
+  const reconciliation = result.checks.find(({ name }) => name === 'recent successful keeper reconciliation');
+  assert.equal(reconciliation.ok, true);
+  assert.match(reconciliation.detail, /event=workflow_dispatch/);
 });
 
 test('watchdog labels a synthetic alert exercise without misreporting a keeper failure', async () => {

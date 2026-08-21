@@ -68,6 +68,14 @@ records (48.08%), with a longest observed gap of `01:39:05`. Catch-up run
 [`32439590155`](https://github.com/Leokings/liquidity-arena/actions/runs/32439590155) safely verified
 four actions through the journal.
 
+The post-checkpoint mitigation is a Cron-only Cloudflare Worker in
+[`ops/cloudflare-keeper-scheduler`](ops/cloudflare-keeper-scheduler/README.md). GitHub remains the
+primary scheduler at minute 27; Cloudflare checks at minute 37 and dispatches the existing keeper
+workflow only if the current UTC hour has no active or successful reconciliation. It independently
+checks the watchdog at minute 57. Cloudflare receives only a one-repository GitHub Actions dispatch
+token—never a keeper key, journal secret, Neon credential, or contract authority. Activation and
+first-trigger evidence must be recorded after the Worker is deployed.
+
 [PR #15](https://github.com/Leokings/liquidity-arena/pull/15) merged as
 `abef30d7268b34331528c470cc2a06eefe50ba33` at `2026-08-21T07:26:39Z`. It changes V7 to one hourly
 minute-27 trigger, gives all serialized writer workflows a durable `queue: max` concurrency queue,
@@ -126,6 +134,7 @@ main now keeps only `workflow_dispatch` for that legacy drain.
 | Keeper journal | Operational authority active; 64/64 operations VERIFIED, 0 unresolved after the post-soak manual run |
 | Active V7 player liability | 2 GEN, representing two eligible unclaimed refunds; reported as an outstanding participant obligation, not a readiness failure |
 | Operations watchdog | Healthy, synthetic-failure, issue-open, recovery, and issue-close paths pass; optional independent pager not configured |
+| Independent backup scheduler | Cloudflare Worker implementation and tests are present; production activation/first-trigger evidence is pending |
 | Proof view | Merged in [PR #6](https://github.com/Leokings/liquidity-arena/pull/6) and present in the current production runtime artifact |
 
 The last fully enumerated pre-journal production artifact was Vercel deployment
