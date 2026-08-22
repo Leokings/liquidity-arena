@@ -20,9 +20,9 @@ RELEASE = ROOT / "contracts" / "LiquidityArenaV8.release.py"
 MINIFIER_VERSION = "3.2.0"
 MAX_RELEASE_BYTES = 45_000
 DEPENDS = '# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }'
-FACTORY = "0x944fdadd826c2a159c63cb100db174716ccd1317"
+FACTORY = "0xc812709d267372ad7e06807bf0a4d451ed263a30"
 ANCHOR_NAMES = {
-    "SUPPORTED_ESCROW_CHAIN_IDS",
+    "AUDITED_PAYOUT_FACTORY_CHAIN_ID",
     "AUDITED_PAYOUT_FACTORY_4221",
 }
 ERROR_HELPERS = {
@@ -258,7 +258,7 @@ def build_release(source_text: str) -> bytes:
     )
     prefix = (
         DEPENDS
-        + "\nSUPPORTED_ESCROW_CHAIN_IDS = (4_221,)"
+        + "\nAUDITED_PAYOUT_FACTORY_CHAIN_ID = 4_221"
         + f'\nAUDITED_PAYOUT_FACTORY_4221 = "{FACTORY}"\n'
     )
     release = (prefix + compact.rstrip() + "\n").encode("utf-8")
@@ -291,7 +291,7 @@ def build_release_once_more(source_text: str, renames: dict[str, str]) -> bytes:
     )
     return (
         DEPENDS
-        + "\nSUPPORTED_ESCROW_CHAIN_IDS = (4_221,)"
+        + "\nAUDITED_PAYOUT_FACTORY_CHAIN_ID = 4_221"
         + f'\nAUDITED_PAYOUT_FACTORY_4221 = "{FACTORY}"\n'
         + compact.rstrip()
         + "\n"

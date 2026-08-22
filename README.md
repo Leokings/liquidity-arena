@@ -10,11 +10,11 @@ Liquidity Arena is a GenLayer testnet market game for hourly BTC, ETH, BNB, SOL,
 | EVM chain | `4221` (`0x107d`) |
 | Protocol | `LIQUIDITY_ARENA_V8` |
 | Settlement policy | `CRYPTO_SPOT_1M_MEDIAN_V1` |
-| V8 intelligent contract | `0xe6aa95e551f8407b139474ec60c2012e4cc8a6cd` |
-| V8 deployment transaction | `0x955ec665a7f9a1ee7c7d9dabcac603d5eaba12fefd5eb0e5b738708daaa58e27` |
-| Payout factory | `0x944fdadd826c2a159c63cb100db174716ccd1317` |
-| Factory bind transaction | `0xc51b7ebb2755f6303a5a1d2959055461eb8a78f2889177f6d83abbb7ef29f7e4` |
-| V8 release source SHA-256 | `160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa` |
+| V8 intelligent contract | `0x06b643f94003e51c6dc47e89524e7fd045630549` |
+| V8 deployment transaction | `0xe024e26a5d439858a6505b7f704d778c56ae9b1ccbf95e08f629fff9c762de64` |
+| Payout factory | `0xc812709d267372ad7e06807bf0a4d451ed263a30` |
+| Factory bind transaction | `0x72a0ce9d8dc5961292381d536910d9d39f703c26c5f8619e48972500df502717` |
+| V8 release source SHA-256 | `1e7545f8f0fd121d64f3565675ac8f541d0ba8274abbde60db0dd02d7d777db5` |
 | V8 schema SHA-256 | `c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4` |
 
 The V8 deployment and one-time EVM factory binding are finalized. Reserve funding, payout activation, risk enablement, and public routing remain fail-closed until their rollout gates complete.
@@ -82,10 +82,12 @@ V6 and V7 are not runtime fallbacks. Their contract sources and deployment evide
 ## Current rollout order
 
 1. Finalize V8 deployment and factory binding.
-2. Fund the delivery reserve.
-3. Activate payout rails with risk still paused.
-4. Apply migration 004 and deploy the V8-only app/history/keeper surfaces.
-5. Verify the payout and withdrawal lifecycle.
-6. Resume new risk and confirm readiness, history health, and scheduler health.
+2. Apply migration 004 and freeze the V8-only app/history/keeper surfaces.
+3. Fund the delivery reserve.
+4. Activate payout rails with risk still paused.
+5. Resume new risk under the explicit faucet-testnet authorization and deploy the V8-only surfaces.
+6. Create future epochs and confirm readiness, history health, and scheduler health.
+7. Exercise the live payout and withdrawal lifecycle when a position becomes claimable; this is not
+   claimed as a pre-resume gate for the present testnet cutover.
 
 All addresses and tokens in this repository are for testnet operation only.

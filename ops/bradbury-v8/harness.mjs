@@ -53,6 +53,7 @@ export const V8_POLICY_VERSION = 'CRYPTO_SPOT_1M_MEDIAN_V1';
 export const PAYOUT_PROTOCOL_VERSION = 'IDEMPOTENT_EVM_VAULT_V1';
 export const BIND_REQUEST_SCHEMA = 'liquidity-arena-bradbury-bind-request-v1';
 export const ACTIVATION_TERMINAL_STAGE = 'PAYOUTS_ACTIVE_RISK_PAUSED';
+export const RISK_ACTIVE_STAGE = 'RISK_ACTIVE';
 export const MAX_TRANSACTION_GAS_COST_ATTO = 30_000_000_000_000_000n;
 // Read-only Bradbury probes on 2026-08-22 placed the current transaction
 // pubdata boundary between 53,316 and 53,348 outer calldata bytes. These are
@@ -69,7 +70,7 @@ const HASH_PATTERN = /^0x[\da-f]{64}$/i;
 const SHA256_PATTERN = /^[\da-f]{64}$/i;
 const DECIMAL_PATTERN = /^(?:0|[1-9]\d*)$/;
 const SOURCE_ANCHOR_PATTERN = /^AUDITED_PAYOUT_FACTORY_4221 = ["'](0x[\da-f]{40})["']\s*$/gmi;
-const SUPPORTED_CHAIN_PATTERN = /^SUPPORTED_ESCROW_CHAIN_IDS = \(4_221,\)\s*$/m;
+const PAYOUT_FACTORY_CHAIN_PATTERN = /^AUDITED_PAYOUT_FACTORY_CHAIN_ID = 4_221\s*$/m;
 export const NEW_TRANSACTION_TOPIC = ethersId(
   'NewTransaction(bytes32,address,address)',
 ).toLowerCase();
@@ -466,8 +467,8 @@ export function verifyLocalCandidate(config, { projectRoot = resolve(dirname(fil
       + 'expected.payoutFactoryAddress; the zero-address release candidate cannot be broadcast',
     );
   }
-  if (!SUPPORTED_CHAIN_PATTERN.test(source)) {
-    fail('V8 source does not contain the exact Bradbury-only chain allowlist');
+  if (!PAYOUT_FACTORY_CHAIN_PATTERN.test(source)) {
+    fail('V8 source does not contain the exact audited payout-factory chain marker');
   }
   return Object.freeze({ source, sourcePath, sourceHash, sourceBytes });
 }
@@ -832,16 +833,29 @@ export function assertExactPauseAccountingIdentity(expectedValue, actualValue) {
   return actual;
 }
 
-export function assertPauseAccountingContinuity(beforeValue, afterValue) {
-  const before = normalizePauseAccountingIdentity(beforeValue, 'pre-pause accounting identity');
-  const after = normalizePauseAccountingIdentity(afterValue, 'post-pause accounting identity');
-  if (before.reserve.payouts_enabled !== true
-    || before.reserve.new_risk_enabled !== true
-    || after.reserve.payouts_enabled !== true
-    || after.reserve.new_risk_enabled !== false) {
-    fail('pause accounting continuity requires the exact payout-on risk true-to-false transition');
+export function assertExactResumeAccountingIdentity(expectedValue, actualValue) {
+  const expected = normalizePauseAccountingIdentity(
+    expectedValue,
+    'recorded pre-resume accounting identity',
+  );
+  const actual = normalizePauseAccountingIdentity(
+    actualValue,
+    'live pre-resume accounting identity',
+  );
+  exactObject(actual, expected, 'pre-resume accounting identity continuity');
+  return actual;
+}
+
+export function assertResumePreparedOrigin(operation, field = 'resume operation') {
+  const exactOperation = plainObject(operation, field);
+  if (exactOperation.preparedFromStage !== ACTIVATION_TERMINAL_STAGE) {
+    fail(`${field} preparedFromStage is not exactly ${ACTIVATION_TERMINAL_STAGE}`);
   }
-  const immutablePolicy = (identity) => ({
+  return exactOperation;
+}
+
+function immutableRiskTransitionPolicy(identity) {
+  return {
     reserve: {
       treasury: identity.reserve.treasury,
       current_platform_fee_bps: identity.reserve.current_platform_fee_bps,
@@ -851,11 +865,56 @@ export function assertPauseAccountingContinuity(beforeValue, afterValue) {
       prepare_retries_capped: identity.reserve.prepare_retries_capped,
       retry_delay_seconds: identity.reserve.retry_delay_seconds,
     },
-  });
+  };
+}
+
+export function assertPauseAccountingContinuity(beforeValue, afterValue) {
+  const before = normalizePauseAccountingIdentity(beforeValue, 'pre-pause accounting identity');
+  const after = normalizePauseAccountingIdentity(afterValue, 'post-pause accounting identity');
+  if (before.reserve.payouts_enabled !== true
+    || before.reserve.new_risk_enabled !== true
+    || after.reserve.payouts_enabled !== true
+    || after.reserve.new_risk_enabled !== false) {
+    fail('pause accounting continuity requires the exact payout-on risk true-to-false transition');
+  }
   exactObject(
-    immutablePolicy(after),
-    immutablePolicy(before),
+    immutableRiskTransitionPolicy(after),
+    immutableRiskTransitionPolicy(before),
     'pause immutable accounting policy continuity',
+  );
+  return Object.freeze({ before, after });
+}
+
+export function assertResumeAccountingContinuity(beforeValue, afterValue) {
+  const before = normalizePauseAccountingIdentity(beforeValue, 'pre-resume accounting identity');
+  const after = normalizePauseAccountingIdentity(afterValue, 'post-resume accounting identity');
+  if (before.reserve.payouts_enabled !== true
+    || before.reserve.new_risk_enabled !== false
+    || after.reserve.payouts_enabled !== true
+    || after.reserve.new_risk_enabled !== true) {
+    fail('resume accounting continuity requires the exact payout-on risk false-to-true transition');
+  }
+  exactObject(
+    immutableRiskTransitionPolicy(after),
+    immutableRiskTransitionPolicy(before),
+    'resume immutable accounting policy continuity',
+  );
+  return Object.freeze({ before, after });
+}
+
+export function assertFailedResumeAccountingContinuity(beforeValue, afterValue) {
+  const before = normalizePauseAccountingIdentity(beforeValue, 'pre-resume accounting identity');
+  const after = normalizePauseAccountingIdentity(afterValue, 'failed-resume accounting identity');
+  if (before.reserve.payouts_enabled !== true
+    || before.reserve.new_risk_enabled !== false
+    || after.reserve.payouts_enabled !== true
+    || after.reserve.new_risk_enabled !== false) {
+    fail('failed resume accounting continuity requires payout-on risk-paused state throughout');
+  }
+  exactObject(
+    immutableRiskTransitionPolicy(after),
+    immutableRiskTransitionPolicy(before),
+    'failed resume immutable accounting policy continuity',
   );
   return Object.freeze({ before, after });
 }
@@ -889,6 +948,28 @@ export async function readAndVerifyPauseState(
     payoutPage,
   }, config, { newRiskEnabled });
   return Object.freeze({ address, config: configReadback, accounting });
+}
+
+export async function readAndVerifyResumePreSignState(
+  reader,
+  contractAddress,
+  local,
+  config,
+  operation,
+) {
+  assertResumePreparedOrigin(operation, 'resume pre-sign operation');
+  const current = await readAndVerifyPauseState(
+    reader,
+    contractAddress,
+    local,
+    config,
+    { newRiskEnabled: false },
+  );
+  assertExactResumeAccountingIdentity(
+    operation.resumeAccountingIdentity,
+    current.accounting,
+  );
+  return current;
 }
 
 function uniqueReceiptField(receipt, names, field, { required = true } = {}) {
@@ -1238,10 +1319,19 @@ export async function assertFreshSignerAccountPreflight({
 export async function signAfterFreshAccountPreflight({
   signImpl,
   signOptions,
+  beforeFreshAccountPreflight,
   ...preflightInput
 }) {
   if (typeof signImpl !== 'function') fail('fresh signing implementation is unavailable');
+  if (beforeFreshAccountPreflight !== undefined
+    && typeof beforeFreshAccountPreflight !== 'function') {
+    fail('fresh signing preflight hook must be a function');
+  }
   const gasEstimate = await assertExactBradburyGasEstimate(preflightInput);
+  // Resume binds its exact risk-paused accounting snapshot here. The owner
+  // nonce/balance gate deliberately follows it, so no awaited network work can
+  // make the persisted nonce evidence stale before the cryptographic signer.
+  if (beforeFreshAccountPreflight) await beforeFreshAccountPreflight();
   const accountPreflight = await assertFreshSignerAccountPreflight(preflightInput);
   // Intentionally no asynchronous operation is inserted between the final
   // onchain account gate and the signer call.
@@ -1294,6 +1384,7 @@ function expectedInnerTransactionData(action, config, local) {
     fund: 'fund_delivery_reserve',
     activate: 'activate_payouts',
     pause: 'pause_new_risk',
+    resume: 'resume_new_risk',
   }[action];
   const call = genlayerAbi.calldata.makeCalldataObject(method, [], undefined);
   return genlayerAbi.transactions.serialize([
@@ -1338,7 +1429,7 @@ export function assertExactPlannedConsensusCalldata(data, {
   if (canonicalOuter !== encoded) {
     fail('outer consensus calldata is not the canonical exact-byte encoding');
   }
-  if (!['deploy', 'fund', 'activate', 'pause'].includes(action)) {
+  if (!['deploy', 'fund', 'activate', 'pause', 'resume'].includes(action)) {
     fail(`unknown planned consensus action ${action}`);
   }
   const expectedRecipient = action === 'deploy'
@@ -1414,13 +1505,13 @@ export function assertExactPlannedConsensusCalldata(data, {
     fund: 'fund_delivery_reserve',
     activate: 'activate_payouts',
     pause: 'pause_new_risk',
+    resume: 'resume_new_risk',
   }[action];
   exactObject(call, { method: expectedMethod }, `planned ${action} call`);
   return Object.freeze({ action, validUntil: validUntil.toString(), data: encoded });
 }
 
-export function assertSuccessfulFinalizedReceipt(receipt, expectedHash) {
-  assertFinalizedExecution(receipt);
+function assertExactFinalizedReceiptHash(receipt, expectedHash) {
   const hash = uniqueReceiptField(
     receipt,
     ['hash', 'txId', 'tx_id', 'transactionHash', 'transaction_hash'],
@@ -1428,6 +1519,38 @@ export function assertSuccessfulFinalizedReceipt(receipt, expectedHash) {
   );
   if (exactHash(hash, 'receipt transaction hash') !== exactHash(expectedHash, 'expected hash')) {
     fail('FINALIZED receipt hash does not match the submitted transaction');
+  }
+}
+
+export function assertSuccessfulFinalizedReceipt(receipt, expectedHash) {
+  assertFinalizedExecution(receipt);
+  assertExactFinalizedReceiptHash(receipt, expectedHash);
+  return receipt;
+}
+
+function exactFinalizedExecutionName(receipt, expectedHash) {
+  plainObject(receipt, 'FINALIZED receipt');
+  const status = String(uniqueReceiptField(
+    receipt,
+    ['status_name', 'statusName'],
+    'status',
+  )).trim().toUpperCase();
+  if (status !== 'FINALIZED') {
+    fail(`failed receipt is ${status || 'UNKNOWN'}, not FINALIZED`);
+  }
+  const execution = String(uniqueReceiptField(
+    receipt,
+    ['tx_execution_result_name', 'txExecutionResultName'],
+    'execution result',
+  )).trim().toUpperCase();
+  assertExactFinalizedReceiptHash(receipt, expectedHash);
+  return execution;
+}
+
+export function assertFinalizedFailedExecution(receipt, expectedHash) {
+  const execution = exactFinalizedExecutionName(receipt, expectedHash);
+  if (execution !== 'FINISHED_WITH_ERROR') {
+    fail(`FINALIZED receipt execution is ${execution || 'UNKNOWN'}, not FINISHED_WITH_ERROR`);
   }
   return receipt;
 }
@@ -1456,6 +1579,26 @@ export function assertExactCallReceipt(receipt, {
   config,
 }) {
   assertSuccessfulFinalizedReceipt(receipt, hash);
+  return assertExactCallReceiptIdentity(receipt, {
+    sender,
+    contractAddress,
+    method,
+    args,
+    valueAtto,
+    signedOperation,
+    config,
+  });
+}
+
+function assertExactCallReceiptIdentity(receipt, {
+  sender,
+  contractAddress,
+  method,
+  args = [],
+  valueAtto = '0',
+  signedOperation,
+  config,
+}) {
   if (normalizedAddressLike(receiptSender(receipt), 'receipt sender') !== sender.toLowerCase()) {
     fail('FINALIZED call sender does not match the configured owner');
   }
@@ -1487,6 +1630,28 @@ export function assertExactCallReceipt(receipt, {
   const expectedArgs = args.map(String);
   exactObject(actualArgs, expectedArgs, `FINALIZED ${method} arguments`);
   return receipt;
+}
+
+export function assertExactFailedCallReceipt(receipt, {
+  hash,
+  sender,
+  contractAddress,
+  method,
+  args = [],
+  valueAtto = '0',
+  signedOperation,
+  config,
+}) {
+  assertFinalizedFailedExecution(receipt, hash);
+  return assertExactCallReceiptIdentity(receipt, {
+    sender,
+    contractAddress,
+    method,
+    args,
+    valueAtto,
+    signedOperation,
+    config,
+  });
 }
 
 export function assertExactDeploymentReceipt(receipt, {
@@ -2353,24 +2518,28 @@ const PREPARED_STAGE = Object.freeze({
   fund: 'RESERVE_FUND_PREPARED',
   activate: 'ACTIVATION_PREPARED',
   pause: 'PAUSE_PREPARED',
+  resume: 'RESUME_PREPARED',
 });
 const SUBMITTED_STAGE = Object.freeze({
   deploy: 'DEPLOY_SUBMITTED',
   fund: 'RESERVE_FUND_SUBMITTED',
   activate: 'ACTIVATION_SUBMITTED',
   pause: 'PAUSE_SUBMITTED',
+  resume: 'RESUME_SUBMITTED',
 });
 const SIGNED_STAGE = Object.freeze({
   deploy: 'DEPLOY_SIGNED',
   fund: 'RESERVE_FUND_SIGNED',
   activate: 'ACTIVATION_SIGNED',
   pause: 'PAUSE_SIGNED',
+  resume: 'RESUME_SIGNED',
 });
 const EVM_CONFIRMED_STAGE = Object.freeze({
   deploy: 'DEPLOY_EVM_CONFIRMED',
   fund: 'RESERVE_FUND_EVM_CONFIRMED',
   activate: 'ACTIVATION_EVM_CONFIRMED',
   pause: 'PAUSE_EVM_CONFIRMED',
+  resume: 'RESUME_EVM_CONFIRMED',
 });
 
 function unresolvedOperationEntries(state) {
@@ -2379,8 +2548,123 @@ function unresolvedOperationEntries(state) {
   ));
 }
 
-export function prepareOperation(statePath, state, type, { pauseAccountingIdentity } = {}) {
+function isCleanPreparedOperation(state, type) {
+  const unresolved = unresolvedOperationEntries(state);
+  const operation = state.operations?.[type];
+  return unresolved.length === 1
+    && unresolved[0][0] === type
+    && operation?.status === 'PREPARED'
+    && operation.transactionHash === null
+    && operation.signedEvmTransaction === undefined
+    && operation.evmTransactionHash === undefined
+    && state.stage === PREPARED_STAGE[type];
+}
+
+function failedPreparedResume(operation, failure) {
+  assertResumePreparedOrigin(operation, 'superseded resume PREPARED operation');
+  return {
+    ...operation,
+    status: 'FAILED',
+    failure,
+    replayProhibited: true,
+  };
+}
+
+export function closeCleanPreparedResumeFromPausedReadback(statePath, state) {
+  if (!isCleanPreparedOperation(state, 'resume')) {
+    fail('only one exact unsigned RESUME_PREPARED operation can be closed from paused readback');
+  }
+  return writeStateAtomic(statePath, {
+    ...state,
+    stage: ACTIVATION_TERMINAL_STAGE,
+    operations: {
+      ...state.operations,
+      resume: failedPreparedResume(
+        state.operations.resume,
+        'UNSIGNED_RESUME_PREPARATION_CLOSED_FROM_EXACT_PAUSED_READBACK; REPLAY_PROHIBITED',
+      ),
+    },
+  });
+}
+
+export function prepareOperation(
+  statePath,
+  state,
+  type,
+  {
+    pauseAccountingIdentity,
+    resumeAccountingIdentity,
+    supersedePreparedResume = false,
+  } = {},
+) {
   if (!Object.hasOwn(PREPARED_STAGE, type)) fail(`unknown operation type ${type}`);
+  const initialPrevious = state.operations[type];
+  const initialUnresolved = unresolvedOperationEntries(state);
+  const initiallyReusesPrepared = initialPrevious?.status === 'PREPARED'
+    && initialPrevious.transactionHash === null
+    && initialPrevious.signedEvmTransaction === undefined
+    && initialPrevious.evmTransactionHash === undefined
+    && initialUnresolved.length === 1
+    && initialUnresolved[0][0] === type;
+  const maySupersedePreparedResume = type === 'pause' && supersedePreparedResume === true;
+  if (!initiallyReusesPrepared && initialUnresolved.length > 0
+    && !maySupersedePreparedResume) {
+    const summary = initialUnresolved
+      .map(([name, operation]) => `${name}:${operation.status}`)
+      .join(', ');
+    fail(`state has unresolved operation(s) ${summary}; reconcile before preparing ${type}`);
+  }
+  let exactPauseAccountingIdentity;
+  let exactResumeAccountingIdentity;
+  if (type === 'pause') {
+    exactPauseAccountingIdentity = normalizePauseAccountingIdentity(
+      pauseAccountingIdentity,
+      'pause PREPARED accounting identity',
+    );
+    if (exactPauseAccountingIdentity.reserve.payouts_enabled !== true
+      || exactPauseAccountingIdentity.reserve.new_risk_enabled !== true) {
+      fail('pause can be prepared only from exact payout-on risk-enabled accounting');
+    }
+  } else if (pauseAccountingIdentity !== undefined) {
+    fail(`${type} cannot record pause accounting evidence`);
+  }
+  if (type === 'resume') {
+    exactResumeAccountingIdentity = normalizePauseAccountingIdentity(
+      resumeAccountingIdentity,
+      'resume PREPARED accounting identity',
+    );
+    if (exactResumeAccountingIdentity.reserve.payouts_enabled !== true
+      || exactResumeAccountingIdentity.reserve.new_risk_enabled !== false) {
+      fail('resume can be prepared only from exact payout-on risk-paused accounting');
+    }
+  } else if (resumeAccountingIdentity !== undefined) {
+    fail(`${type} cannot record resume accounting evidence`);
+  }
+  if (supersedePreparedResume !== false) {
+    if (supersedePreparedResume !== true || type !== 'pause') {
+      fail('only emergency pause can supersede an exact unsigned resume preparation');
+    }
+    if (!isCleanPreparedOperation(state, 'resume')) {
+      fail('emergency pause cannot supersede anything except one exact unsigned RESUME_PREPARED operation');
+    }
+    assertResumeAccountingContinuity(
+      state.operations.resume.resumeAccountingIdentity,
+      exactPauseAccountingIdentity,
+    );
+    // The abandoned resume and replacement pause preparation are published
+    // together below; no intermediate journal can authorize a resume replay.
+    state = {
+      ...state,
+      stage: RISK_ACTIVE_STAGE,
+      operations: {
+        ...state.operations,
+        resume: failedPreparedResume(
+          state.operations.resume,
+          'UNSIGNED_RESUME_PREPARATION_SUPERSEDED_BY_EXACT_ACTIVE_READBACK; REPLAY_PROHIBITED',
+        ),
+      },
+    };
+  }
   const previous = state.operations[type];
   const unresolved = unresolvedOperationEntries(state);
   const reusesPrepared = previous?.status === 'PREPARED'
@@ -2393,18 +2677,8 @@ export function prepareOperation(statePath, state, type, { pauseAccountingIdenti
     const summary = unresolved.map(([name, operation]) => `${name}:${operation.status}`).join(', ');
     fail(`state has unresolved operation(s) ${summary}; reconcile before preparing ${type}`);
   }
-  let exactPauseAccountingIdentity;
-  if (type === 'pause') {
-    exactPauseAccountingIdentity = normalizePauseAccountingIdentity(
-      pauseAccountingIdentity,
-      'pause PREPARED accounting identity',
-    );
-    if (exactPauseAccountingIdentity.reserve.payouts_enabled !== true
-      || exactPauseAccountingIdentity.reserve.new_risk_enabled !== true) {
-      fail('pause can be prepared only from exact payout-on risk-enabled accounting');
-    }
-  } else if (pauseAccountingIdentity !== undefined) {
-    fail(`${type} cannot record pause accounting evidence`);
+  if (type === 'resume' && !reusesPrepared && state.stage !== ACTIVATION_TERMINAL_STAGE) {
+    fail(`resume is allowed only after ${ACTIVATION_TERMINAL_STAGE}`);
   }
   if (reusesPrepared) {
     if (type === 'pause') {
@@ -2418,6 +2692,21 @@ export function prepareOperation(statePath, state, type, { pauseAccountingIdenti
         'reused pause PREPARED accounting identity',
       );
     }
+    if (type === 'resume') {
+      if (state.stage !== PREPARED_STAGE.resume
+        || previous.preparedFromStage !== ACTIVATION_TERMINAL_STAGE) {
+        fail('reused resume PREPARED state is not derived from the exact risk-paused terminal stage');
+      }
+      const recorded = normalizePauseAccountingIdentity(
+        previous.resumeAccountingIdentity,
+        'recorded resume PREPARED accounting identity',
+      );
+      exactObject(
+        recorded,
+        exactResumeAccountingIdentity,
+        'reused resume PREPARED accounting identity',
+      );
+    }
     // The signing hook is the only path to eth_sendRawTransaction, and it
     // persists SIGNED before returning. In the documented process-crash model,
     // PREPARED therefore proves no payload reached the SDK broadcaster. After
@@ -2429,6 +2718,10 @@ export function prepareOperation(statePath, state, type, { pauseAccountingIdenti
   const nonce = randomUUID();
   const operation = { status: 'PREPARED', nonce, transactionHash: null };
   if (type === 'pause') operation.pauseAccountingIdentity = exactPauseAccountingIdentity;
+  if (type === 'resume') {
+    operation.resumeAccountingIdentity = exactResumeAccountingIdentity;
+    operation.preparedFromStage = ACTIVATION_TERMINAL_STAGE;
+  }
   return writeStateAtomic(statePath, {
     ...state,
     stage: PREPARED_STAGE[type],
@@ -2537,6 +2830,9 @@ export function recordSignedOperation(
   if (!current || current.status !== 'PREPARED' || current.nonce !== nonce) {
     fail(`state no longer contains the exact prepared ${type} operation`);
   }
+  if (type === 'resume') {
+    assertResumePreparedOrigin(current, 'resume operation before signing evidence');
+  }
   const raw = String(signedEvmTransaction || '').toLowerCase();
   if (!/^0x[\da-f]+$/.test(raw) || raw.length % 2 !== 0 || raw.length > 512 * 1024) {
     fail(`${type} signed EVM transaction is malformed`);
@@ -2620,6 +2916,27 @@ function finalizeOperation(statePath, state, type, stage, extra = {}) {
     operations: {
       ...state.operations,
       [type]: { ...current, status: 'FINALIZED' },
+    },
+  });
+}
+
+function finalizeFailedResumeOperation(statePath, state) {
+  const current = state.operations.resume;
+  if (!current || current.status !== 'SUBMITTED' || !current.transactionHash) {
+    fail('state does not contain the exact submitted resume failure');
+  }
+  assertResumePreparedOrigin(current, 'failed finalized resume operation');
+  return writeStateAtomic(statePath, {
+    ...state,
+    stage: ACTIVATION_TERMINAL_STAGE,
+    operations: {
+      ...state.operations,
+      resume: {
+        ...current,
+        status: 'FAILED',
+        failure: 'FINISHED_WITH_ERROR; EXACT_RESUME_CALL_PROVEN; REPLAY_PROHIBITED',
+        replayProhibited: true,
+      },
     },
   });
 }
@@ -2717,6 +3034,9 @@ export async function reconcileEvmSubmission({
   if (operation?.status !== 'SIGNED') {
     fail('EVM submission reconciliation requires one exact SIGNED operation');
   }
+  if (action === 'resume') {
+    assertResumePreparedOrigin(operation, 'resume recovery operation');
+  }
   const envelope = assertExactSignedEvmEnvelope(operation, config);
   const expectedValue = action === 'fund' ? config.reserve.initialFundingAtto : '0';
   if (envelope.value.toString() !== expectedValue) {
@@ -2761,6 +3081,15 @@ export async function reconcileEvmSubmission({
       current.accounting,
     );
   }
+  if (action === 'resume') {
+    await readAndVerifyResumePreSignState(
+      reader,
+      state.contractAddress,
+      local,
+      config,
+      operation,
+    );
+  }
   if (typeof reader.sendSignedEvmTransaction !== 'function') {
     fail('Bradbury reader cannot replay the exact stored signed transaction');
   }
@@ -2799,6 +3128,20 @@ async function exactRawReceipt(reader, hash, operator) {
   return raw;
 }
 
+async function exactRawResumeReceiptOutcome(reader, hash, operator) {
+  const finalized = await reader.waitFinalized(hash, operator);
+  const finalizedExecution = exactFinalizedExecutionName(finalized, hash);
+  const raw = await reader.transaction(hash);
+  const rawExecution = exactFinalizedExecutionName(raw, hash);
+  if (finalizedExecution !== rawExecution) {
+    fail('resume finalized and raw receipts report different execution outcomes');
+  }
+  if (!['FINISHED_WITH_RETURN', 'FINISHED_WITH_ERROR'].includes(rawExecution)) {
+    fail(`resume FINALIZED receipt has unsupported execution outcome ${rawExecution || 'UNKNOWN'}`);
+  }
+  return Object.freeze({ receipt: raw, execution: rawExecution });
+}
+
 function expectedStateForStage(stage, config) {
   if (['RESERVE_FUNDED', 'ACTIVATION_PREPARED', 'ACTIVATION_SIGNED',
     'ACTIVATION_EVM_CONFIRMED', 'ACTIVATION_SUBMITTED'].includes(stage)) {
@@ -2808,7 +3151,14 @@ function expectedStateForStage(stage, config) {
     'PAUSE_EVM_CONFIRMED', 'PAUSE_SUBMITTED'].includes(stage)) {
     return { payoutsEnabled: true, newRiskEnabled: true, availableReserveAtto: config.reserve.initialFundingAtto };
   }
+  if (['RESUME_PREPARED', 'RESUME_SIGNED',
+    'RESUME_EVM_CONFIRMED', 'RESUME_SUBMITTED'].includes(stage)) {
+    return { payoutsEnabled: true, newRiskEnabled: false, availableReserveAtto: config.reserve.initialFundingAtto };
+  }
   if (stage === ACTIVATION_TERMINAL_STAGE) return activationTerminalReadback(config);
+  if (stage === RISK_ACTIVE_STAGE) {
+    return { payoutsEnabled: true, newRiskEnabled: true, availableReserveAtto: config.reserve.initialFundingAtto };
+  }
   return { payoutsEnabled: false, newRiskEnabled: false, availableReserveAtto: '0' };
 }
 
@@ -2817,7 +3167,8 @@ function nextAction(stage) {
     PLANNED: 'deploy',
     AWAITING_FACTORY_BIND: 'complete the external one-time EVM factory bind and produce its proof',
     RESERVE_FUNDED: 'activate',
-    [ACTIVATION_TERMINAL_STAGE]: 'run independent payout-only canaries; no resume-risk or app/database cutover exists in this harness',
+    [ACTIVATION_TERMINAL_STAGE]: 'review the completed payout-only canaries, then run resume',
+    [RISK_ACTIVE_STAGE]: 'monitor live risk; run pause immediately if the safety posture changes',
   };
   return actions[stage] ?? 'reconcile the recorded operation before any new broadcast';
 }
@@ -2835,7 +3186,7 @@ export function activationTerminalReadback(config) {
   });
 }
 
-async function statusAction(context) {
+export async function statusAction(context) {
   const { config, state, statePath, reader, local } = context;
   await verifyLocalSchema(reader, local);
   let readback = null;
@@ -2844,6 +3195,14 @@ async function statusAction(context) {
     const deployOperation = state.operations.deploy;
     if (!deployOperation || deployOperation.status !== 'FINALIZED') {
       fail('recorded V8 contract does not have one finalized deployment operation');
+    }
+    if (state.stage === RISK_ACTIVE_STAGE
+      && (state.operations.resume?.status !== 'FINALIZED'
+        || !state.operations.resume.transactionHash)) {
+      fail('RISK_ACTIVE state does not have one finalized resume operation');
+    }
+    if (state.stage === RISK_ACTIVE_STAGE) {
+      assertResumePreparedOrigin(state.operations.resume, 'RISK_ACTIVE resume operation');
     }
     bindRequestPath = loadBindRequestArtifact(statePath, {
       config,
@@ -2855,13 +3214,13 @@ async function statusAction(context) {
     if (!['_PREPARED', '_SIGNED', '_EVM_CONFIRMED', '_SUBMITTED'].some(
       (suffix) => state.stage.endsWith(suffix),
     )) {
-      if (state.stage === ACTIVATION_TERMINAL_STAGE) {
+      if ([ACTIVATION_TERMINAL_STAGE, RISK_ACTIVE_STAGE].includes(state.stage)) {
         await readAndVerifyPauseState(
           reader,
           state.contractAddress,
           local,
           config,
-          { newRiskEnabled: false },
+          { newRiskEnabled: state.stage === RISK_ACTIVE_STAGE },
         );
       } else {
         await readAndVerifyDeployment(reader, state.contractAddress, local, config, expected);
@@ -3028,9 +3387,18 @@ async function fundAction(context, options) {
   };
 }
 
-async function broadcastPause(context, state, options, pauseAccountingIdentity) {
+async function broadcastPause(
+  context,
+  state,
+  options,
+  pauseAccountingIdentity,
+  { supersedePreparedResume = false } = {},
+) {
   const { config, statePath, reader, local } = context;
-  state = prepareOperation(statePath, state, 'pause', { pauseAccountingIdentity });
+  state = prepareOperation(statePath, state, 'pause', {
+    pauseAccountingIdentity,
+    supersedePreparedResume,
+  });
   const nonce = state.operations.pause.nonce;
   await runSignerChild({
     config,
@@ -3067,6 +3435,76 @@ async function broadcastPause(context, state, options, pauseAccountingIdentity) 
     pausedReadback.accounting,
   );
   return finalizeOperation(statePath, state, 'pause', ACTIVATION_TERMINAL_STAGE);
+}
+
+async function finalizeResumeReceiptOutcome(context, state) {
+  const { config, statePath, reader, local } = context;
+  const operation = state.operations.resume;
+  assertResumePreparedOrigin(operation, 'submitted resume operation');
+  const hash = operation.transactionHash;
+  if (!hash || operation.status !== 'SUBMITTED') {
+    fail('resume finalization requires the exact submitted operation');
+  }
+  const outcome = await exactRawResumeReceiptOutcome(reader, hash, config.operator);
+  const receiptExpectation = {
+    hash,
+    sender: config.expected.ownerAddress,
+    contractAddress: state.contractAddress,
+    method: 'resume_new_risk',
+    valueAtto: '0',
+    signedOperation: operation,
+    config,
+  };
+  if (outcome.execution === 'FINISHED_WITH_ERROR') {
+    assertExactFailedCallReceipt(outcome.receipt, receiptExpectation);
+    const pausedReadback = await readAndVerifyPauseState(
+      reader,
+      state.contractAddress,
+      local,
+      config,
+      { newRiskEnabled: false },
+    );
+    assertFailedResumeAccountingContinuity(
+      operation.resumeAccountingIdentity,
+      pausedReadback.accounting,
+    );
+    state = finalizeFailedResumeOperation(statePath, state);
+    return Object.freeze({ state, failed: true, hash });
+  }
+  assertExactCallReceipt(outcome.receipt, receiptExpectation);
+  const activeReadback = await readAndVerifyPauseState(
+    reader,
+    state.contractAddress,
+    local,
+    config,
+    { newRiskEnabled: true },
+  );
+  assertResumeAccountingContinuity(
+    operation.resumeAccountingIdentity,
+    activeReadback.accounting,
+  );
+  state = finalizeOperation(statePath, state, 'resume', RISK_ACTIVE_STAGE);
+  return Object.freeze({ state, failed: false, hash });
+}
+
+async function broadcastResume(context, state, options, resumeAccountingIdentity) {
+  const { config, statePath } = context;
+  state = prepareOperation(statePath, state, 'resume', { resumeAccountingIdentity });
+  const nonce = state.operations.resume.nonce;
+  await runSignerChild({
+    config,
+    configPath: context.configPath,
+    statePath,
+    action: 'resume',
+    nonce,
+    lockToken: context.lockToken,
+    ownerLockToken: context.ownerLockToken,
+    bindProofPath: options.bindProofPath,
+  });
+  state = loadState(statePath, config);
+  const hash = state.operations.resume?.transactionHash;
+  if (!hash) fail('signer child did not durably record the resume hash');
+  return finalizeResumeReceiptOutcome(context, state);
 }
 
 async function activateAction(context, options) {
@@ -3117,7 +3555,7 @@ async function activateAction(context, options) {
     config,
   });
   // V8 activation intentionally enables the payout subsystem without opening
-  // any new epoch/wager risk. A resume-risk write is outside this harness.
+  // any new epoch/wager risk. Resume remains a separate reviewed owner action.
   await readAndVerifyDeployment(
     reader,
     state.contractAddress,
@@ -3142,17 +3580,76 @@ async function activateAction(context, options) {
   };
 }
 
-async function emergencyPauseAction(context, options) {
-  if (!context.state.contractAddress) fail('pause requires a recorded V8 contract');
+export async function resumeAction(context, options) {
+  if (!context.state.contractAddress) fail('resume requires a recorded V8 contract');
   const unresolved = unresolvedOperationEntries(context.state);
-  const cleanPreparedPause = unresolved.length === 1
-    && unresolved[0][0] === 'pause'
+  const cleanPreparedResume = unresolved.length === 1
+    && unresolved[0][0] === 'resume'
     && unresolved[0][1].status === 'PREPARED'
     && unresolved[0][1].transactionHash === null
     && unresolved[0][1].signedEvmTransaction === undefined
     && unresolved[0][1].evmTransactionHash === undefined
-    && context.state.stage === 'PAUSE_PREPARED';
-  if (unresolved.length > 0 && !cleanPreparedPause) {
+    && unresolved[0][1].preparedFromStage === ACTIVATION_TERMINAL_STAGE
+    && context.state.stage === 'RESUME_PREPARED';
+  if (context.state.stage !== ACTIVATION_TERMINAL_STAGE && !cleanPreparedResume) {
+    fail(`resume is allowed only after ${ACTIVATION_TERMINAL_STAGE}`);
+  }
+  if (unresolved.length > 0 && !cleanPreparedResume) {
+    fail('resume cannot bypass unresolved durable state; run reconcile first');
+  }
+  const preResumeReadback = await readAndVerifyPauseState(
+    context.reader,
+    context.state.contractAddress,
+    context.local,
+    context.config,
+    { newRiskEnabled: false },
+  );
+  if (cleanPreparedResume) {
+    assertExactResumeAccountingIdentity(
+      context.state.operations.resume.resumeAccountingIdentity,
+      preResumeReadback.accounting,
+    );
+  }
+  if (!options.broadcast) return planResult('resume', context);
+  const resumeOutcome = await broadcastResume(
+    context,
+    context.state,
+    options,
+    preResumeReadback.accounting,
+  );
+  const { state } = resumeOutcome;
+  if (resumeOutcome.failed) {
+    return {
+      event: 'BRADBURY_V8_RESUME_FINALIZED_WITH_ERROR_RISK_REMAINS_PAUSED',
+      transactionHash: resumeOutcome.hash,
+      contractAddress: state.contractAddress,
+      stage: state.stage,
+      payoutsEnabled: true,
+      newRiskEnabled: false,
+      replayProhibited: true,
+      cutsOverApplication: false,
+      cutsOverDatabase: false,
+    };
+  }
+  return {
+    event: 'BRADBURY_V8_NEW_RISK_RESUMED',
+    transactionHash: state.operations.resume.transactionHash,
+    contractAddress: state.contractAddress,
+    stage: state.stage,
+    payoutsEnabled: true,
+    newRiskEnabled: true,
+    cutsOverApplication: false,
+    cutsOverDatabase: false,
+  };
+}
+
+async function emergencyPauseAction(context, options) {
+  if (!context.state.contractAddress) fail('pause requires a recorded V8 contract');
+  const unresolved = unresolvedOperationEntries(context.state);
+  const cleanPreparedPause = isCleanPreparedOperation(context.state, 'pause');
+  const cleanPreparedResume = isCleanPreparedOperation(context.state, 'resume')
+    && context.state.operations.resume.preparedFromStage === ACTIVATION_TERMINAL_STAGE;
+  if (unresolved.length > 0 && !cleanPreparedPause && !cleanPreparedResume) {
     fail('pause cannot bypass unresolved durable state; run reconcile first');
   }
   const liveConfig = await context.reader.call(context.state.contractAddress, 'get_config');
@@ -3162,6 +3659,33 @@ async function emergencyPauseAction(context, options) {
     fail('emergency pause target is not the exact owned V8 contract');
   }
   if (normalized.new_risk_enabled === false) {
+    if (cleanPreparedResume) {
+      if (!options.broadcast) {
+        return {
+          ...planResult('pause', context),
+          instruction: 're-run pause with --broadcast to close the exact unsigned RESUME_PREPARED record from paused readback; no transaction will be sent',
+        };
+      }
+      await readAndVerifyPauseState(
+        context.reader,
+        context.state.contractAddress,
+        context.local,
+        context.config,
+        { newRiskEnabled: false },
+      );
+      const state = closeCleanPreparedResumeFromPausedReadback(
+        context.statePath,
+        context.state,
+      );
+      return {
+        event: 'BRADBURY_V8_PREPARED_RESUME_CLOSED_FROM_EXACT_PAUSED_READBACK',
+        contractAddress: state.contractAddress,
+        stage: state.stage,
+        transactionBroadcast: false,
+        cutsOverApplication: false,
+        cutsOverDatabase: false,
+      };
+    }
     if (cleanPreparedPause) {
       if (!options.broadcast) {
         return {
@@ -3227,6 +3751,7 @@ async function emergencyPauseAction(context, options) {
     context.state,
     options,
     prePauseReadback.accounting,
+    { supersedePreparedResume: cleanPreparedResume },
   );
   return {
     event: 'BRADBURY_V8_EMERGENCY_PAUSED',
@@ -3264,6 +3789,9 @@ function oneUnresolvedOperation(state) {
     fail(`reconcile cannot replay unsigned ${operation.status} state; re-run the original dry-run action`);
   }
   if (!Object.hasOwn(SIGNED_STAGE, type)) fail(`state contains unknown operation type ${type}`);
+  if (type === 'resume') {
+    assertResumePreparedOrigin(operation, 'unresolved resume recovery operation');
+  }
   const expectedStage = {
     SIGNED: SIGNED_STAGE[type],
     EVM_CONFIRMED: EVM_CONFIRMED_STAGE[type],
@@ -3275,9 +3803,36 @@ function oneUnresolvedOperation(state) {
   return { type, operation };
 }
 
-async function finalizeReconciledOperation(context, state, type) {
+export async function finalizeReconciledOperation(context, state, type) {
   const { config, statePath, reader, local } = context;
   const operation = state.operations[type];
+  if (type === 'resume') {
+    assertResumePreparedOrigin(operation, 'submitted resume recovery operation');
+    const outcome = await finalizeResumeReceiptOutcome(context, state);
+    if (outcome.failed) {
+      return {
+        event: 'BRADBURY_V8_RESUME_FAILURE_RECONCILED_RISK_REMAINS_PAUSED',
+        transactionHash: outcome.hash,
+        contractAddress: outcome.state.contractAddress,
+        stage: outcome.state.stage,
+        payoutsEnabled: true,
+        newRiskEnabled: false,
+        replayProhibited: true,
+        cutsOverApplication: false,
+        cutsOverDatabase: false,
+      };
+    }
+    return {
+      event: 'BRADBURY_V8_RESUME_RECONCILED',
+      transactionHash: outcome.hash,
+      contractAddress: outcome.state.contractAddress,
+      stage: outcome.state.stage,
+      payoutsEnabled: true,
+      newRiskEnabled: true,
+      cutsOverApplication: false,
+      cutsOverDatabase: false,
+    };
+  }
   const hash = operation.transactionHash;
   const receipt = await exactRawReceipt(reader, hash, config.operator);
 
@@ -3322,6 +3877,7 @@ async function finalizeReconciledOperation(context, state, type) {
     fund: { method: 'fund_delivery_reserve', valueAtto: config.reserve.initialFundingAtto },
     activate: { method: 'activate_payouts', valueAtto: '0' },
     pause: { method: 'pause_new_risk', valueAtto: '0' },
+    resume: { method: 'resume_new_risk', valueAtto: '0' },
   }[type];
   assertExactCallReceipt(receipt, {
     hash,
@@ -3479,7 +4035,7 @@ function parseArguments(argv) {
       else result.bindProofPath = value;
     } else fail(`unknown option ${option}`);
   }
-  if (!['status', 'deploy', 'fund', 'activate', 'pause', 'reconcile'].includes(result.action)) {
+  if (!['status', 'deploy', 'fund', 'activate', 'pause', 'resume', 'reconcile'].includes(result.action)) {
     fail(`unknown action ${result.action}`);
   }
   if (result.action === 'status' && result.broadcast) fail('status never accepts --broadcast');
@@ -3490,7 +4046,7 @@ function parseArguments(argv) {
 }
 
 export function helpText() {
-  return `Bradbury-only Liquidity Arena V8 deployment canary (never app/DB cutover).\n\nUsage:\n  node ops/bradbury-v8/harness.mjs [status] --config <file> [--state <file>]\n  node ops/bradbury-v8/harness.mjs deploy --config <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs fund --config <file> --bind-proof <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs activate --config <file> --bind-proof <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs pause --config <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs reconcile --config <file> [--bind-proof <file>] [--broadcast]\n\nNo action broadcasts without the literal --broadcast flag. status is the default and is read-only.\nActivation enables payouts while new risk remains paused; this harness exposes no resume-risk or cutover command.\nreconcile inspects the exact stored EVM hash first; --broadcast can only replay its exact stored signed bytes.\nThe exact-state lock serializes its state file; the canonical owner lock coordinates the reviewed harness/factory/bind tools across checkouts under one user profile. It cannot coordinate external or unreviewed writers. Verify PID/owner inactivity before manually removing a crash-stale lock.\nThe SDK is pinned to testnet-bradbury/chain 4221 and never changes the global GenLayer CLI network.\nLocked-keystore passwords use GENLAYER_KEYSTORE_PASSWORD only in the parent and are sent to the signer child over stdin; they are never arguments or logs.`;
+  return `Bradbury-only Liquidity Arena V8 deployment canary (never app/DB cutover).\n\nUsage:\n  node ops/bradbury-v8/harness.mjs [status] --config <file> [--state <file>]\n  node ops/bradbury-v8/harness.mjs deploy --config <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs fund --config <file> --bind-proof <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs activate --config <file> --bind-proof <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs resume --config <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs pause --config <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs reconcile --config <file> [--bind-proof <file>] [--broadcast]\n\nNo action broadcasts without the literal --broadcast flag. status is the default and is read-only.\nActivation enables payouts while new risk remains paused. resume is owner-only, requires the exact PAYOUTS_ACTIVE_RISK_PAUSED state and live readback, and does not cut over app or database traffic.\nreconcile inspects the exact stored EVM hash first; --broadcast can only replay its exact stored signed bytes.\nThe exact-state lock serializes its state file; the canonical owner lock coordinates the reviewed harness/factory/bind tools across checkouts under one user profile. It cannot coordinate external or unreviewed writers. Verify PID/owner inactivity before manually removing a crash-stale lock.\nThe SDK is pinned to testnet-bradbury/chain 4221 and never changes the global GenLayer CLI network.\nLocked-keystore passwords use GENLAYER_KEYSTORE_PASSWORD only in the parent and are sent to the signer child over stdin; they are never arguments or logs.`;
 }
 
 export async function runHarness(argv, dependencies = {}) {
@@ -3529,6 +4085,7 @@ export async function runHarness(argv, dependencies = {}) {
     if (options.action === 'deploy') return await deployAction(context, options);
     if (options.action === 'fund') return await fundAction(context, options);
     if (options.action === 'activate') return await activateAction(context, options);
+    if (options.action === 'resume') return await resumeAction(context, options);
     if (options.action === 'reconcile') return await reconcileAction(context, options);
     return await emergencyPauseAction(context, options);
   } finally {

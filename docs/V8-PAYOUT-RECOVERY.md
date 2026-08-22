@@ -3,12 +3,12 @@
 ## Status
 
 V8 is deployed and finalized on Bradbury at
-`0xe6aa95e551f8407b139474ec60c2012e4cc8a6cd`. Its production payout factory is finalized and
-explorer-verified at `0x944FdADd826C2a159c63cB100DB174716ccd1317`, and its one-time binding to
+`0x06b643f94003e51c6dc47e89524e7fd045630549`. Its production payout factory is finalized and
+explorer-verified at `0xC812709d267372Ad7E06807bf0A4d451ED263A30`, and its one-time binding to
 that exact V8 arena is also finalized. The checked-in manifest remains deliberately `active:false`:
-delivery-reserve funding, payout activation, risk resume, attended canary, and production cutover
-are still pending. An address and finalized binding are not an assertion that payouts or new risk
-are live.
+delivery-reserve funding, payout activation, risk resume, and production cutover are still pending.
+The live claimable-position canary is an explicitly non-gating testnet follow-up. An address and
+finalized binding are not an assertion that payouts or new risk are live.
 
 The deployed V7 contract remains immutable and its storage/balance cannot be moved into V8. This is
 a testnet cutover: V7 state and its remaining test-token claims will be abandoned rather than
@@ -50,11 +50,11 @@ Bradbury also imposes a practical transaction-pubdata ceiling below the original
 source size. The repository therefore keeps a reviewed readable source and deterministically
 generates `contracts/LiquidityArenaV8.release.py` with Python 3.13 and pinned
 `python-minifier==3.2.0`. The generator proves identical storage layout, constructor, and retained
-public ABI before emitting the deployable artifact. The current artifact is 44,125 bytes (SHA-256
-`160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa`), below the enforced
-45,000-byte source and 45,500-byte outer-calldata caps. A live credential-free Bradbury estimate of
-the exact release transaction succeeded at 35,346,217 gas; any estimate error, SDK fallback, or
-gas-envelope drift fails before signing.
+public ABI before emitting the deployable artifact. The current artifact is 43,957 bytes (SHA-256
+`1e7545f8f0fd121d64f3565675ac8f541d0ba8274abbde60db0dd02d7d777db5`), below the enforced
+45,000-byte source and 45,500-byte outer-calldata caps. The finalized replacement deployment used
+44,292 bytes of outer calldata and an independently reproduced 35,233,264 gas estimate. Any
+estimate error, SDK fallback, or gas-envelope drift fails closed before signing.
 
 ## State machine
 
@@ -114,7 +114,7 @@ mismatch before signing. After the V8 ghost address is known, the binder may bin
 once. Activation verifies the
 exact binding and payout protocol, but those self-reported views are not a trust anchor. The exact
 independently audited, non-proxy factory address must also be compiled into the V8 source for chain
-`4221`. The finalized factory `0x944FdADd826C2a159c63cB100DB174716ccd1317` is frozen into both
+`4221`. The finalized factory `0xC812709d267372Ad7E06807bf0A4d451ED263A30` is frozen into both
 the readable and generated release sources. Its runtime, constructor immutables, protocol, reserve
 sink, source publication, and initial unbound state were independently verified before that source
 anchor was committed. The factory's one-time binding to the finalized V8 ghost is now finalized;
@@ -171,13 +171,15 @@ Reserve withdrawal is intentionally absent from V8.
 
 ## Network and activation gates
 
-The contract fails closed on every chain except the target EVM-capable GenLayer chain ID `4221`.
-Local Studio (`61127`) and StudioNet (`61999`) cannot activate payouts because Studio does not
-execute the required EVM factory/vault path. Payout activation deliberately leaves new epochs and
+The contract fails closed unless its constructor contains the exact audited payout factory and that
+factory is immutably bound back to the arena. The deployment, binding, and operator tooling pin the
+outer EVM settlement chain to Bradbury `4221`; GenVM's message-domain chain ID is deliberately not
+treated as the outer EVM chain identifier. Local Studio and StudioNet do not have the audited bound
+factory/vault path. Payout activation deliberately leaves new epochs and
 wagers paused. The owner must separately call `resume_new_risk` before `create_epoch` or `enter` can
 succeed, and that explicit resume remains disabled until all of the following are true:
 
-1. the chain is allowlisted;
+1. the configured factory equals the exact Bradbury chain-4221 audit anchor;
 2. the constructor factory equals the exact audited address compiled for that chain;
 3. the immutable factory is exactly bound to the V8 ghost;
 4. the factory reports the exact payout protocol;
@@ -204,14 +206,15 @@ Repository acceptance requires:
   message fees, delayed/reordered attempts, duplicate excess, exact confirmation, withdrawal, and
   fee-path symmetry.
 
-Studio/direct mocks cannot close the final EVM gate. Deployment and binding evidence may be
-published while the manifest stays inactive, but an active production history alias, enabled
-keeper schedule, or public money action must still fail closed until reserve, activation, canary,
-and cutover evidence exists.
+Studio/direct mocks cannot close the final EVM gate. The finalized Bradbury sacrificial factory/vault
+rehearsal supplies that rail evidence. A complete live V8 claim-through-withdrawal canary additionally
+requires waiting for a claimable position; the operator explicitly waived that wait for this
+faucet-funded testnet cutover. Activating the manifest therefore does not claim that such a live V8
+payout canary occurred.
 
-Local verification passes GenVM lint/validation, 34 direct V8 tests, 29 Bradbury harness tests
-(included in the 463/463 root Node suite), and 59 EVM tests: nine adversarial factory/vault tests plus
-50 factory deployment/binding-tool tests. The production build emits 477 modules and dependency
+Local verification passes GenVM lint/validation, 34 direct V8 tests, 38 Bradbury harness tests
+(included in the 354/354 root Node suite), and 59 EVM tests: nine adversarial factory/vault tests plus
+50 factory deployment/binding-tool tests. The production build emits 625 modules and dependency
 audit reports zero findings. The Solidity compile uses locked `solc 0.8.28` and reports zero errors
 or warnings; the authority/storage/forbidden-source-construct/bytecode-size audit also passes. These
 checks are wired into CI. These figures are local evidence and do not by themselves assert a remote-
@@ -219,9 +222,9 @@ CI run. They prove the local state machine and tooling, not live ghost/EVM parit
 deployment evidence. The live gate must publish the resulting bytecode and constructor immutables
 and repeat the source/address-anchor review.
 
-The finalized rehearsal, production-factory deployment, source freeze, inactive V8 deployment, and
-one-time factory binding are complete. The remaining safe sequence is: fund the delivery reserve;
-activate payouts with risk paused; apply and verify the append-only migration/global one-active
-constraint; run a separately reviewed attended risk and payout canary; explicitly resume new risk;
-then complete the production app, history-service, and keeper cutover. The manifest must remain
-`active:false` until those gates are closed.
+The finalized rehearsal, production-factory deployment, source freeze, V8 deployment, and one-time
+factory binding are complete. The remaining testnet sequence is: fund the delivery reserve; activate
+payouts with risk paused; explicitly resume new risk under the durable harness; then complete the
+application, history-service, and keeper cutover. Migration 004 and the global one-active constraint
+are already part of the release. The manifest remains `active:false` until the live fund, activation,
+resume, and external cutover gates are closed.

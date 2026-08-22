@@ -9,9 +9,9 @@ Liquidity Arena V8 is a Bradbury testnet market game with GenLayer settlement an
 | Network | `testnet-bradbury` |
 | Chain | `4221` |
 | Protocol | `LIQUIDITY_ARENA_V8` |
-| V8 address | `0xe6aa95e551f8407b139474ec60c2012e4cc8a6cd` |
-| Factory | `0x944fdadd826c2a159c63cb100db174716ccd1317` |
-| Source SHA-256 | `160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa` |
+| V8 address | `0x06b643f94003e51c6dc47e89524e7fd045630549` |
+| Factory | `0xc812709d267372ad7e06807bf0a4d451ed263a30` |
+| Source SHA-256 | `1e7545f8f0fd121d64f3565675ac8f541d0ba8274abbde60db0dd02d7d777db5` |
 | Schema SHA-256 | `c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4` |
 
 ## Technical highlights

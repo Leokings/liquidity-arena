@@ -70,11 +70,14 @@ PAYOUT_KIND_PLAYER = "PLAYER"
 PAYOUT_KIND_FEE = "FEE"
 PAYOUT_RETRY_DELAY_SECONDS = 60 * 60
 MAX_PAYOUT_ATTEMPTS = 3
-SUPPORTED_ESCROW_CHAIN_IDS = (4_221,)
+# The settlement factory is deployed and independently verified on Bradbury's
+# EVM chain. GenVM's message chain_id is a consensus execution-domain value,
+# not the outer EVM settlement-chain identity.
+AUDITED_PAYOUT_FACTORY_CHAIN_ID = 4_221
 # Activation trusts only the independently deployed, bytecode-verified immutable
 # factory frozen into this source. Constructor input and factory self-reporting
 # alone are not security anchors.
-AUDITED_PAYOUT_FACTORY_4221 = "0x944fdadd826c2a159c63cb100db174716ccd1317"
+AUDITED_PAYOUT_FACTORY_4221 = "0xc812709d267372ad7e06807bf0a4d451ed263a30"
 
 VENUE_BINANCE = "BINANCE"
 VENUE_OKX = "OKX"
@@ -746,10 +749,10 @@ class LiquidityArenaV8(gl.Contract):
             )
 
     def _assert_factory_bound(self) -> None:
-        chain_id = int(gl.message.chain_id)
-        audited_factory = ""
-        if chain_id == 4_221:
-            audited_factory = AUDITED_PAYOUT_FACTORY_4221
+        # GenVM's message chain ID is execution context, not the outer EVM
+        # settlement-chain ID. Deployment tooling pins Bradbury/4221 and this
+        # immutable literal pins the only factory the IC may call.
+        audited_factory = AUDITED_PAYOUT_FACTORY_4221
         if (
             audited_factory == ""
             or audited_factory == ZERO_ADDRESS_TEXT
@@ -944,11 +947,6 @@ class LiquidityArenaV8(gl.Contract):
     def activate_payouts(self) -> None:
         self._require_zero_value()
         self._require_owner()
-        if int(gl.message.chain_id) not in SUPPORTED_ESCROW_CHAIN_IDS:
-            _expected(
-                "PAYOUT_NETWORK_UNSUPPORTED",
-                "This chain is not allowlisted for the required EVM payout vault",
-            )
         if self.payouts_enabled:
             _expected("PAYOUTS_ACTIVE", "Payouts are already activated")
         self._assert_factory_bound()

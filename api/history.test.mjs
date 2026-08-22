@@ -46,20 +46,20 @@ test('Vercel retains the fail-closed Bradbury V8 deployment manifest', async () 
   assert.equal(manifest.deploymentAlias, 'v8');
   assert.equal(manifest.network, 'testnet-bradbury');
   assert.equal(manifest.chainId, 4_221);
-  assert.equal(manifest.contractAddress, '0xe6aa95e551f8407b139474ec60c2012e4cc8a6cd');
+  assert.equal(manifest.contractAddress, '0x06b643f94003e51c6dc47e89524e7fd045630549');
   assert.equal(manifest.deploymentStatus, 'FINALIZED_BOUND_INACTIVE');
   assert.equal(
     manifest.deploymentTransactionHash,
-    '0x955ec665a7f9a1ee7c7d9dabcac603d5eaba12fefd5eb0e5b738708daaa58e27',
+    '0xe024e26a5d439858a6505b7f704d778c56ae9b1ccbf95e08f629fff9c762de64',
   );
   assert.equal(
     manifest.factoryBindingTransactionHash,
-    '0xc51b7ebb2755f6303a5a1d2959055461eb8a78f2889177f6d83abbb7ef29f7e4',
+    '0x72a0ce9d8dc5961292381d536910d9d39f703c26c5f8619e48972500df502717',
   );
   assert.equal(manifest.active, false);
   assert.equal(
     manifest.sourceSha256,
-    '160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa',
+    '1e7545f8f0fd121d64f3565675ac8f541d0ba8274abbde60db0dd02d7d777db5',
   );
 });
 

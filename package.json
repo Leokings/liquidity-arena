@@ -23,7 +23,9 @@
     "test:v8:bradbury": "node --test ops/bradbury-v8/*.test.mjs",
     "v8:bradbury:status": "node ops/bradbury-v8/harness.mjs status",
     "v8:bradbury:deploy": "node ops/bradbury-v8/harness.mjs deploy",
+    "v8:bradbury:fund": "node ops/bradbury-v8/harness.mjs fund",
     "v8:bradbury:activate": "node ops/bradbury-v8/harness.mjs activate",
+    "v8:bradbury:resume": "node ops/bradbury-v8/harness.mjs resume",
     "v8:bradbury:reconcile": "node ops/bradbury-v8/harness.mjs reconcile"
   },
   "devDependencies": {

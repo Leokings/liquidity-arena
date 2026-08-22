@@ -7,7 +7,7 @@
     "protocolVersion": "LIQUIDITY_ARENA_V8",
     "policyVersion": "CRYPTO_SPOT_1M_MEDIAN_V1",
     "payoutProtocolVersion": "IDEMPOTENT_EVM_VAULT_V1",
-    "payoutFactoryAddress": "0x944fdadd826c2a159c63cb100db174716ccd1317",
+    "payoutFactoryAddress": "0xc812709d267372ad7e06807bf0a4d451ed263a30",
     "ownerAddress": "${V8_OWNER_ADDRESS}",
     "keeperAddress": "${V8_KEEPER_ADDRESS}",
     "treasuryAddress": "${V8_TREASURY_ADDRESS}",

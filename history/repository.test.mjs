@@ -128,7 +128,7 @@ test('history health requires schema v4, one active Bradbury V8, and complete ep
   assert.equal(calls.length, 2);
   assert.equal(calls[0].params.length, 11);
   assert.equal(calls[0].params[3], BRADBURY_V8_SCHEMA_CHECKSUM);
-  assert.equal(calls[0].params[4], '0x944fdadd826c2a159c63cb100db174716ccd1317');
+  assert.equal(calls[0].params[4], '0xc812709d267372ad7e06807bf0a4d451ed263a30');
   assert.equal(calls[0].params[5], 'c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4');
   assert.equal(calls[0].params[6], testDeployment().deploymentId);
   assert.equal(calls[0].params[7], testDeployment().addressKey);

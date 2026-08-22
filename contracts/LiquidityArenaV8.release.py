@@ -1,6 +1,6 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
-SUPPORTED_ESCROW_CHAIN_IDS = (4_221,)
-AUDITED_PAYOUT_FACTORY_4221 = "0x944fdadd826c2a159c63cb100db174716ccd1317"
+AUDITED_PAYOUT_FACTORY_CHAIN_ID = 4_221
+AUDITED_PAYOUT_FACTORY_4221 = "0xc812709d267372ad7e06807bf0a4d451ed263a30"
 from genlayer import*
 import genlayer.gl._internal.gl_call as _a
 from genlayer.py.evm.calldata import MethodEncoder,decode as _b
@@ -280,8 +280,7 @@ class LiquidityArenaV8(gl.Contract):
 		sender=gl.message.sender_address
 		if sender!=self.owner and sender!=self.keeper and sender!=recipient:_av('PAYOUT_OPERATOR')
 	def _a1(self):
-		chain_id=int(gl.message.chain_id);audited_factory=''
-		if chain_id==4221:audited_factory=AUDITED_PAYOUT_FACTORY_4221
+		audited_factory=AUDITED_PAYOUT_FACTORY_4221
 		if audited_factory==''or audited_factory==_H or _aA(self.payout_vault_factory)!=audited_factory.lower():_av('PAYOUT_FACTORY_UNTRUSTED')
 		arena=gl.message.contract_address
 		if not _at(self.payout_vault_factory,_am,(arena,),bool):_av('PAYOUT_FACTORY_UNBOUND')
@@ -347,7 +346,6 @@ class LiquidityArenaV8(gl.Contract):
 	@gl.public.write
 	def activate_payouts(self)->None:
 		self._aX();self._aY()
-		if int(gl.message.chain_id)not in SUPPORTED_ESCROW_CHAIN_IDS:_av('PAYOUT_NETWORK_UNSUPPORTED')
 		if self.payouts_enabled:_av('PAYOUTS_ACTIVE')
 		self._a1();self._a8();self._bb();self.payouts_enabled=True;self.new_risk_enabled=False
 	@gl.public.write
