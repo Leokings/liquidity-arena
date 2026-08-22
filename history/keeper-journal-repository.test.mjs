@@ -31,6 +31,11 @@ function operationRow(overrides = {}) {
     transaction_hash: HASH,
     lifecycle_status: 'UNKNOWN',
     lifecycle_observed_at: null,
+    pipeline_slot: 0,
+    handoff_predecessor_operation_id: null,
+    accepted_at: null,
+    acceptance_revalidated_at: null,
+    acceptance_metadata: null,
     state_reason_code: null,
     quarantine_reason: null,
     prepared_at: '2026-08-20T00:00:00.000Z',
@@ -40,6 +45,21 @@ function operationRow(overrides = {}) {
     updated_at: '2026-08-20T00:00:01.000Z',
     revision: '2',
     ...overrides,
+  };
+}
+
+function acceptedEvidence(row = operationRow()) {
+  return {
+    transactionHash: row.transaction_hash,
+    contractAddress: row.contract_address,
+    recipient: row.contract_address,
+    method: row.method,
+    arguments: [...row.arguments],
+    lifecycleStatus: 'ACCEPTED',
+    txExecutionResultName: 'FINISHED_WITH_RETURN',
+    receiptIdentityVerified: true,
+    executionVerified: true,
+    executionSucceeded: true,
   };
 }
 
@@ -75,34 +95,69 @@ function healthySchemaRow(overrides = {}) {
     operations_exists: true,
     requests_exists: true,
     conflicts_exists: true,
+    request_action_constraint_valid: true,
     guard_function_exists: true,
     guard_trigger_exists: true,
     logical_attempt_key_exists: true,
+    pipeline_slot_index_exists: true,
+    attention_subject_index_exists: true,
+    handoff_predecessor_index_exists: true,
+    attention_index_exists: true,
+    legacy_unresolved_index_absent: true,
+    accepted_guard_function_exists: true,
+    accepted_guard_trigger_exists: true,
     attempt_columns_exist: true,
     subject_columns_exist: true,
+    accepted_handoff_columns_exist: true,
+    accepted_handoff_constraints_exist: true,
     base_migration_valid: true,
     attempt_migration_valid: true,
     v4_migration_valid: true,
+    v5_migration_valid: true,
     migration_valid: true,
     no_unknown_migrations: true,
     ...overrides,
   };
 }
 
-test('health requires the exact version 5 receipt revalidation schema and its v2-v4 prerequisites', async () => {
+test('health requires the exact version 6 accepted handoff schema and its v2-v5 prerequisites', async () => {
   const { repository, calls } = fixture([[healthySchemaRow()]]);
-  assert.deepEqual(await repository.health(), { configured: true, ready: true, schemaVersion: 5 });
-  assert.match(calls[0].sql, /version = 2[\s\S]*version = 3[\s\S]*version = 4[\s\S]*version = 5/);
+  assert.deepEqual(await repository.health(), { configured: true, ready: true, schemaVersion: 6 });
+  assert.match(calls[0].sql, /version = 2[\s\S]*version = 3[\s\S]*version = 4[\s\S]*version = 5[\s\S]*version = 6/);
   assert.match(calls[0].sql, /logical_operation_id/);
   assert.match(calls[0].sql, /arena_keeper_operations_logical_attempt_key/);
   assert.match(calls[0].sql, /subject_type[\s\S]*subject_id/);
-  assert.match(calls[0].sql, /NOT EXISTS \([\s\S]*version > 5/);
-  assert.equal(calls[0].params.length, 4);
+  assert.match(calls[0].sql, /accepted_at[\s\S]*acceptance_revalidated_at[\s\S]*acceptance_metadata/);
+  assert.match(calls[0].sql, /arena_keeper_journal_requests_request_action_check[\s\S]*ACCEPT_HANDOFF/);
+  assert.match(calls[0].sql, /NOT EXISTS \([\s\S]*version > 6/);
+  assert.equal(calls[0].params.length, 5);
 });
 
-test('health rejects an otherwise valid database with a migration newer than V5', async () => {
+test('health rejects an otherwise valid database with a migration newer than V6', async () => {
   const { repository } = fixture([[healthySchemaRow({ no_unknown_migrations: false })]]);
   assert.deepEqual(await repository.health(), { configured: true, ready: false, schemaVersion: null });
+});
+
+test('health fails closed when any accepted handoff column is missing', async () => {
+  const { repository } = fixture([[
+    healthySchemaRow({ accepted_handoff_columns_exist: false }),
+  ]]);
+  assert.deepEqual(await repository.health(), {
+    configured: true,
+    ready: false,
+    schemaVersion: null,
+  });
+});
+
+test('health fails closed when ACCEPT_HANDOFF is absent from the request-action constraint', async () => {
+  const { repository } = fixture([[
+    healthySchemaRow({ request_action_constraint_valid: false }),
+  ]]);
+  assert.deepEqual(await repository.health(), {
+    configured: true,
+    ready: false,
+    schemaVersion: null,
+  });
 });
 
 test('lease acquire increments the global fence and adopts every attention record', async () => {
@@ -136,6 +191,47 @@ test('stale lease renewals are rejected by holder, signer, and monotonic fencing
   assert.match(calls[0].sql, /holder_id = \$3::uuid/);
   assert.match(calls[0].sql, /fencing_token = \$4::bigint/);
   assert.match(calls[0].sql, /lease_expires_at > now\(\)/);
+});
+
+test('ACCEPT_HANDOFF atomically persists exact row-bound successful receipt evidence', async () => {
+  const base = operationRow({ lifecycle_status: 'ACCEPTED' });
+  const evidence = acceptedEvidence(base);
+  const accepted = operationRow({
+    lifecycle_status: 'ACCEPTED',
+    lifecycle_observed_at: '2026-08-20T00:01:30.000Z',
+    accepted_at: '2026-08-20T00:01:00.000Z',
+    acceptance_revalidated_at: '2026-08-20T00:01:30.000Z',
+    acceptance_metadata: evidence,
+  });
+  const { repository, calls } = fixture([[
+    {
+      lease_valid: true,
+      operation_exists: true,
+      attempt_frozen: false,
+      operation: accepted,
+    },
+  ]]);
+  const result = await repository.acceptHandoff({
+    holderId: HOLDER,
+    signerAddress: SIGNER,
+    fencingToken: '9',
+    operationId: OPERATION_ID,
+    acceptanceEvidence: evidence,
+  });
+  assert.equal(result.lifecycleStatus, 'ACCEPTED');
+  assert.equal(result.acceptedAt, '2026-08-20T00:01:00.000Z');
+  assert.equal(result.acceptanceRevalidatedAt, '2026-08-20T00:01:30.000Z');
+  assert.deepEqual(result.acceptanceEvidence, evidence);
+  assert.match(calls[0].sql, /accepted_at = COALESCE\(target\.accepted_at, clock_timestamp\(\)\)/);
+  assert.match(calls[0].sql, /acceptance_revalidated_at = clock_timestamp\(\)/);
+  assert.match(calls[0].sql, /target\.state = 'SUBMITTED'/);
+  for (const field of [
+    'transactionHash', 'contractAddress', 'recipient', 'method', 'arguments',
+    'ACCEPTED', 'FINISHED_WITH_RETURN', 'receiptIdentityVerified',
+    'executionVerified', 'executionSucceeded',
+  ]) assert.match(calls[0].sql, new RegExp(field));
+  assert.equal(calls[0].params[5], JSON.stringify(evidence));
+  assertBradburyV8Isolation(calls[0].sql);
 });
 
 test('hash conflict response is quarantined without overwriting the immutable stored hash', async () => {
@@ -252,7 +348,7 @@ test('recovery query is keyset-paginated and asks for only limit plus one rows',
   assertBradburyV8Isolation(calls[0].sql);
 });
 
-test('database unique conflict and every nonterminal state block a second operation', async () => {
+test('database constraints hard-bound the two-slot pipeline and same-subject admission', async () => {
   const duplicate = Object.assign(new Error('duplicate'), { code: '23505' });
   const { repository, calls } = fixture([duplicate]);
   await assert.rejects(
@@ -274,11 +370,11 @@ test('database unique conflict and every nonterminal state block a second operat
     }),
     (error) => error.code === 'KEEPER_JOURNAL_UNRESOLVED_OPERATION',
   );
-  assert.equal(
-    calls[0].sql.match(/STATE_SATISFIED_UNPROVEN/g)?.length,
-    2,
-    'both PREPARE blocker queries must include STATE_SATISFIED_UNPROVEN',
-  );
+  assert.match(calls[0].sql, /generate_series\(0, 1\)/);
+  assert.match(calls[0].sql, /\(SELECT count\(\*\) FROM attention\) < 2/);
+  assert.match(calls[0].sql, /duplicate_subject/);
+  assert.match(calls[0].sql, /handoff_predecessor_operation_id/);
+  assert.match(calls[0].sql, /acceptance_revalidated_at >= now\(\) - interval '2 minutes'/);
   assertBradburyV8Isolation(calls[0].sql);
 });
 

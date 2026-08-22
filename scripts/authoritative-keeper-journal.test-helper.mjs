@@ -63,6 +63,11 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       transactionHash: null,
       lifecycleStatus: null,
       lifecycleObservedAt: null,
+      pipelineSlot: null,
+      handoffPredecessorOperationId: null,
+      acceptedAt: null,
+      acceptanceRevalidatedAt: null,
+      acceptanceEvidence: null,
       stateReasonCode: null,
       quarantineReason: null,
       preparedAt: now,
@@ -90,7 +95,7 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
           authenticationConfigured: true,
           signerConfigured: true,
         },
-        database: { configured: true, ready: true, schemaVersion: 5 },
+        database: { configured: true, ready: true, schemaVersion: 6 },
       };
     },
     async acquireLease(request) {
@@ -151,6 +156,36 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
           inserted: false,
         };
       }
+      const attention = [...operations.values()].filter((operation) => NONTERMINAL.has(operation.state));
+      if (attention.length >= 2) {
+        throw Object.assign(new Error('fake keeper pipeline is full'), {
+          code: 'KEEPER_JOURNAL_IN_FLIGHT_LIMIT',
+        });
+      }
+      if (attention.some((operation) => operation.contractAddress === canonical.contractAddress
+          && operation.subjectType === canonical.subjectType
+          && operation.subjectId === canonical.subjectId)) {
+        throw Object.assign(new Error('fake keeper subject is already in flight'), {
+          code: 'KEEPER_JOURNAL_SUBJECT_IN_FLIGHT',
+        });
+      }
+      const predecessor = attention[0] || null;
+      const predecessorParent = predecessor?.handoffPredecessorOperationId
+        ? operations.get(predecessor.handoffPredecessorOperationId)
+        : null;
+      if (predecessor && (
+        predecessor.state !== 'SUBMITTED'
+          || predecessor.lifecycleStatus !== 'ACCEPTED'
+          || predecessor.acceptedAt === null
+          || predecessor.acceptanceRevalidatedAt === null
+        || predecessor.acceptanceEvidence?.transactionHash !== predecessor.transactionHash
+        || (predecessor.handoffPredecessorOperationId !== null
+          && predecessorParent?.state !== 'VERIFIED')
+      )) {
+        throw Object.assign(new Error('fake keeper predecessor is unresolved'), {
+          code: 'KEEPER_JOURNAL_UNRESOLVED_OPERATION',
+        });
+      }
       const attemptNumber = latest
         ? (BigInt(latest.attemptNumber) + 1n).toString()
         : '1';
@@ -159,6 +194,10 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
         attemptNumber,
         latest?.operationId || null,
       );
+      operation.pipelineSlot = [0, 1].find((slot) => !attention.some(
+        (candidate) => candidate.pipelineSlot === slot,
+      ));
+      operation.handoffPredecessorOperationId = predecessor?.operationId || null;
       operations.set(operation.operationId, operation);
       return {
         status: 'ok',
@@ -192,6 +231,37 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       operation.updatedAt = operation.lifecycleObservedAt;
       operation.revision = String(Number(operation.revision) + 1);
       return { status: 'ok', action: 'OBSERVE_LIFECYCLE', ...responseOperation(operation) };
+    },
+    async acceptHandoff(request) {
+      calls.push({ method: 'acceptHandoff', request: structuredClone(request) });
+      assertLease(request.lease);
+      await hooks.acceptHandoff?.(request);
+      const operation = operations.get(request.operationId);
+      const evidence = request.acceptanceEvidence;
+      if (!operation || operation.state !== 'SUBMITTED'
+          || evidence?.transactionHash !== operation.transactionHash
+          || evidence?.contractAddress !== operation.contractAddress
+          || evidence?.recipient !== operation.contractAddress
+          || evidence?.method !== operation.method
+          || !Array.isArray(evidence?.arguments)
+          || evidence.arguments.length !== operation.args.length
+          || evidence.arguments.some((entry, index) => entry !== operation.args[index])
+          || evidence?.lifecycleStatus !== 'ACCEPTED'
+          || evidence?.txExecutionResultName !== 'FINISHED_WITH_RETURN'
+          || evidence?.receiptIdentityVerified !== true
+          || evidence?.executionVerified !== true
+          || evidence?.executionSucceeded !== true
+          || Object.keys(evidence).length !== 10) {
+        throw new Error('fake ACCEPTED handoff rejected');
+      }
+      operation.lifecycleStatus = 'ACCEPTED';
+      operation.lifecycleObservedAt = timestamp();
+      operation.acceptedAt ||= operation.lifecycleObservedAt;
+      operation.acceptanceRevalidatedAt = operation.lifecycleObservedAt;
+      operation.acceptanceEvidence = structuredClone(evidence);
+      operation.updatedAt = operation.lifecycleObservedAt;
+      operation.revision = String(Number(operation.revision) + 1);
+      return { status: 'ok', action: 'ACCEPT_HANDOFF', ...responseOperation(operation) };
     },
     async transition(request) {
       calls.push({ method: 'transition', request: structuredClone(request) });
@@ -271,6 +341,11 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       transactionHash: transactionHash?.toLowerCase() ?? null,
       lifecycleStatus,
       lifecycleObservedAt: lifecycleStatus ? now : null,
+      pipelineSlot: NONTERMINAL.has(state) ? 0 : null,
+      handoffPredecessorOperationId: null,
+      acceptedAt: null,
+      acceptanceRevalidatedAt: null,
+      acceptanceEvidence: null,
       stateReasonCode,
       quarantineReason,
       preparedAt: now,

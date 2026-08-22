@@ -7,6 +7,7 @@ import {
   assertFinalizedGenlayerExecution,
   categorizeGenlayerFailure,
   createPasswordWritingSpawn,
+  getGenlayerDecidedReceipt,
   getGenlayerTransactionStatus,
   parseGenlayerCallOutput,
   parseGenlayerReceiptOutput,
@@ -683,4 +684,36 @@ test('FINALIZED receipt command uses explicit bounded retry policy', async () =>
     'receipt', TRANSACTION_HASH, '--status', 'FINALIZED', '--retries', '17', '--interval', '321',
   ]);
   assert.equal(receipt.statusName, 'FINALIZED');
+});
+
+test('ACCEPTED receipt command requires explicit successful execution evidence', async () => {
+  let invocationArgs;
+  const receipt = await getGenlayerDecidedReceipt({
+    invocation: { executable: 'genlayer', prefixArgs: [] },
+    transactionHash: TRANSACTION_HASH,
+    spawnImpl: (_executable, args) => {
+      invocationArgs = args;
+      return streamingChild({ stdout: [studioWriteOutput({ statusName: 'ACCEPTED' })] });
+    },
+    writeStdout: () => {},
+    writeStderr: () => {},
+  });
+  assert.deepEqual(invocationArgs, [
+    'receipt', TRANSACTION_HASH, '--status', 'ACCEPTED', '--retries', '0', '--interval', '1',
+  ]);
+  assert.equal(receipt.statusName, 'ACCEPTED');
+  assert.equal(receipt.txExecutionResultName, 'FINISHED_WITH_RETURN');
+
+  await assert.rejects(
+    getGenlayerDecidedReceipt({
+      invocation: { executable: 'genlayer', prefixArgs: [] },
+      transactionHash: TRANSACTION_HASH,
+      spawnImpl: () => streamingChild({
+        stdout: ["Result:\n{\n  status_name: 'ACCEPTED'\n}"],
+      }),
+      writeStdout: () => {},
+      writeStderr: () => {},
+    }),
+    /did not report txExecutionResultName/,
+  );
 });

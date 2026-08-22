@@ -6,6 +6,8 @@ export const KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM = 'd2609dfc884eae97d2fed12bf2b582
 export const KEEPER_JOURNAL_SCHEMA_CHECKSUM = '9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70';
 export const KEEPER_JOURNAL_SCHEMA_V4_CHECKSUM = '1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910';
 export const KEEPER_JOURNAL_SCHEMA_V5_CHECKSUM = 'a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59';
+export const KEEPER_JOURNAL_SCHEMA_V6_CHECKSUM = '5b81d291c121cae31962b164608e5ad5fc65a19158bed95cd96fae0348e13bdf';
+export const KEEPER_JOURNAL_MAX_PIPELINE_DEPTH = 2;
 const QUERY_TIMEOUT_MS = 8_000;
 const LEASE_SCOPE = 'bradbury:4221:keeper';
 
@@ -111,6 +113,17 @@ export function createNeonKeeperJournalRepository({
            to_regclass('public.arena_keeper_operations') IS NOT NULL AS operations_exists,
            to_regclass('public.arena_keeper_journal_requests') IS NOT NULL AS requests_exists,
            to_regclass('public.arena_keeper_operation_conflicts') IS NOT NULL AS conflicts_exists,
+           EXISTS (
+             SELECT 1
+               FROM pg_constraint request_action_constraint
+              WHERE request_action_constraint.conrelid =
+                    'public.arena_keeper_journal_requests'::regclass
+                AND request_action_constraint.conname =
+                    'arena_keeper_journal_requests_request_action_check'
+                AND position(
+                  '''ACCEPT_HANDOFF''' IN pg_get_constraintdef(request_action_constraint.oid)
+                ) > 0
+           ) AS request_action_constraint_valid,
            to_regprocedure('public.arena_guard_keeper_operation_update()') IS NOT NULL AS guard_function_exists,
            EXISTS (
              SELECT 1
@@ -121,6 +134,25 @@ export function createNeonKeeperJournalRepository({
            ) AS guard_trigger_exists,
            to_regclass('public.arena_keeper_operations_logical_attempt_key') IS NOT NULL
              AS logical_attempt_key_exists,
+           to_regclass('public.arena_keeper_operations_pipeline_slot_v6_idx') IS NOT NULL
+             AS pipeline_slot_index_exists,
+           to_regclass('public.arena_keeper_operations_attention_subject_v6_idx') IS NOT NULL
+             AS attention_subject_index_exists,
+           to_regclass('public.arena_keeper_operations_handoff_predecessor_v6_idx') IS NOT NULL
+             AS handoff_predecessor_index_exists,
+           to_regclass('public.arena_keeper_operations_attention_v6_idx') IS NOT NULL
+             AS attention_index_exists,
+           to_regclass('public.arena_keeper_operations_one_unresolved_signer_idx') IS NULL
+             AS legacy_unresolved_index_absent,
+           to_regprocedure('public.arena_guard_keeper_accepted_handoff()') IS NOT NULL
+             AS accepted_guard_function_exists,
+           EXISTS (
+             SELECT 1
+               FROM pg_trigger
+              WHERE tgrelid = 'public.arena_keeper_operations'::regclass
+                AND tgname = 'arena_keeper_operations_guard_accepted_handoff'
+                AND NOT tgisinternal
+           ) AS accepted_guard_trigger_exists,
             (
               SELECT count(*) = 4
                FROM information_schema.columns
@@ -138,6 +170,27 @@ export function createNeonKeeperJournalRepository({
                  AND table_name = 'arena_keeper_operations'
                  AND column_name IN ('subject_type', 'subject_id')
             ) AS subject_columns_exist,
+            (
+              SELECT count(*) = 5
+                FROM information_schema.columns
+               WHERE table_schema = 'public'
+                 AND table_name = 'arena_keeper_operations'
+                 AND column_name IN (
+                   'pipeline_slot', 'handoff_predecessor_operation_id',
+                   'accepted_at', 'acceptance_revalidated_at', 'acceptance_metadata'
+                 )
+            ) AS accepted_handoff_columns_exist,
+            (
+              SELECT count(*) = 4
+                FROM pg_constraint
+               WHERE conrelid = 'public.arena_keeper_operations'::regclass
+                 AND conname IN (
+                   'arena_keeper_operations_pipeline_slot_v6_check',
+                   'arena_keeper_operations_attention_slot_v6_check',
+                   'arena_keeper_operations_handoff_predecessor_v6_fk',
+                   'arena_keeper_operations_acceptance_evidence_v6_check'
+                 )
+            ) AS accepted_handoff_constraints_exist,
            EXISTS (
              SELECT 1 FROM arena_schema_migrations
               WHERE version = 2
@@ -161,15 +214,22 @@ export function createNeonKeeperJournalRepository({
               WHERE version = 5
                 AND name = 'keeper_receipt_identity_revalidation'
                 AND schema_checksum = $4
+           ) AS v5_migration_valid,
+           EXISTS (
+             SELECT 1 FROM arena_schema_migrations
+              WHERE version = 6
+                AND name = 'keeper_accepted_handoff'
+                AND schema_checksum = $5
            ) AS migration_valid,
            NOT EXISTS (
-             SELECT 1 FROM arena_schema_migrations WHERE version > 5
+             SELECT 1 FROM arena_schema_migrations WHERE version > 6
            ) AS no_unknown_migrations`,
         [
           KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_V4_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_V5_CHECKSUM,
+          KEEPER_JOURNAL_SCHEMA_V6_CHECKSUM,
         ],
         3_000,
       );
@@ -178,17 +238,28 @@ export function createNeonKeeperJournalRepository({
         && row.operations_exists === true
         && row.requests_exists === true
         && row.conflicts_exists === true
+        && row.request_action_constraint_valid === true
         && row.guard_function_exists === true
         && row.guard_trigger_exists === true
         && row.logical_attempt_key_exists === true
+        && row.pipeline_slot_index_exists === true
+        && row.attention_subject_index_exists === true
+        && row.handoff_predecessor_index_exists === true
+        && row.attention_index_exists === true
+        && row.legacy_unresolved_index_absent === true
+        && row.accepted_guard_function_exists === true
+        && row.accepted_guard_trigger_exists === true
         && row.attempt_columns_exist === true
         && row.subject_columns_exist === true
+        && row.accepted_handoff_columns_exist === true
+        && row.accepted_handoff_constraints_exist === true
         && row.base_migration_valid === true
         && row.attempt_migration_valid === true
         && row.v4_migration_valid === true
+        && row.v5_migration_valid === true
         && row.migration_valid === true
         && row.no_unknown_migrations === true;
-      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 5 : null });
+      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 6 : null });
     },
 
     async claimRequest({ keyHash, requestHash, action }) {
@@ -360,19 +431,84 @@ export function createNeonKeeperJournalRepository({
                     WHEN $11 = 'epoch' THEN $12::bigint ELSE NULL
                   END
               AND candidate.canonical_operation = $13
+         ), attention AS MATERIALIZED (
+           SELECT candidate.*
+             FROM arena_keeper_operations candidate, active
+            WHERE candidate.signer_address = $2
+              AND candidate.deployment_alias = 'v8'
+              AND candidate.network = 'bradbury'
+              AND candidate.chain_id = 4221
+              AND candidate.state IN (
+                'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS',
+                'QUARANTINED', 'STATE_SATISFIED_UNPROVEN'
+              )
          ), candidate_attempt AS (
            SELECT active.fencing_token,
                   COALESCE(exact_latest.attempt_number + 1, 1) AS attempt_number,
                   exact_latest.operation_id AS retry_of_operation_id,
-                  exact_latest.attempt_number AS retry_of_attempt_number
+                  exact_latest.attempt_number AS retry_of_attempt_number,
+                  (
+                    SELECT available.slot
+                      FROM generate_series(0, 1) AS available(slot)
+                     WHERE NOT EXISTS (
+                       SELECT 1 FROM attention occupied
+                        WHERE occupied.pipeline_slot = available.slot
+                     )
+                     ORDER BY available.slot
+                     LIMIT 1
+                  )::smallint AS pipeline_slot,
+                  CASE WHEN (SELECT count(*) FROM attention) = 1
+                    THEN (SELECT operation_id FROM attention LIMIT 1)
+                    ELSE NULL
+                  END AS handoff_predecessor_operation_id
              FROM active
              LEFT JOIN exact_latest ON true
-             WHERE exact_latest.operation_id IS NULL
+             WHERE (
+               exact_latest.operation_id IS NULL
                 OR exact_latest.state = 'FINALIZED_FAILURE'
                 OR (
                   exact_latest.state = 'VERIFIED'
                   AND exact_latest.method IN ('retry_prepare_payout', 'retry_payout')
                 )
+               )
+               AND (SELECT count(*) FROM attention) < 2
+               AND NOT EXISTS (
+                 SELECT 1 FROM attention duplicate_subject
+                  WHERE duplicate_subject.contract_address = $7
+                    AND duplicate_subject.subject_type = $11
+                    AND duplicate_subject.subject_id = $12
+               )
+               AND (
+                 NOT EXISTS (SELECT 1 FROM attention)
+                 OR (
+                   (SELECT count(*) FROM attention) = 1
+                   AND EXISTS (
+                     SELECT 1
+                       FROM attention predecessor
+                       LEFT JOIN arena_keeper_operations predecessor_parent
+                         ON predecessor_parent.operation_id = predecessor.handoff_predecessor_operation_id
+                      WHERE predecessor.state = 'SUBMITTED'
+                        AND predecessor.lifecycle_status = 'ACCEPTED'
+                        AND predecessor.acceptance_revalidated_at >= now() - interval '2 minutes'
+                        AND predecessor.acceptance_metadata = jsonb_build_object(
+                          'transactionHash', predecessor.transaction_hash,
+                          'contractAddress', predecessor.contract_address,
+                          'recipient', predecessor.contract_address,
+                          'method', predecessor.method,
+                          'arguments', predecessor.arguments,
+                          'lifecycleStatus', 'ACCEPTED',
+                          'txExecutionResultName', 'FINISHED_WITH_RETURN',
+                          'receiptIdentityVerified', true,
+                          'executionVerified', true,
+                          'executionSucceeded', true
+                        )
+                        AND (
+                          predecessor.handoff_predecessor_operation_id IS NULL
+                          OR predecessor_parent.state = 'VERIFIED'
+                        )
+                   )
+                 )
+               )
          ), inserted AS (
            INSERT INTO arena_keeper_operations (
              operation_id, logical_operation_id, attempt_number,
@@ -380,7 +516,8 @@ export function createNeonKeeperJournalRepository({
              deployment_alias, network, chain_id, signer_address,
              contract_address, method, arguments, value_atto,
              epoch_end_timestamp, subject_type, subject_id,
-             canonical_operation, state, prepared_fencing_token, last_fencing_token
+             canonical_operation, state, prepared_fencing_token, last_fencing_token,
+             pipeline_slot, handoff_predecessor_operation_id
            )
            SELECT CASE
                     WHEN candidate_attempt.attempt_number = 1 THEN $5
@@ -399,20 +536,11 @@ export function createNeonKeeperJournalRepository({
                   $10::numeric,
                   CASE WHEN $11 = 'epoch' THEN $12::bigint ELSE NULL END,
                   $11, $12, $13, 'PREPARED',
-                  candidate_attempt.fencing_token, candidate_attempt.fencing_token
+                  candidate_attempt.fencing_token, candidate_attempt.fencing_token,
+                  candidate_attempt.pipeline_slot,
+                  candidate_attempt.handoff_predecessor_operation_id
              FROM candidate_attempt
-            WHERE NOT EXISTS (
-              SELECT 1 FROM arena_keeper_operations blocker
-               WHERE blocker.signer_address = $2
-                 AND blocker.deployment_alias = 'v8'
-                 AND blocker.network = 'bradbury'
-                 AND blocker.chain_id = 4221
-                 AND blocker.state IN (
-                   'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS',
-                   'QUARANTINED', 'STATE_SATISFIED_UNPROVEN'
-                 )
-            )
-              AND (
+            WHERE (
                 NOT EXISTS (SELECT 1 FROM logical_latest)
                 OR EXISTS (SELECT 1 FROM exact_latest)
               )
@@ -428,15 +556,24 @@ export function createNeonKeeperJournalRepository({
          SELECT
            EXISTS (SELECT 1 FROM active) AS lease_valid,
            EXISTS (SELECT 1 FROM logical_latest) AS operation_exists,
+           (SELECT count(*) FROM attention) >= 2 AS pipeline_full,
            EXISTS (
-             SELECT 1 FROM arena_keeper_operations blocker
-              WHERE blocker.signer_address = $2
-                AND blocker.deployment_alias = 'v8'
-                AND blocker.network = 'bradbury'
-                AND blocker.chain_id = 4221
-                AND blocker.state IN (
-                  'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS',
-                  'QUARANTINED', 'STATE_SATISFIED_UNPROVEN'
+             SELECT 1 FROM attention duplicate_subject
+              WHERE duplicate_subject.contract_address = $7
+                AND duplicate_subject.subject_type = $11
+                AND duplicate_subject.subject_id = $12
+           ) AS subject_blocked,
+           EXISTS (
+             SELECT 1 FROM attention blocker
+              LEFT JOIN arena_keeper_operations blocker_parent
+                ON blocker_parent.operation_id = blocker.handoff_predecessor_operation_id
+             WHERE blocker.state <> 'SUBMITTED'
+                OR blocker.lifecycle_status <> 'ACCEPTED'
+                OR blocker.acceptance_revalidated_at < now() - interval '2 minutes'
+                OR blocker.acceptance_metadata IS NULL
+                OR (
+                  blocker.handoff_predecessor_operation_id IS NOT NULL
+                  AND blocker_parent.state <> 'VERIFIED'
                 )
            ) AS unresolved_blocked,
            (SELECT to_jsonb(selected)
@@ -470,6 +607,20 @@ export function createNeonKeeperJournalRepository({
       if (row.lease_valid !== true) leaseRejected();
       const operationRow = databaseRow(row.operation);
       if (!operationRow) {
+        if (row.pipeline_full === true) {
+          throw new KeeperJournalError(
+            'KEEPER_JOURNAL_IN_FLIGHT_LIMIT',
+            'The Bradbury keeper signer pipeline already has two in-flight operations.',
+            { statusCode: 409 },
+          );
+        }
+        if (row.subject_blocked === true) {
+          throw new KeeperJournalError(
+            'KEEPER_JOURNAL_SUBJECT_IN_FLIGHT',
+            'The Bradbury keeper already has an unresolved operation for this subject.',
+            { statusCode: 409 },
+          );
+        }
         if (row.unresolved_blocked === true) {
           throw new KeeperJournalError(
             'KEEPER_JOURNAL_UNRESOLVED_OPERATION',
@@ -706,6 +857,120 @@ export function createNeonKeeperJournalRepository({
         throw new KeeperJournalError(
           'KEEPER_JOURNAL_LIFECYCLE_CONFLICT',
           'Keeper lifecycle observation would regress or lacks a submission hash.',
+          { statusCode: 409 },
+        );
+      }
+      return operation;
+    },
+
+    async acceptHandoff({
+      holderId, signerAddress, fencingToken, operationId, acceptanceEvidence,
+    }) {
+      const rows = await query(
+        `WITH active AS (
+           SELECT fencing_token
+             FROM arena_keeper_signer_leases
+            WHERE lease_scope = $1
+              AND signer_address = $2
+              AND holder_id = $3::uuid
+              AND fencing_token = $4::bigint
+              AND released_at IS NULL
+              AND lease_expires_at > now()
+            FOR UPDATE
+         ), target AS (
+           SELECT operation.* FROM arena_keeper_operations operation, active
+            WHERE operation.operation_id = $5
+              AND operation.signer_address = $2
+              AND operation.deployment_alias = 'v8'
+              AND operation.network = 'bradbury'
+              AND operation.chain_id = 4221
+              AND NOT EXISTS (
+                SELECT 1 FROM arena_keeper_operations later
+                 WHERE later.logical_operation_id = operation.logical_operation_id
+                   AND later.attempt_number > operation.attempt_number
+              )
+         ), updated AS (
+           UPDATE arena_keeper_operations operation SET
+             lifecycle_status = 'ACCEPTED',
+             accepted_at = COALESCE(target.accepted_at, clock_timestamp()),
+             acceptance_revalidated_at = clock_timestamp(),
+             acceptance_metadata = $6::jsonb,
+             last_fencing_token = active.fencing_token
+           FROM target, active
+           WHERE operation.operation_id = target.operation_id
+             AND target.state = 'SUBMITTED'
+             AND target.transaction_hash = $6::jsonb ->> 'transactionHash'
+             AND $6::jsonb = jsonb_build_object(
+               'transactionHash', target.transaction_hash,
+               'contractAddress', target.contract_address,
+               'recipient', target.contract_address,
+               'method', target.method,
+               'arguments', target.arguments,
+               'lifecycleStatus', 'ACCEPTED',
+               'txExecutionResultName', 'FINISHED_WITH_RETURN',
+               'receiptIdentityVerified', true,
+               'executionVerified', true,
+               'executionSucceeded', true
+             )
+           RETURNING operation.*
+         )
+         SELECT
+           EXISTS (SELECT 1 FROM active) AS lease_valid,
+           EXISTS (
+             SELECT 1 FROM arena_keeper_operations
+              WHERE operation_id = $5
+                AND signer_address = $2
+                AND deployment_alias = 'v8'
+                AND network = 'bradbury'
+                AND chain_id = 4221
+           ) AS operation_exists,
+           EXISTS (
+             SELECT 1
+               FROM arena_keeper_operations operation
+               JOIN arena_keeper_operations later
+                 ON later.logical_operation_id = operation.logical_operation_id
+                AND later.attempt_number > operation.attempt_number
+              WHERE operation.operation_id = $5
+                AND operation.signer_address = $2
+                AND operation.deployment_alias = 'v8'
+                AND operation.network = 'bradbury'
+                AND operation.chain_id = 4221
+           ) AS attempt_frozen,
+           (SELECT to_jsonb(updated)
+                   || jsonb_build_object(
+                     'chain_id', updated.chain_id::text,
+                     'value_atto', updated.value_atto::text,
+                     'attempt_number', updated.attempt_number::text,
+                     'prepared_fencing_token', updated.prepared_fencing_token::text,
+                     'last_fencing_token', updated.last_fencing_token::text,
+                     'revision', updated.revision::text
+                   )
+              FROM updated LIMIT 1) AS operation`,
+        [
+          LEASE_SCOPE,
+          signerAddress,
+          holderId,
+          fencingToken,
+          operationId,
+          JSON.stringify(acceptanceEvidence),
+        ],
+      );
+      const row = rows[0] || {};
+      if (row.lease_valid !== true) leaseRejected();
+      if (row.operation_exists !== true) {
+        throw new KeeperJournalError(
+          'KEEPER_JOURNAL_OPERATION_NOT_FOUND',
+          'Keeper operation was not found.',
+          { statusCode: 404 },
+        );
+      }
+      if (row.attempt_frozen === true) attemptFrozen();
+      const operation = operationResult(row);
+      if (!operation || operation.lifecycleStatus !== 'ACCEPTED'
+          || operation.acceptedAt === null) {
+        throw new KeeperJournalError(
+          'KEEPER_JOURNAL_ACCEPTANCE_CONFLICT',
+          'Keeper ACCEPTED handoff evidence was rejected.',
           { statusCode: 409 },
         );
       }

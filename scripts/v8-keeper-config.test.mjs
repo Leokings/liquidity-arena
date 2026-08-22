@@ -10,6 +10,8 @@ import {
   normalizeV8KeeperConfig,
   plannedFutureEpochEnds,
   V8_AUDITED_PAYOUT_FACTORY,
+  V8_DEFAULT_FINALITY_RETRIES,
+  V8_DEFAULT_FUTURE_HOURS,
   V8_PUBLIC_METHODS,
 } from './v8-keeper-config.mjs';
 
@@ -56,8 +58,23 @@ test('V8 config is exact Bradbury, fixed factory/fee, and 25-method release', ()
   assert.equal(config.epochs.maxStakePerWalletAtto, '10000000000000000000');
   assert.equal(config.operator.maxEpochReadsPerRun, 50);
   assert.equal(config.operator.maxPayoutReadsPerRun, 500);
+  assert.equal(config.operator.finalityRetries, V8_DEFAULT_FINALITY_RETRIES);
   assert.equal(V8_PUBLIC_METHODS.length, 25);
   assert.equal(new Set(V8_PUBLIC_METHODS).size, 25);
+});
+
+test('production example reserves one Bradbury finality window and a two-hour horizon', () => {
+  const production = loadV8KeeperConfig('scripts/examples/v8-keeper.example.json', {
+    environment: ENVIRONMENT,
+  });
+  assert.equal(production.epochs.futureHours, V8_DEFAULT_FUTURE_HOURS);
+  assert.equal(production.operator.finalityRetries, V8_DEFAULT_FINALITY_RETRIES);
+  assert.equal(production.operator.finalityIntervalMs, 5_000);
+  assert.equal(production.operator.maxWritesPerRun >= production.epochs.futureHours, true);
+  const finalityWindowMs = production.operator.finalityRetries
+    * production.operator.finalityIntervalMs;
+  assert.equal(finalityWindowMs, 40 * 60 * 1_000);
+  assert.equal(finalityWindowMs < 45 * 60 * 1_000, true);
 });
 
 test('V8 config rejects another network, chain, factory, fee, or unknown field', () => {

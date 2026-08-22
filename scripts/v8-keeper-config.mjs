@@ -21,6 +21,8 @@ export const V8_MINIMUM_QUALIFIED_VENUES = 3;
 export const V8_VALIDATOR_RETURN_TOLERANCE_PPB = 100_000;
 export const V8_PAYOUT_RETRY_DELAY_SECONDS = 3_600;
 export const V8_MAX_PAYOUT_ATTEMPTS = 3;
+export const V8_DEFAULT_FUTURE_HOURS = 2;
+export const V8_DEFAULT_FINALITY_RETRIES = 480;
 export const V8_ASSET_IDS = Object.freeze(['BTC', 'ETH', 'BNB', 'SOL', 'XRP']);
 export const V8_VENUES = Object.freeze(['BINANCE', 'OKX', 'BYBIT', 'GATE', 'KUCOIN']);
 export const V8_SUPPORTED_OBJECTIVES = Object.freeze(['HIGH', 'LOW']);
@@ -129,7 +131,7 @@ export function normalizeV8KeeperConfig(rawValue, { environment = process.env } 
   const minStakeAtto = genDecimalToAtto(minStakeGen, 'epochs.minStakeGen');
   const maxStakePerWalletAtto = genDecimalToAtto(maxStakePerWalletGen, 'epochs.maxStakePerWalletGen');
   if (BigInt(minStakeAtto) <= 0n || BigInt(maxStakePerWalletAtto) < BigInt(minStakeAtto)) fail('epoch stake bounds are invalid');
-  const futureHours = integer(epochs.futureHours ?? 24, 'epochs.futureHours', { minimum: 1, maximum: 24 });
+  const futureHours = integer(epochs.futureHours ?? V8_DEFAULT_FUTURE_HOURS, 'epochs.futureHours', { minimum: 1, maximum: 24 });
   const minimumCreationLeadSeconds = integer(
     epochs.minimumCreationLeadSeconds ?? 7_200,
     'epochs.minimumCreationLeadSeconds',
@@ -162,7 +164,7 @@ export function normalizeV8KeeperConfig(rawValue, { environment = process.env } 
       maxWritesPerRun: integer(operator.maxWritesPerRun ?? 30, 'operator.maxWritesPerRun', { minimum: 1, maximum: 50 }),
       readAttempts: integer(operator.readAttempts ?? 3, 'operator.readAttempts', { minimum: 1, maximum: 10 }),
       retryBaseMs: integer(operator.retryBaseMs ?? 500, 'operator.retryBaseMs', { minimum: 0, maximum: 30_000 }),
-      finalityRetries: integer(operator.finalityRetries ?? 180, 'operator.finalityRetries', { minimum: 1, maximum: 10_000 }),
+      finalityRetries: integer(operator.finalityRetries ?? V8_DEFAULT_FINALITY_RETRIES, 'operator.finalityRetries', { minimum: 1, maximum: 10_000 }),
       finalityIntervalMs: integer(operator.finalityIntervalMs ?? 5_000, 'operator.finalityIntervalMs', { minimum: 100, maximum: 60_000 }),
       postStateAttempts: integer(operator.postStateAttempts ?? 5, 'operator.postStateAttempts', { minimum: 1, maximum: 20 }),
       postStateIntervalMs: integer(operator.postStateIntervalMs ?? 2_000, 'operator.postStateIntervalMs', { minimum: 0, maximum: 60_000 }),

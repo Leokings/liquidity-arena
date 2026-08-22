@@ -1004,10 +1004,7 @@ export async function getGenlayerDecidedReceipt({
     ],
     ...options,
   });
-  return parseGenlayerReceiptOutput(result.output, {
-    transactionHash,
-    requireExecution: false,
-  });
+  return parseGenlayerReceiptOutput(result.output, { transactionHash });
 }
 
 export async function runGenlayerCall({

@@ -169,6 +169,34 @@ export function validateRecoveredKeeperOperation(operation) {
       && operation.transactionHash === null) {
     fail('KEEPER_JOURNAL_SCHEMA', 'Recovered submitted operation has no transaction hash.');
   }
+  const acceptanceEvidence = operation.acceptanceEvidence;
+  if ((RECOVERABLE_STATES.has(operation.state) && ![0, 1].includes(operation.pipelineSlot))
+      || (operation.handoffPredecessorOperationId !== null
+        && !OPERATION_ID.test(String(operation.handoffPredecessorOperationId || '')))
+      || ((operation.acceptedAt === null) !== (acceptanceEvidence === null))
+      || ((operation.acceptanceRevalidatedAt === null) !== (acceptanceEvidence === null))
+      || (acceptanceEvidence !== null && (
+        !acceptanceEvidence || typeof acceptanceEvidence !== 'object'
+        || Array.isArray(acceptanceEvidence)
+        || Object.keys(acceptanceEvidence).length !== 10
+        || acceptanceEvidence.transactionHash !== operation.transactionHash
+        || acceptanceEvidence.contractAddress !== operation.contractAddress
+        || acceptanceEvidence.recipient !== operation.contractAddress
+        || acceptanceEvidence.method !== operation.method
+        || !Array.isArray(acceptanceEvidence.arguments)
+        || acceptanceEvidence.arguments.length !== operation.args.length
+        || acceptanceEvidence.arguments.some((entry, index) => entry !== operation.args[index])
+        || acceptanceEvidence.lifecycleStatus !== 'ACCEPTED'
+        || acceptanceEvidence.txExecutionResultName !== 'FINISHED_WITH_RETURN'
+        || acceptanceEvidence.receiptIdentityVerified !== true
+        || acceptanceEvidence.executionVerified !== true
+        || acceptanceEvidence.executionSucceeded !== true
+        || Number.isNaN(Date.parse(operation.acceptedAt))
+        || Number.isNaN(Date.parse(operation.acceptanceRevalidatedAt))
+        || Date.parse(operation.acceptanceRevalidatedAt) < Date.parse(operation.acceptedAt)
+      ))) {
+    fail('KEEPER_JOURNAL_SCHEMA', 'Recovered operation handoff evidence is malformed.');
+  }
   return Object.freeze({ ...operation, args: canonical.args });
 }
 
@@ -228,10 +256,10 @@ export function createAuthoritativeKeeperSession({
         || health?.configuration?.signerConfigured !== true
         || health?.database?.configured !== true
         || health?.database?.ready !== true
-        || health?.database?.schemaVersion !== 5) {
+        || health?.database?.schemaVersion !== 6) {
       fail(
         'KEEPER_JOURNAL_NOT_READY',
-        'The authoritative keeper journal is not ready on schema version 5; no lease or write is permitted.',
+        'The authoritative keeper journal is not ready on schema version 6; no lease or write is permitted.',
       );
     }
     const response = await client.acquireLease({
@@ -377,6 +405,14 @@ export function createAuthoritativeKeeperSession({
         idempotencyKey: key(`observe-${operationId}-${lifecycleStatus}`),
       });
     },
+    async accept(operationId, acceptanceEvidence) {
+      return client.acceptHandoff({
+        lease: requireLease(),
+        operationId,
+        acceptanceEvidence,
+        idempotencyKey: key(`accept-${operationId}`),
+      });
+    },
     async transition(operationId, targetState, { reasonCode = null, metadata = {} } = {}) {
       return client.transition({
         lease: requireLease(),
@@ -477,6 +513,7 @@ export async function reconcileAuthoritativeOperation({
   contractAddress,
   operator,
   validateReceipt,
+  validateAcceptedReceipt,
   verifyPostState,
   sleep,
   lifecycleAttempts,
@@ -596,6 +633,10 @@ export async function reconcileAuthoritativeOperation({
       try {
         lifecycleStatus = await operator.getTransactionStatus(operation.transactionHash);
       } catch (error) {
+        if (attempt < attempts) {
+          await sleep(lifecycleIntervalMs);
+          continue;
+        }
         return Object.freeze({
           verified: false,
           operation,
@@ -607,6 +648,54 @@ export async function reconcileAuthoritativeOperation({
       if (lifecycleStatus !== operation.lifecycleStatus) {
         const observed = await session.observe(operation.operationId, lifecycleStatus);
         operation = validateRecoveredKeeperOperation(observed?.operation || operation);
+      }
+      if (lifecycleStatus === 'ACCEPTED') {
+        try {
+          const receipt = await operator.getAcceptedReceipt(operation.transactionHash);
+          validateAcceptedReceipt(receipt, operation);
+          const acceptanceEvidence = Object.freeze({
+            transactionHash: operation.transactionHash,
+            contractAddress: operation.contractAddress,
+            recipient: operation.contractAddress,
+            method: operation.method,
+            arguments: Object.freeze([...operation.args]),
+            lifecycleStatus: 'ACCEPTED',
+            txExecutionResultName: 'FINISHED_WITH_RETURN',
+            receiptIdentityVerified: true,
+            executionVerified: true,
+            executionSucceeded: true,
+          });
+          const accepted = await session.accept(operation.operationId, acceptanceEvidence);
+          operation = validateRecoveredKeeperOperation(accepted?.operation || operation);
+          if (operation.state !== 'SUBMITTED'
+              || operation.lifecycleStatus !== 'ACCEPTED'
+              || operation.acceptedAt === null
+              || operation.acceptanceEvidence?.transactionHash !== operation.transactionHash) {
+            fail(
+              'KEEPER_JOURNAL_ACCEPTANCE_CONFLICT',
+              'Successful ACCEPTED receipt evidence was not durably persisted.',
+            );
+          }
+          return Object.freeze({
+            verified: false,
+            accepted: true,
+            action,
+            operation,
+            acceptanceEvidence,
+          });
+        } catch (error) {
+          if (attempt < attempts) {
+            await sleep(lifecycleIntervalMs);
+            continue;
+          }
+          return Object.freeze({
+            verified: false,
+            operation,
+            pending: pending(operation, 'ACCEPTED_RECEIPT_UNPROVEN', {
+              message: error instanceof Error ? error.message : String(error),
+            }),
+          });
+        }
       }
       if (lifecycleStatus === 'FINALIZED') break;
       if (attempt < attempts) await sleep(lifecycleIntervalMs);
@@ -735,21 +824,67 @@ export async function reconcileAuthoritativeOperation({
 
 export async function recoverAuthoritativeOperations(options) {
   const operations = await options.session.recoverAll();
+  if (operations.length > 2
+      || new Set(operations.map((operation) => operation.pipelineSlot)).size
+        !== operations.length) {
+    fail(
+      'KEEPER_JOURNAL_PIPELINE_SHAPE',
+      'Keeper recovery exceeded the two-slot authoritative pipeline.',
+    );
+  }
+  let orderedOperations = operations;
+  if (operations.length === 2) {
+    if (operations[1].handoffPredecessorOperationId === operations[0].operationId) {
+      orderedOperations = operations;
+    } else if (operations[0].handoffPredecessorOperationId === operations[1].operationId) {
+      orderedOperations = Object.freeze([operations[1], operations[0]]);
+    } else {
+      fail(
+        'KEEPER_JOURNAL_PIPELINE_SHAPE',
+        'Keeper recovery returned an invalid ACCEPTED-handoff lineage.',
+      );
+    }
+  }
   const recovered = [];
+  const accepted = [];
   const pendingOperations = [];
-  for (const operation of operations) {
-    const result = await reconcileAuthoritativeOperation({ ...options, operation });
+  for (const operation of orderedOperations) {
+    const result = await reconcileAuthoritativeOperation({
+      ...options,
+      lifecycleAttempts: options.recoveryLifecycleAttempts ?? 1,
+      operation,
+    });
     if (result.verified) recovered.push(Object.freeze({
       ...result.action,
       operationId: operation.operationId,
       transactionHash: operation.transactionHash,
       status: result.postState?.status,
     }));
+    else if (result.accepted) accepted.push(Object.freeze({
+      ...result.action,
+      operationId: operation.operationId,
+      logicalOperationId: operation.logicalOperationId,
+      subjectType: operation.subjectType,
+      subjectId: operation.subjectId,
+      transactionHash: operation.transactionHash,
+      pipelineSlot: operation.pipelineSlot,
+      acceptedAt: result.operation.acceptedAt,
+      acceptanceRevalidatedAt: result.operation.acceptanceRevalidatedAt,
+      operation: result.operation,
+    }));
     else pendingOperations.push(result.pending);
   }
+  const outstanding = [...accepted, ...pendingOperations];
   return Object.freeze({
     recovered: Object.freeze(recovered),
+    accepted: Object.freeze(accepted),
     pending: Object.freeze(pendingOperations),
+    outstandingLogicalOperationIds: Object.freeze([
+      ...new Set(outstanding.map((operation) => operation.logicalOperationId)),
+    ]),
+    outstandingSubjects: Object.freeze([
+      ...new Set(outstanding.map((operation) => `${operation.subjectType}:${operation.subjectId}`)),
+    ]),
     blocked: pendingOperations.length > 0,
   });
 }

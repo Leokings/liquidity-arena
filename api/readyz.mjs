@@ -4,6 +4,7 @@ import { testnetBradbury } from 'genlayer-js/chains';
 import { configuredBinanceRestBases } from '../market/binance-proxy.js';
 import { loadLiquidityArenaDeploymentConfig } from '../server/deployment-config.mjs';
 import {
+  READINESS_EPOCH_COVERAGE_COUNT,
   READINESS_TIMEOUT_MS,
   createLiquidityArenaReadinessProbe,
   readinessEpochEnds,
@@ -17,7 +18,7 @@ function json(res, statusCode, body, method = 'GET') {
   else res.end(JSON.stringify(body));
 }
 
-export { readinessEpochEnds };
+export { READINESS_EPOCH_COVERAGE_COUNT, readinessEpochEnds };
 
 export function createReadyHandler({
   environment = process.env,
