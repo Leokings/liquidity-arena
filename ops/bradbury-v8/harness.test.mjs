@@ -1222,6 +1222,20 @@ test('exclusive state and owner locks serialize all broadcasts across configs an
   unlinkSync(stalePath);
 });
 
+test('asynchronous CLI actions remain awaited inside the exclusive-lock lifetime', () => {
+  const source = readFileSync(new URL('./harness.mjs', import.meta.url), 'utf8');
+  for (const action of [
+    'statusAction(context)',
+    'deployAction(context, options)',
+    'fundAction(context, options)',
+    'activateAction(context, options)',
+    'reconcileAction(context, options)',
+    'emergencyPauseAction(context, options)',
+  ]) {
+    assert.match(source, new RegExp(`return await ${action.replace(/[()]/g, '\\$&')}`));
+  }
+});
+
 test('all platforms keep replayable state inside one protected ignored operational root', () => {
   const config = normalizeConfig(rawConfig());
   const simulated = operationalEvidenceRoot({

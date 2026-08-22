@@ -3516,12 +3516,14 @@ export async function runHarness(argv, dependencies = {}) {
       lockToken: lock?.token ?? null,
       ownerLockToken: ownerLock?.token ?? null,
     };
-    if (options.action === 'status') return statusAction(context);
-    if (options.action === 'deploy') return deployAction(context, options);
-    if (options.action === 'fund') return fundAction(context, options);
-    if (options.action === 'activate') return activateAction(context, options);
-    if (options.action === 'reconcile') return reconcileAction(context, options);
-    return emergencyPauseAction(context, options);
+    // Await inside this try block so the finally clause retains both exclusive
+    // locks for the entire asynchronous action, including the signer child.
+    if (options.action === 'status') return await statusAction(context);
+    if (options.action === 'deploy') return await deployAction(context, options);
+    if (options.action === 'fund') return await fundAction(context, options);
+    if (options.action === 'activate') return await activateAction(context, options);
+    if (options.action === 'reconcile') return await reconcileAction(context, options);
+    return await emergencyPauseAction(context, options);
   } finally {
     try {
       lock?.release();
