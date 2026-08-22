@@ -18,7 +18,7 @@ SELECT 1 / CASE
 END AS bradbury_v8_cutover_migration_guard;
 
 -- Canonical identity mapping: public deployment/history rows use
--- testnet-bradbury:4221; keeper execution-journal rows use bradbury:4221.
+-- testnet-bradbury:4221, while keeper execution-journal rows use bradbury:4221.
 -- BRADBURY_V8_SCHEMA_DIGEST_START
 -- Digest algorithm: SHA-256 of the UTF-8 bytes strictly between the START and END
 -- marker lines, after normalizing CRLF to LF. The marker lines are excluded.

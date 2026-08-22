@@ -18,6 +18,10 @@ test('migration 004 is append-only, independently checksummed, and guarded by ex
   assert.match(sql, /version = 3[\s\S]*keeper_transaction_journal_attempts/);
   assert.match(sql, /AND NOT EXISTS \([\s\S]*version >= 4/);
   assert.doesNotMatch(sql, /CREATE (?:TABLE|INDEX|UNIQUE INDEX) IF NOT EXISTS/);
+  const naiveStatements = sql.split(';').map((statement) => statement.trim()).filter(Boolean);
+  assert.equal(naiveStatements.length, 23);
+  assert.equal(naiveStatements[0], 'BEGIN');
+  assert.equal(naiveStatements.at(-1), 'COMMIT');
 });
 
 test('migration 004 globally deactivates legacy rows and admits only canonical V8 Bradbury identity', async () => {
