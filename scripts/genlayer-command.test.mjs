@@ -164,32 +164,67 @@ test('Studio validator timeout configuration is not misclassified as a receipt t
   assert.equal(categorizeGenlayerFailure('RPC 503 unavailable'), 'RETRYABLE_TRANSPORT');
 });
 
-test('lightweight transaction status uses the exact StudioNet JSON-RPC method', async () => {
+test('lightweight transaction status uses Bradbury request and response shapes', async () => {
   let request;
   const status = await getGenlayerTransactionStatus({
-    rpcUrl: 'https://studio.genlayer.com/api',
+    rpcUrl: 'https://rpc-bradbury.genlayer.com',
     transactionHash: TRANSACTION_HASH,
     fetchImpl: async (url, options) => {
       request = { url: String(url), options };
-      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: 'FINALIZED' }), {
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        result: { status: 'Finalized', statusCode: 7 },
+      }), {
         status: 200,
       });
     },
   });
   assert.equal(status, 'FINALIZED');
-  assert.equal(request.url, 'https://studio.genlayer.com/api');
+  assert.equal(request.url, 'https://rpc-bradbury.genlayer.com/');
   assert.deepEqual(JSON.parse(request.options.body), {
     jsonrpc: '2.0',
     id: 1,
     method: 'gen_getTransactionStatus',
-    params: [TRANSACTION_HASH],
+    params: [{ txId: TRANSACTION_HASH }],
   });
+});
+
+test('lightweight transaction status normalizes every non-journal lifecycle safely', async () => {
+  for (const [statusCode, reportedStatus, expected] of [
+    [0, 'UNINITIALIZED', 'UNKNOWN'],
+    [1, 'PENDING', 'PENDING'],
+    [2, 'PROPOSING', 'PROPOSING'],
+    [3, 'COMMITTING', 'COMMITTING'],
+    [4, 'REVEALING', 'REVEALING'],
+    [5, 'ACCEPTED', 'ACCEPTED'],
+    [6, 'UNDETERMINED', 'UNKNOWN'],
+    [7, 'FINALIZED', 'FINALIZED'],
+    [8, 'CANCELED', 'UNKNOWN'],
+    [9, 'APPEAL_REVEALING', 'UNKNOWN'],
+    [10, 'APPEAL_COMMITTING', 'UNKNOWN'],
+    [11, 'READY_TO_FINALIZE', 'UNKNOWN'],
+    [12, 'VALIDATORS_TIMEOUT', 'UNKNOWN'],
+    [13, 'LEADER_TIMEOUT', 'UNKNOWN'],
+  ]) {
+    const status = await getGenlayerTransactionStatus({
+      rpcUrl: 'https://rpc-bradbury.genlayer.com',
+      transactionHash: TRANSACTION_HASH,
+      fetchImpl: async () => new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        result: { status: reportedStatus, statusCode },
+      }), { status: 200 }),
+    });
+    assert.equal(status, expected);
+  }
 });
 
 test('lightweight transaction status rejects malformed or unrecognized results', async () => {
   for (const payload of [
     { jsonrpc: '2.0', id: 1, result: 'SOMETHING_NEW' },
-    { jsonrpc: '2.0', id: 1, result: 6 },
+    { jsonrpc: '2.0', id: 1, result: { status: 'FINALIZED', statusCode: 5 } },
+    { jsonrpc: '2.0', id: 1, result: { status: 'SOMETHING_NEW', statusCode: 14 } },
     { jsonrpc: '2.0', id: 1, error: { code: -1 } },
   ]) {
     await assert.rejects(() => getGenlayerTransactionStatus({

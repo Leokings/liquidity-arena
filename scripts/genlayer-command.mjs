@@ -12,6 +12,22 @@ const STUDIO_SUCCESS_CONSENSUS_RESULT_CODE = 6;
 const STUDIO_SUCCESS_EXECUTION_RESULT = 'SUCCESS';
 const STUDIO_SUCCESS_RETURN_STATUS = 'RETURN';
 const STUDIO_FINALIZED_STATUS_CODE = 7;
+const GENLAYER_TRANSACTION_STATUS_CODES = new Map([
+  [0, ['UNINITIALIZED', 'UNKNOWN']],
+  [1, ['PENDING', 'PENDING']],
+  [2, ['PROPOSING', 'PROPOSING']],
+  [3, ['COMMITTING', 'COMMITTING']],
+  [4, ['REVEALING', 'REVEALING']],
+  [5, ['ACCEPTED', 'ACCEPTED']],
+  [6, ['UNDETERMINED', 'UNKNOWN']],
+  [7, ['FINALIZED', 'FINALIZED']],
+  [8, ['CANCELED', 'UNKNOWN']],
+  [9, ['APPEAL_REVEALING', 'UNKNOWN']],
+  [10, ['APPEAL_COMMITTING', 'UNKNOWN']],
+  [11, ['READY_TO_FINALIZE', 'UNKNOWN']],
+  [12, ['VALIDATORS_TIMEOUT', 'UNKNOWN']],
+  [13, ['LEADER_TIMEOUT', 'UNKNOWN']],
+]);
 const GENLAYER_TRANSACTION_STATUSES = new Set([
   'UNKNOWN', 'PENDING', 'PROPOSING', 'COMMITTING', 'REVEALING',
   'ACCEPTED', 'FINALIZED',
@@ -622,7 +638,7 @@ export async function getGenlayerTransactionStatus({
         jsonrpc: '2.0',
         id: 1,
         method: 'gen_getTransactionStatus',
-        params: [String(transactionHash).toLowerCase()],
+        params: [{ txId: String(transactionHash).toLowerCase() }],
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -645,12 +661,17 @@ export async function getGenlayerTransactionStatus({
   }
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)
     || payload.jsonrpc !== '2.0' || payload.id !== 1 || payload.error !== undefined
-    || typeof payload.result !== 'string') {
+    || !payload.result || typeof payload.result !== 'object' || Array.isArray(payload.result)
+    || typeof payload.result.status !== 'string'
+    || !Number.isSafeInteger(payload.result.statusCode)) {
     throw new Error('GenLayer transaction status response is malformed.');
   }
-  const status = payload.result.trim().toUpperCase();
-  if (!GENLAYER_TRANSACTION_STATUSES.has(status)) {
-    throw new Error(`GenLayer transaction status is unknown: ${status || '(empty)'}.`);
+  const reportedStatus = payload.result.status.trim().toUpperCase();
+  const [expectedReportedStatus, status] = GENLAYER_TRANSACTION_STATUS_CODES
+    .get(payload.result.statusCode) || [];
+  if (!expectedReportedStatus || !status || !GENLAYER_TRANSACTION_STATUSES.has(status)
+      || reportedStatus !== expectedReportedStatus) {
+    throw new Error(`GenLayer transaction status is unknown: ${reportedStatus || '(empty)'}.`);
   }
   return status;
 }

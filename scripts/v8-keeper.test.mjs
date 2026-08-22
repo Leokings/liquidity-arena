@@ -436,6 +436,74 @@ test('recovery verifies FINALIZED_SUCCESS after a concurrent payout successor tr
   assert.equal(journal.operations.get(operationId).state, 'VERIFIED');
 });
 
+test('recovery polls UNKNOWN and ACCEPTED until the exact submitted epoch is finalized', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  const hash = `0x${'4'.padStart(64, '0')}`;
+  const epochEndTimestamp = (Math.floor(NOW / 3600) + 3) * 3600;
+  const operationId = journal.seedOperation({
+    deploymentAlias: 'v8',
+    chainId: '4221',
+    contractAddress: CONTRACT,
+    subjectType: 'epoch',
+    subjectId: String(epochEndTimestamp),
+    method: 'create_epoch',
+    args: [String(epochEndTimestamp)],
+    valueAtto: '0',
+    signerAddress: KEEPER,
+    state: 'SUBMITTED',
+    transactionHash: hash,
+    lifecycleStatus: 'UNKNOWN',
+  });
+  const statuses = ['UNKNOWN', 'ACCEPTED', 'FINALIZED'];
+  let statusReads = 0;
+  let submitCalls = 0;
+  const epoch = epochRecord(epochEndTimestamp, { status: 'OPEN' });
+  const operator = {
+    canSignLockedAccount: true,
+    getNetworkInfo: async () => ({ alias: 'testnet-bradbury', chainId: 4221 }),
+    getAccountInfo: async () => ({ address: KEEPER, active: true, status: 'locked' }),
+    getSchema: async () => structuredClone(V8_KEEPER_ABI),
+    getConfig: async () => chainConfig({ new_risk_enabled: false }),
+    getReserveState: async () => reserveState(),
+    getEpochPage: async (offset) => ({
+      offset,
+      next_offset: offset === 0 ? 1 : offset,
+      total: 1,
+      epoch_ids: offset === 0 ? [String(epochEndTimestamp)] : [],
+    }),
+    getEpoch: async () => structuredClone(epoch),
+    getPayoutPage: async (offset) => ({ offset, next_offset: offset, total: 0, payouts: [] }),
+    getTransactionStatus: async () => statuses[statusReads++],
+    waitFinalized: async () => ({
+      transactionHash: hash,
+      statusName: 'FINALIZED',
+      txExecutionResultName: 'FINISHED_WITH_RETURN',
+      recipient: CONTRACT,
+      txDataDecoded: {
+        type: 'call',
+        callData: { method: 'create_epoch', args: [String(epochEndTimestamp)] },
+      },
+    }),
+    submitWrite: async () => { submitCalls += 1; },
+  };
+  const result = await runV8KeeperOnce({
+    config: config({ finalityRetries: 3, finalityIntervalMs: 100 }),
+    execute: true,
+    operator,
+    journalClient: journal.client,
+    nowEpochSeconds: NOW,
+    logger: () => {},
+    sleep: async () => {},
+    journalSessionOptions: { setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {} },
+  });
+  assert.equal(statusReads, 3);
+  assert.equal(submitCalls, 0);
+  assert.equal(result.blocked, false);
+  assert.equal(result.recovered[0].status, 'EPOCH_OPEN');
+  assert.equal(journal.operations.get(operationId).state, 'VERIFIED');
+  assert.equal(journal.operations.get(operationId).transactionHash, hash);
+});
+
 test('receipt validation rejects any contract, method, or payout ID mismatch', () => {
   const receipt = {
     transactionHash: `0x${'2'.padStart(64, '0')}`,
