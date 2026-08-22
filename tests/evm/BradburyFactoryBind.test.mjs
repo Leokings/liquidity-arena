@@ -17,7 +17,7 @@ import {
 } from "ethers";
 import { abi as genlayerAbi } from "genlayer-js";
 import { CalldataAddress } from "genlayer-js/types";
-import { network } from "hardhat";
+import { network } from "../../ops/evm-payout-test/scripts/hardhat-test-runtime.mjs";
 
 import {
   BIND_CONFIRMATION_PREFIX,

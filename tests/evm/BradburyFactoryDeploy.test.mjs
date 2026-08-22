@@ -14,7 +14,7 @@ import {
   getCreateAddress,
   keccak256,
 } from "ethers";
-import { network } from "hardhat";
+import { network } from "../../ops/evm-payout-test/scripts/hardhat-test-runtime.mjs";
 
 import {
   BRADBURY_CLIENT_PATTERN,

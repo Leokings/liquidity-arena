@@ -16,7 +16,6 @@ import {
 } from 'node:fs';
 import {
   dirname,
-  isAbsolute,
   posix as posixPath,
   resolve,
   win32 as win32Path,
@@ -2081,8 +2080,8 @@ export function operationalEvidenceRoot({
 } = {}) {
   if (platform === 'win32') {
     const base = requiredText(localAppData, 'LOCALAPPDATA for protected operational evidence');
-    if (!isAbsolute(base)) fail('LOCALAPPDATA must be an absolute owner-profile path');
-    return resolve(base, 'LiquidityArena', 'bradbury-v8');
+    if (!win32Path.isAbsolute(base)) fail('LOCALAPPDATA must be an absolute owner-profile path');
+    return win32Path.resolve(base, 'LiquidityArena', 'bradbury-v8');
   }
   return resolve(dirname(fileURLToPath(import.meta.url)), '.operational');
 }
