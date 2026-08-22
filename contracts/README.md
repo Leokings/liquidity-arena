@@ -30,19 +30,21 @@ gates, and V7 legacy-liability rule are specified in
 V8 separates `PREPARING`, `DISPATCHED`, `FUNDED_IN_ESCROW`, and observed EOA withdrawal. It fixes
 recipient, amount, domain-separated payout ID, deterministic vault, and a three-attempt reserve
 budget before any value dispatch. No owner or keeper can redirect a payout, bypass proof, increase
-the cap, relabel an ambiguous balance as reserve, or withdraw reserve. New risk remains disabled
-until the exact EVM-capable chain, bound factory protocol, reserve capacity, and solvency checks pass.
-Zero-value factory preparation recovery is permissionless, cooldown-gated, exact, and uncapped;
-value-bearing dispatch remains bounded. The chain-4221 audited-factory constant is intentionally
-zero in this candidate, so activation is impossible until a verified factory address is frozen into
-the source and re-reviewed.
+the cap, relabel an ambiguous balance as reserve, or withdraw reserve. Payout activation deliberately
+leaves new risk disabled. Only a separate owner-only `resume_new_risk()` call can open epochs or
+wagers after repeating the factory, reserve, and solvency checks. Zero-value factory preparation
+recovery is permissionless, cooldown-gated, exact, and uncapped; value-bearing dispatch remains
+bounded. The chain-4221 factory anchor is intentionally zero in this candidate, so activation is
+impossible until a verified factory address is frozen into the source and re-reviewed.
 
-Local verification currently comprises GenVM lint/validation, 33 V8 direct tests, and nine
-adversarial Solidity factory/vault tests plus compile, authority/storage/bytecode-size, and
-dependency audits. CI runs the Python and Solidity suites separately. No live-chain integration,
-factory deployment, V8 deployment, route, journal writer, history alias, or public cutover exists.
-The local Hardhat/solc artifact is test evidence, not a GenLayer zkSync-chain deployment artifact;
-the supported live deployment toolchain and resulting bytecode must be verified separately.
+Local verification passes GenVM lint/validation, 34 direct V8 tests, 29 Bradbury harness tests
+(included in the 463/463 root Node suite), and 59 EVM tests: nine adversarial factory/vault tests plus
+50 factory deployment/binding-tool tests. The production build emits 477 modules and dependency
+audit reports zero findings. These gates are wired into CI. These figures are local evidence and do
+not by themselves assert a remote-CI run. No V8-release transaction has been broadcast: no finalized
+factory or V8 deployment, binding, reserve funding, live canary, active route/keeper/history alias, or public
+cutover exists. The checked-in Bradbury tools are locally tested tooling, not finalized live
+deployment evidence.
 
 This candidate does not migrate V7 funds. The existing 2 GEN/two-refund obligation stays solely on
 V7, whose historical claim routes must remain available after any future V8 cutover.
@@ -56,8 +58,8 @@ safely: it might later credit and turn a second payment into a double payment. T
 remain read-only, and this is an unresolved protocol P1 rather than a browser-only defect.
 
 The active V7 deployment currently reports 2 GEN across two eligible unclaimed refunds. Those are
-participant obligations and remain claimable on V7. A fresh-deployment V8 state machine,
-delivery-loss reserve, and idempotent payout-escrow proposal are documented in
+participant obligations and remain claimable on V7. The implemented but inactive V8 state machine,
+delivery-loss reserve, and idempotent payout escrow are documented in
 [`../docs/V8-PAYOUT-RECOVERY.md`](../docs/V8-PAYOUT-RECOVERY.md). The claim/refund UX merged in
 [PR #21](https://github.com/Leokings/liquidity-arena/pull/21) and is deployed from exact source
 `5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475`; it improves discovery and reconnection but does not

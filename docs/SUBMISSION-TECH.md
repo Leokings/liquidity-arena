@@ -284,8 +284,9 @@ production-safety claim:
   evidence, and rollback rehearsal remain; independent third-party paging is optional;
 - active V7 player liability is 2 GEN across two eligible unclaimed refunds; it is an outstanding
   participant obligation and intentionally does not fail service readiness;
-- ambiguous V7 child-transfer recovery is an unresolved protocol P1. V7 is immutable; the proposed
-  V8 state machine is documented in [`V8-PAYOUT-RECOVERY.md`](V8-PAYOUT-RECOVERY.md);
+- ambiguous V7 child-transfer recovery is an unresolved protocol P1. V7 is immutable; the implemented
+  but inactive/unbroadcast V8 state machine is documented in
+  [`V8-PAYOUT-RECOVERY.md`](V8-PAYOUT-RECOVERY.md);
 - independent security and provider data-use/legal review remain.
 
 Observed StudioNet finalization has commonly been under one minute, but this is not an SLA. Reviewers

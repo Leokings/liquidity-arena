@@ -127,9 +127,9 @@ authoritative execution, post-state, and emitted EOA child.
 The claim-delivery monitor is deliberately read-only. It may alert and preserve evidence, but it
 must never automatically resubmit `claim` or re-emit value. Once V7 has effects-first marked a claim
 paid, an automatic retry without proof of child failure could double-pay if the original child later
-finalizes. A protocol-backed recoverable-transfer design or documented delivery guarantee is still
-required before real value. V7 has no upgrader or safe retry state, so this remains a protocol P1;
-the proposed fresh-deployment state machine and idempotent escrow are specified in
+finalizes. A finalized, live-verified recoverable-transfer deployment remains required before real
+value. V7 has no upgrader or safe retry state, so this remains a protocol P1; the implemented but
+inactive/unbroadcast V8 state machine and idempotent escrow are specified in
 [`docs/V8-PAYOUT-RECOVERY.md`](docs/V8-PAYOUT-RECOVERY.md). The current 2 GEN across two eligible
 unclaimed refunds remains an active participant obligation, not available fee or operator funds.
 

@@ -8,15 +8,19 @@ const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 export const packageRoot = path.resolve(scriptDirectory, "..");
 export const repositoryRoot = path.resolve(packageRoot, "../..");
 
-const sourceFiles = [
+export const payoutSourceFiles = [
   "contracts/evm/LiquidityArenaPayoutVault.sol",
   "contracts/evm/LiquidityArenaPayoutFactory.sol",
+];
+
+const sourceFiles = [
+  ...payoutSourceFiles,
   "tests/evm/contracts/AdversarialRecipients.sol",
 ];
 
-export function compileContracts() {
+export function createCompilerInput(selectedSourceFiles = sourceFiles) {
   const sources = Object.fromEntries(
-    sourceFiles.map((relativePath) => [
+    selectedSourceFiles.map((relativePath) => [
       relativePath,
       {
         content: fs.readFileSync(
@@ -27,7 +31,7 @@ export function compileContracts() {
     ]),
   );
 
-  const input = {
+  return {
     language: "Solidity",
     sources,
     settings: {
@@ -42,6 +46,7 @@ export function compileContracts() {
             "abi",
             "evm.bytecode.object",
             "evm.deployedBytecode.object",
+            "evm.deployedBytecode.immutableReferences",
             "storageLayout",
           ],
           "": ["ast"],
@@ -49,6 +54,10 @@ export function compileContracts() {
       },
     },
   };
+}
+
+export function compileSelectedContracts(selectedSourceFiles = sourceFiles) {
+  const input = createCompilerInput(selectedSourceFiles);
 
   const output = JSON.parse(solc.compile(JSON.stringify(input)));
   const diagnostics = output.errors ?? [];
@@ -58,8 +67,10 @@ export function compileContracts() {
   }
 
   return {
+    input,
     output,
     diagnostics,
+    compilerVersion: solc.version(),
     artifact(sourceName, contractName) {
       const contract = output.contracts?.[sourceName]?.[contractName];
       if (!contract) {
@@ -68,4 +79,12 @@ export function compileContracts() {
       return contract;
     },
   };
+}
+
+export function compileContracts() {
+  return compileSelectedContracts(sourceFiles);
+}
+
+export function compilePayoutContracts() {
+  return compileSelectedContracts(payoutSourceFiles);
 }

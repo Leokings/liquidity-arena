@@ -507,7 +507,8 @@ fee-withdrawal parent `0x3df8d942…bb01f` and child `0x566082ce…470e`. Both m
 healthy delivery evidence does not provide a safe retry for an ambiguous failed/delayed child.
 V7 has no upgrader or payout-retry state, so this is an unresolved protocol P1; the current 2 GEN
 across two eligible unclaimed refunds remains participant liability. See
-[`V8-PAYOUT-RECOVERY.md`](V8-PAYOUT-RECOVERY.md) for the fresh-contract/idempotent-escrow proposal.
+[`V8-PAYOUT-RECOVERY.md`](V8-PAYOUT-RECOVERY.md) for the implemented but inactive/unbroadcast
+fresh-contract idempotent escrow.
 As of 2026-08-21, core claim/refund UX from merged
 [PR #21](https://github.com/Leokings/liquidity-arena/pull/21) is public at exact source
 `5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475`. It improves pre-modal discovery, fail-closed quote

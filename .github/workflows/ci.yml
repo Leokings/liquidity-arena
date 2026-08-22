@@ -80,14 +80,18 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: ops/evm-payout-test/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            ops/evm-payout-test/package-lock.json
+      - name: Install locked shared Bradbury harness dependencies
+        run: npm ci
       - name: Install locked EVM test dependencies
         working-directory: ops/evm-payout-test
         run: npm ci
       - name: Compile the immutable factory and payout vault
         working-directory: ops/evm-payout-test
         run: npm run compile
-      - name: Run adversarial EVM payout tests
+      - name: Run EVM payout and Bradbury deployment/bind tests
         working-directory: ops/evm-payout-test
         run: npm test
       - name: Audit EVM authority, bytecode, and dependencies

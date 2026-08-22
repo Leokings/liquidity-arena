@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "network": "testnet-bradbury",
+  "chainId": 4221,
+  "sourcePath": "contracts/LiquidityArenaV8.py",
+  "sourceSha256": "39299592c65a902c57ac41ff67f64f451ac9d94941969ffa62081ad7b7af0584",
+  "schemaSha256": "bc1849b4e0299e0bf257ad6a6e5adb75c824b17136d7f876e10742856a7019d3",
+  "ownerAccountName": "REPLACE_WITH_EXACT_BRADBURY_OWNER_ACCOUNT",
+  "expected": {
+    "ownerAddress": "0x1111111111111111111111111111111111111111",
+    "keeperAddress": "0x2222222222222222222222222222222222222222",
+    "treasuryAddress": "0x3333333333333333333333333333333333333333",
+    "payoutFactoryAddress": "0x4444444444444444444444444444444444444444",
+    "factoryBinderAddress": "0x1111111111111111111111111111111111111111",
+    "reserveSinkAddress": "0x6666666666666666666666666666666666666666",
+    "factoryRuntimeBytecodeSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "protocolVersion": "LIQUIDITY_ARENA_V8",
+    "policyVersion": "CRYPTO_SPOT_1M_MEDIAN_V1",
+    "payoutProtocolVersion": "IDEMPOTENT_EVM_VAULT_V1",
+    "epochMinStakeAtto": "100000000000000000",
+    "epochMaxStakePerWalletAtto": "10000000000000000000",
+    "platformFeeBps": 200
+  },
+  "reserve": {
+    "initialFundingAtto": "3000000000000000000"
+  },
+  "operator": {
+    "finalityRetries": 900,
+    "finalityIntervalMs": 5000,
+    "maxEvmGasLimit": "30000000",
+    "maxEvmGasPriceWei": "1000000000"
+  }
+}

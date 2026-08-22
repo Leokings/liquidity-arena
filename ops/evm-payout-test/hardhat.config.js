@@ -6,6 +6,8 @@ export default {
     hardhat: {
       type: "edr-simulated",
       chainType: "l1",
+      chainId: 4221,
+      initialBaseFeePerGas: 0,
     },
   },
 };

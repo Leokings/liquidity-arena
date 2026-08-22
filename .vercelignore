@@ -9,6 +9,7 @@ __pycache__/
 artifacts/
 ops/cloudflare-keeper-scheduler/
 ops/evm-payout-test/
+ops/bradbury-v8/
 docs/screenshots/
 tests/
 **/*.test.mjs

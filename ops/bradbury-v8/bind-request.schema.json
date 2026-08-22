@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://liquidity-arena.invalid/schemas/bradbury-v8-bind-request-v1.json",
+  "title": "Liquidity Arena Bradbury V8 bind request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "network",
+    "chainId",
+    "configFingerprint",
+    "sourcePath",
+    "sourceSha256",
+    "schemaSha256",
+    "deploymentGenLayerTransactionHash",
+    "deploymentEvmTransactionHash",
+    "deploymentEvmReceiptBlockHash",
+    "deploymentEvmReceiptBlockNumber",
+    "deploymentGenLayerReceiptStatus",
+    "deploymentGenLayerExecutionResult",
+    "deploymentGenLayerExecutionSuccess",
+    "deploymentEvmFinalityVerified",
+    "deploymentEvmFinalityRequiredBeforeBind",
+    "leaderOnly",
+    "arenaAddress",
+    "ownerAddress",
+    "constructorArguments",
+    "factoryAddress",
+    "binderAddress",
+    "reserveSinkAddress",
+    "v8ProtocolVersion",
+    "payoutProtocolVersion",
+    "factoryRuntimeBytecodeSha256",
+    "exactDeploymentReadback",
+    "cutsOverApplication",
+    "cutsOverDatabase",
+    "verifiedAt"
+  ],
+  "$defs": {
+    "address": {
+      "type": "string",
+      "pattern": "^0x(?!0{40}$)[0-9a-f]{40}$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]{64}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "decimal": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    }
+  },
+  "properties": {
+    "schema": { "const": "liquidity-arena-bradbury-bind-request-v1" },
+    "version": { "const": 1 },
+    "network": { "const": "testnet-bradbury" },
+    "chainId": { "const": 4221 },
+    "configFingerprint": { "$ref": "#/$defs/sha256" },
+    "sourcePath": { "type": "string", "minLength": 1 },
+    "sourceSha256": { "$ref": "#/$defs/sha256" },
+    "schemaSha256": { "const": "bc1849b4e0299e0bf257ad6a6e5adb75c824b17136d7f876e10742856a7019d3" },
+    "deploymentGenLayerTransactionHash": { "$ref": "#/$defs/hash" },
+    "deploymentEvmTransactionHash": { "$ref": "#/$defs/hash" },
+    "deploymentEvmReceiptBlockHash": { "$ref": "#/$defs/hash" },
+    "deploymentEvmReceiptBlockNumber": {
+      "type": "string",
+      "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+    },
+    "deploymentGenLayerReceiptStatus": { "const": "FINALIZED" },
+    "deploymentGenLayerExecutionResult": { "const": "FINISHED_WITH_RETURN" },
+    "deploymentGenLayerExecutionSuccess": { "const": true },
+    "deploymentEvmFinalityVerified": { "const": false },
+    "deploymentEvmFinalityRequiredBeforeBind": { "const": true },
+    "leaderOnly": { "const": false },
+    "arenaAddress": { "$ref": "#/$defs/address" },
+    "ownerAddress": { "$ref": "#/$defs/address" },
+    "constructorArguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "treasuryAddress",
+        "keeperAddress",
+        "epochMinStakeAtto",
+        "epochMaxStakePerWalletAtto",
+        "payoutFactoryAddress"
+      ],
+      "properties": {
+        "treasuryAddress": { "$ref": "#/$defs/address" },
+        "keeperAddress": { "$ref": "#/$defs/address" },
+        "epochMinStakeAtto": { "$ref": "#/$defs/decimal" },
+        "epochMaxStakePerWalletAtto": { "$ref": "#/$defs/decimal" },
+        "payoutFactoryAddress": { "$ref": "#/$defs/address" }
+      }
+    },
+    "factoryAddress": { "$ref": "#/$defs/address" },
+    "binderAddress": { "$ref": "#/$defs/address" },
+    "reserveSinkAddress": { "$ref": "#/$defs/address" },
+    "v8ProtocolVersion": { "const": "LIQUIDITY_ARENA_V8" },
+    "payoutProtocolVersion": { "const": "IDEMPOTENT_EVM_VAULT_V1" },
+    "factoryRuntimeBytecodeSha256": { "$ref": "#/$defs/sha256" },
+    "exactDeploymentReadback": { "const": true },
+    "cutsOverApplication": { "const": false },
+    "cutsOverDatabase": { "const": false },
+    "verifiedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{3})?Z$"
+    }
+  }
+}

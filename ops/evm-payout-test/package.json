@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "compile": "node scripts/compile.mjs",
-    "test": "node ../../tests/evm/LiquidityArenaPayoutVault.test.mjs",
+    "test": "node --test ../../tests/evm/LiquidityArenaPayoutVault.test.mjs ../../tests/evm/BradburyFactoryDeploy.test.mjs ../../tests/evm/BradburyFactoryBind.test.mjs",
+    "test:deploy": "node --test ../../tests/evm/BradburyFactoryDeploy.test.mjs ../../tests/evm/BradburyFactoryBind.test.mjs",
+    "deploy:bradbury": "node scripts/bradbury-factory.mjs",
+    "bind:bradbury": "node scripts/bradbury-bind.mjs",
     "audit:contracts": "node scripts/audit.mjs",
     "audit": "npm run audit:contracts && npm audit"
   },

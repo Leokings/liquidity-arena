@@ -435,8 +435,9 @@ delivery.
   proof, continued public browser/wallet soak,
   and a rollback rehearsal that never re-enables V6 writes;
 - live 24-hour timeout evidence and safe asynchronous-child recovery. V7 has no upgrader and no
-  safe retry state; this protocol P1 and a proposed V8 idempotent-escrow state machine are documented
-  in [the payout-recovery design](docs/V8-PAYOUT-RECOVERY.md);
+  safe retry state; this V7 protocol P1 and the implemented but inactive/unbroadcast V8
+  idempotent-escrow candidate are documented in
+  [the payout-recovery design](docs/V8-PAYOUT-RECOVERY.md);
 - independent contract/web/operations review and provider data-use/legal review.
 
 See [the V7 deployment note](docs/STUDIONET-V7.md) for the current gate ledger.

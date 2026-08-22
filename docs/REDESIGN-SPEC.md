@@ -124,10 +124,11 @@ value transfer. The system verifies:
 5. `FINALIZED` successful child and exact recipient/value.
 
 The monitoring process is read-only. It cannot safely replay a claim whose child is ambiguous,
-because a delayed first child could later pay and turn a retry into a double payment. A protocol-safe
-recovery design remains required before real value. V7 has no upgrader or retry state, and the
-current 2 GEN across two eligible unclaimed refunds remains participant liability. This unresolved
-protocol P1 and the proposed fresh V8/idempotent-escrow state machine are specified in
+because a delayed first child could later pay and turn a retry into a double payment. A finalized,
+live-verified recovery deployment remains required before real value. V7 has no upgrader or retry
+state, and the current 2 GEN across two eligible unclaimed refunds remains participant liability.
+This unresolved V7 protocol P1 and the implemented but inactive/unbroadcast V8 idempotent-escrow
+state machine are specified in
 [`V8-PAYOUT-RECOVERY.md`](V8-PAYOUT-RECOVERY.md).
 
 ## 8. Roles

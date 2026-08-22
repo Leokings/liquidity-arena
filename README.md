@@ -475,8 +475,8 @@ After public V7 cutover:
 4. record a live user-wallet signature, claim transaction, and exact child delivery for the deployed
    claim UX;
 5. retain the active 2 GEN participant obligation and treat ambiguous asynchronous child recovery as
-   an unresolved protocol P1; the proposed V8 state machine is documented in
-   [the payout-recovery design](docs/V8-PAYOUT-RECOVERY.md);
+   an unresolved V7 protocol P1; the implemented but inactive/unbroadcast V8 candidate is documented
+   in [the payout-recovery design](docs/V8-PAYOUT-RECOVERY.md);
 6. complete timeout evidence, independent security review, browser/wallet soak, and provider
    data-use/legal review.
 

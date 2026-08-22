@@ -919,10 +919,15 @@ class LiquidityArenaV8(gl.Contract):
             _expected("ONLY_OWNER", "Only the arena owner can perform this action")
 
     def _require_new_risk_enabled(self) -> None:
-        if not self.payouts_enabled or not self.new_risk_enabled:
+        if not self.payouts_enabled:
             _expected(
                 "PAYOUTS_INACTIVE",
                 "New epochs and wagers remain disabled until the payout factory is verified",
+            )
+        if not self.new_risk_enabled:
+            _expected(
+                "NEW_RISK_PAUSED",
+                "New epochs and wagers are paused until the owner explicitly resumes risk",
             )
 
     def _require_retry_operator(self, recipient: Address) -> None:
@@ -1160,7 +1165,10 @@ class LiquidityArenaV8(gl.Contract):
         self._assert_reserve_capacity()
         self._assert_accounting_solvent()
         self.payouts_enabled = True
-        self.new_risk_enabled = True
+        # Activating the payout rail must not implicitly open new wagering risk.
+        # Risk is enabled only by the separate owner-only resume_new_risk gate
+        # after an attended payout canary and explicit cutover decision.
+        self.new_risk_enabled = False
 
     @gl.public.write
     def pause_new_risk(self) -> None:

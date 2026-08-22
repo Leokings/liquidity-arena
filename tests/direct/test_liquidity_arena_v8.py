@@ -195,6 +195,7 @@ def deploy_arena(
         direct_vm.value = 0
     if activate:
         contract.activate_payouts()
+        contract.resume_new_risk()
     return contract
 
 
@@ -1150,8 +1151,18 @@ def test_activation_fails_closed_by_chain_binding_and_factory_protocol(
     factory.protocol = "IDEMPOTENT_EVM_VAULT_V1"
     contract.activate_payouts()
     assert contract.get_config()["payouts_enabled"] is True
+    assert contract.get_config()["new_risk_enabled"] is False
+    with direct_vm.expect_revert("NEW_RISK_PAUSED"):
+        create_epoch(contract)
     with direct_vm.expect_revert("PAYOUTS_ACTIVE"):
         contract.activate_payouts()
+    direct_vm.sender = as_address(direct_charlie)
+    with direct_vm.expect_revert("ONLY_OWNER"):
+        contract.resume_new_risk()
+    assert contract.get_config()["new_risk_enabled"] is False
+    direct_vm.sender = as_address(direct_owner)
+    contract.resume_new_risk()
+    assert contract.get_config()["new_risk_enabled"] is True
 
 
 def test_resume_new_risk_rechecks_actual_accounting_solvency(
@@ -1166,6 +1177,44 @@ def test_resume_new_risk_rechecks_actual_accounting_solvency(
     with direct_vm.expect_revert("ACCOUNTING_INSOLVENT"):
         contract.resume_new_risk()
     assert contract.get_config()["new_risk_enabled"] is False
+
+
+def test_epoch_and_entry_gates_distinguish_inactive_payouts_from_paused_risk(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_charlie,
+):
+    contract = deploy_arena(
+        direct_vm,
+        direct_deploy,
+        direct_owner,
+        direct_charlie,
+        activate=False,
+    )
+    with direct_vm.expect_revert("PAYOUTS_INACTIVE"):
+        create_epoch(contract)
+
+    contract.activate_payouts()
+    with direct_vm.expect_revert("NEW_RISK_PAUSED"):
+        create_epoch(contract)
+
+    contract.resume_new_risk()
+    create_epoch(contract)
+    direct_vm.sender = as_address(direct_owner)
+    contract.pause_new_risk()
+    direct_vm.sender = as_address(direct_alice)
+    direct_vm.value = MIN_STAKE
+    with direct_vm.expect_revert("NEW_RISK_PAUSED"):
+        contract.enter(EPOCH_END, "highest", "BTC")
+
+    # PAYOUTS_INACTIVE is not reachable with an existing epoch through the
+    # public lifecycle, so exercise the shared entry guard against that exact
+    # storage state directly to regression-lock its error precedence.
+    contract._instance.payouts_enabled = False
+    with direct_vm.expect_revert("PAYOUTS_INACTIVE"):
+        contract.enter(EPOCH_END, "highest", "BTC")
 
 
 def test_new_wager_requires_full_bounded_attempt_reserve(

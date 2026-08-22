@@ -2,10 +2,11 @@
 
 ## Status
 
-V8 is an inactive release candidate. The repository contains the new GenLayer contract and the
-immutable EVM payout factory/vault, but no V8 deployment is recorded and no production or
-StudioNet route points to it. New wagering must remain on V7 until every live-network gate in this
-document passes.
+V8 is an inactive, unbroadcast Bradbury release candidate. The repository contains the GenLayer
+contract, immutable EVM payout factory/vault, Bradbury factory-deploy/bind tools, and inactive-
+deployment harness. No V8-release transaction has been broadcast: nothing has been deployed, bound,
+funded, canaried, or cut over. No production or StudioNet route points to V8, and new wagering must
+remain on V7 until every live-network gate in this document passes.
 
 The deployed V7 contract remains immutable and currently retains 2 GEN across two eligible legacy
 refunds. Those obligations cannot be read, moved, or claimed by V8: V7 has no upgrader, its claim is
@@ -96,8 +97,10 @@ conserves the integer pool. Allocation is never recomputed during a retry.
 
 ## Immutable EVM factory and vault
 
-The factory is deployed first with immutable binder and reserve-sink addresses. After the V8
-ghost address is known, the binder may bind that arena exactly once. Activation verifies the
+The factory must be deployed first with immutable binder and reserve-sink addresses. For this
+reviewed rollout the binder is the same dedicated EOA as the V8 owner, and both tools reject a
+mismatch before signing. After the V8 ghost address is known, the binder may bind that arena exactly
+once. Activation verifies the
 exact binding and payout protocol, but those self-reported views are not a trust anchor. The exact
 independently audited, non-proxy factory address must also be compiled into the V8 source for chain
 `4221`. The release-candidate constant is intentionally the zero address, so this source cannot
@@ -156,8 +159,9 @@ Reserve withdrawal is intentionally absent from V8.
 
 The contract fails closed on every chain except the target EVM-capable GenLayer chain ID `4221`.
 Local Studio (`61127`) and StudioNet (`61999`) cannot activate payouts because Studio does not
-execute the required EVM factory/vault path. `create_epoch` and `enter` remain disabled until all of
-the following are true:
+execute the required EVM factory/vault path. Payout activation deliberately leaves new epochs and
+wagers paused. The owner must separately call `resume_new_risk` before `create_epoch` or `enter` can
+succeed, and that explicit resume remains disabled until all of the following are true:
 
 1. the chain is allowlisted;
 2. the constructor factory equals the exact audited address compiled for that chain;
@@ -168,7 +172,8 @@ the following are true:
 
 Owner or keeper may pause new epochs/wagers without blocking settlement, claims, preparation,
 dispatch reconciliation, confirmation, or EVM withdrawal. Only the owner can resume new risk, and
-resume repeats the factory, reserve, and solvency checks.
+resume repeats the factory, reserve, and solvency checks. This split prevents payout activation from
+creating a non-atomic public-risk window while an operator waits for a separate pause transaction.
 
 ## Verification and cutover requirements
 
@@ -189,17 +194,22 @@ Studio/direct mocks cannot close the final EVM gate. Until live evidence exists,
 inactive candidate and no `deployments/*-v8.json`, public V8 route, V8 keeper schedule, or active
 history alias may be published.
 
-The current repository candidate passes GenVM lint/validation, 33 direct V8 tests, and nine
-adversarial Solidity tests. The Solidity compile uses locked `solc 0.8.28` and reports zero errors
-or warnings; the authority/storage/forbidden-source-construct/bytecode-size audit and isolated dependency
-audit also pass. These checks are wired into CI as a separate EVM payout-contract job. They prove
-the local state machine and immutable contracts, not live ghost/EVM parity or a deployable GenLayer
-Chain artifact. The chain is a zkSync Elastic Chain; the live gate must use its supported deployment
-toolchain, publish the resulting bytecode and constructor immutables, and repeat the source/address
-anchor review rather than treating the local Hardhat/solc artifact as production proof.
+Local verification passes GenVM lint/validation, 34 direct V8 tests, 29 Bradbury harness tests
+(included in the 463/463 root Node suite), and 59 EVM tests: nine adversarial factory/vault tests plus
+50 factory deployment/binding-tool tests. The production build emits 477 modules and dependency
+audit reports zero findings. The Solidity compile uses locked `solc 0.8.28` and reports zero errors
+or warnings; the authority/storage/forbidden-source-construct/bytecode-size audit also passes. These
+checks are wired into CI. These figures are local evidence and do not by themselves assert a remote-
+CI run. They prove the local state machine and tooling, not live ghost/EVM parity or finalized
+deployment evidence. The live gate must publish the resulting bytecode and constructor immutables
+and repeat the source/address-anchor review.
 
 A later cutover also requires a new append-only database migration and a global one-active-
 deployment constraint; the current history schema can otherwise leave both V7 and V8 marked active.
-The safe sequence is: deploy and verify inactive V8, stop V7 creation sources, drain all V7 open
-epochs, retain V7 claims/liability, validate V8 canaries, apply the cutover migration, switch the app
-and keeper atomically, and verify V7/V8 liabilities remain distinct.
+The safe sequence is: complete a finalized sacrificial factory rehearsal; deploy and explorer-verify
+a finalized production unbound factory; freeze its exact address into V8 and repeat review/CI;
+deploy inactive V8; bind the factory once from finalized proof; fund reserve; activate payouts with
+risk paused; run live payout-only canaries; stop every V7 creation source, settle/drain all open V7
+epochs, and retain legacy V7 claim routes/liability; apply the migration/global one-active constraint;
+then run a separately reviewed attended risk canary and cut over the app and keeper while keeping V7
+claims/liability distinct.
