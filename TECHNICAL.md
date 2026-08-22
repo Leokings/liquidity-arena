@@ -15,14 +15,14 @@ The active system is V8 on GenLayer Bradbury testnet with deterministic payout d
 
 ## Release identity
 
-- V8: `0xe6aa95e551f8407b139474ec60c2012e4cc8a6cd`
-- factory: `0x944fdadd826c2a159c63cb100db174716ccd1317`
-- V8 release SHA-256: `160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa`
+- V8: `0x06b643f94003e51c6dc47e89524e7fd045630549`
+- factory: `0xc812709d267372ad7e06807bf0a4d451ed263a30`
+- V8 release SHA-256: `1e7545f8f0fd121d64f3565675ac8f541d0ba8274abbde60db0dd02d7d777db5`
 - schema SHA-256: `c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4`
 - factory runtime Keccak-256: `0x30f617eaa58c41ff98353a51e1ee0c4ee6f6c64a2e6d31e13a867cc548af9b3c`
 - payout protocol: `IDEMPOTENT_EVM_VAULT_V1`
 
-The deterministic release builder preserves the 39-field storage layout, constructor, 25-method public ABI, decorators, type annotations, and factory literal. The generated source is 44,125 bytes; the measured Bradbury outer deployment calldata is 44,452 bytes and estimates at 35,346,217 gas.
+The deterministic release builder preserves the 39-field storage layout, constructor, 25-method public ABI, decorators, type annotations, and factory literal. The generated source is 43,957 bytes; the exact Bradbury deployment used 44,292 bytes of outer calldata and an independently reproduced 35,233,264 gas estimate.
 
 ## Market lifecycle
 
@@ -82,6 +82,10 @@ It has no EVM signer and no vault-withdraw ABI.
 
 ## Activation and rollback
 
-Rollout order is deploy, bind, fund, activate payout rails, deploy the V8-only app/history/keeper, verify the payout lifecycle, then resume new risk. Readiness stays degraded while payouts or risk are disabled.
+Rollout order is deploy, bind, fund, activate payout rails, explicitly resume new risk, deploy the
+V8-only app/history/keeper, create future epochs, and verify readiness. A value-bearing production
+network should put an attended payout lifecycle canary before resume; this faucet-funded Bradbury
+cutover explicitly does not claim that pre-resume canary. Readiness stays degraded while payouts or
+risk are disabled.
 
 Rollback is `pause_new_risk`. Existing resolution, claims, payout retries, recipient withdrawals, and refresh remain available while new exposure is closed. V7 is never a rollback target.

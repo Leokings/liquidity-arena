@@ -22,19 +22,22 @@ python -X utf8 -m genvm_linter.cli check contracts/LiquidityArenaV8.release.py
 python -X utf8 -m pytest tests/direct/test_liquidity_arena_v8.py -q
 ```
 
-The current deployment artifact is 44,125 UTF-8 bytes with SHA-256
-`160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa`. Its exhaustive Bradbury
+The current deployment artifact is 43,957 UTF-8 bytes with SHA-256
+`1e7545f8f0fd121d64f3565675ac8f541d0ba8274abbde60db0dd02d7d777db5`. Its exhaustive Bradbury
 schema contains 25 methods (9 views and 16 writes) and hashes to
 `c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4`.
 
 ## Bradbury payout trust anchor
 
-V8 accepts payout activation only on chain ID 4221 and only through the compiled factory address
-`0x944FdADd826C2a159c63cB100DB174716ccd1317`. That factory was deployed as a zero-value CREATE,
+V8 accepts payout activation only through the compiled factory address
+`0xC812709d267372Ad7E06807bf0A4d451ED263A30`. The deployment and binding tools independently pin
+the factory to Bradbury EVM chain `4221`; GenVM's message-domain chain ID is not used as an EVM
+settlement-chain identifier. That factory was deployed as a zero-value CREATE,
 finalized, byte-matched, and source-verified before its address was frozen into V8. V8 is now
-finalized at `0xe6aa95e551f8407b139474ec60c2012e4cc8a6cd`, and the factory's one-time binding to that exact
-arena is finalized. Reserve funding, payout activation, risk resume, canary, and production cutover
-remain pending, so the deployment manifest stays inactive.
+finalized at `0x06b643f94003e51c6dc47e89524e7fd045630549`, and the factory's one-time binding to that exact
+arena is finalized. The 0.6 GEN reserve funding, payout activation, and owner-controlled risk resume
+are also finalized, and the V8-only deployment manifest is active. A live claimable-position canary
+remains a post-resume testnet follow-up, not a claimed pre-resume gate.
 
 Player and treasury payouts use this state machine:
 
@@ -48,7 +51,10 @@ factory credit, and records the final wallet claim only after the recipient's EV
 proven. Duplicate or late sends become recoverable excess and cannot be credited twice.
 
 Payout activation deliberately leaves `new_risk_enabled=false`. New epochs and wagers open only
-after an attended payout/risk canary and the separate owner-only `resume_new_risk()` call.
+after the separate owner-only `resume_new_risk()` call. A mainnet rollout should require an attended
+live payout canary first. For this faucet-funded Bradbury testnet cutover, the finalized sacrificial
+factory/vault rehearsal is the pre-resume rail gate; the release does not claim that a claimable V8
+position was exercised before risk resumed.
 
 ## Market policy
 

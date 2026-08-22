@@ -1,4 +1,4 @@
-# Bradbury V8 inactive-deployment canary
+# Bradbury V8 rollout harness
 
 This harness deploys and certifies an initially **inactive** Liquidity Arena V8 candidate on
 GenLayer Bradbury. It never edits an application route, deployment registry, database, or keeper
@@ -6,7 +6,7 @@ schedule. There is deliberately no cutover command.
 
 `LiquidityArenaV8.release.py` is the deterministic deployment artifact and freezes the independently
 deployed and verified chain-4221 factory
-`0x944FdADd826C2a159c63cB100DB174716ccd1317`. Any change to that non-proxy address requires a new
+`0xC812709d267372Ad7E06807bf0A4d451ED263A30`. Any change to that non-proxy address requires a new
 factory deployment, bytecode/source verification, source review, and exact source-hash update.
 
 ## What is enforced
@@ -19,8 +19,9 @@ factory deployment, bytecode/source verification, source review, and exact sourc
   exhaustive 25-method schema hash, stake limits, and initial delivery reserve.
 - For this reviewed rollout, the V8 owner and one-time factory binder must be the same dedicated EOA;
   configuration validation rejects a mismatch before any signature or deployment.
-- The local source must hash exactly and contain one literal `AUDITED_PAYOUT_FACTORY_4221` equal to
-  the configured factory. A zero-address candidate cannot be broadcast.
+- The local source must hash exactly and contain the literal Bradbury chain marker
+  `AUDITED_PAYOUT_FACTORY_CHAIN_ID = 4_221` plus one `AUDITED_PAYOUT_FACTORY_4221` equal to the
+  configured factory. A zero-address candidate cannot be broadcast.
 - Deployment is full consensus. The exact source and five constructor arguments must appear in a
   successful `FINALIZED` receipt, and its sender and resulting nonzero contract address must be
   exact. Merely reaching `ACCEPTED` or `FINALIZED` is not execution success.
@@ -45,22 +46,25 @@ factory deployment, bytecode/source verification, source review, and exact sourc
   and value, followed by an exact reserve increase with zero liabilities.
 - The reviewed `activate_payouts` transition enables payout processing while deliberately leaving
   `new_risk_enabled=false` in the same finalized transaction. There is no activation-to-pause
-  public-risk window. The terminal harness state is `PAYOUTS_ACTIVE_RISK_PAUSED`; the standalone
-  `pause` action remains defense-in-depth if a separately reviewed future tool ever resumes risk.
-  This harness exposes no `resume_new_risk` action.
+  public-risk window. Its terminal state is `PAYOUTS_ACTIVE_RISK_PAUSED`. On a value-bearing network,
+  independent payout-only canaries should precede the attended `resume` action. This faucet-testnet
+  rollout instead uses its explicitly authorized sacrificial rehearsal gate. `resume` calls the
+  owner-only `resume_new_risk`; exact finality and live readback then advance state to `RISK_ACTIVE`. Neither
+  transition edits application or database routing. The standalone `pause` action remains the
+  immediate defense-in-depth path back to `PAYOUTS_ACTIVE_RISK_PAUSED`.
 - Fresh deployment, funding, and activation gates require pristine zero accounting. Emergency-pause
-  preflight, postcondition, status, and reconciliation deliberately use a separate live-state proof:
-  code/schema/config remain exact, payouts remain enabled, new risk must become disabled, nonzero
-  epoch/payout/liability state is allowed, and the consolidated reserve/fee/liability fields, the
-  bounded three-attempt reserve formula, capacity, page totals, and funded/withdrawn fee identities
-  must agree. Before signing, the exact canonical pre-pause accounting snapshot is stored in the
-  durable `PAUSE_PREPARED` operation and the signer child independently re-reads and matches it.
-  Post-finality and reconciliation require the exact risk-enabled-to-disabled transition and the
-  same immutable payout/fee policy, while independently validating the later live accounting
-  invariants. Resolution, claims, retries, and fee delivery may legitimately advance dynamic
-  counts and amounts while the pause finalizes, so those values are not required to remain frozen.
-  A legitimate canary therefore cannot make a successful pause unrecoverable merely by creating or
-  settling accounting state.
+  and resume preflight, postcondition, status, and reconciliation use a separate live-state proof:
+  code/schema/config remain exact, payouts remain enabled, the risk flag must make the exact requested
+  transition, and nonzero epoch/payout/liability state is allowed. The consolidated reserve/fee/
+  liability fields, bounded three-attempt reserve formula, capacity, page totals, and funded/withdrawn
+  fee identities must agree. Before signing, the canonical accounting snapshot is hash-bound in
+  `PAUSE_PREPARED` or `RESUME_PREPARED`; the signer child independently re-reads the resume snapshot,
+  then repeats the owner nonce/balance gate as the final network operation before signing the exact
+  zero-value `pause_new_risk` or `resume_new_risk` call.
+  Post-finality and reconciliation require the exact `true→false` or `false→true` risk transition and
+  the same immutable payout/fee policy. Resolution, claims, retries, fee delivery, and newly resumed
+  activity may advance dynamic counts and amounts while finality completes, so those values are
+  revalidated but not frozen.
 
 ## Transaction durability and secrets
 
@@ -100,12 +104,13 @@ to send the SDK's fallback transaction.
 
 Immediately before the account/nonce gate, the signer independently calls Bradbury
 `eth_estimateGas` for the exact SDK-built sender, consensus recipient, calldata, and value. Any RPC
-error is fatal. The result must be positive, no greater than `operator.maxEvmGasLimit`, and exactly
-equal the SDK-requested gas. This specifically prevents `genlayer-js` 1.1.8 from signing after its
-silent 200,000-gas fallback. The signed legacy envelope must reproduce those bytes and stay under
+error is fatal. The result must be positive, no greater than `operator.maxEvmGasLimit`, and no greater
+than the SDK-requested gas. A conservative higher SDK limit is accepted because Bradbury can advance
+between the two estimates; a lower SDK limit and the exact silent 200,000-gas fallback from
+`genlayer-js` 1.1.8 are rejected. The signed legacy envelope must reproduce those bytes and stay under
 the explicit gas-limit and gas-price caps in the configuration. Their configured product and every
 signed envelope are also subject to a non-configurable 0.03 GEN maximum gas-cost ceiling. Recovery
-redoes the same check before any raw replay.
+revalidates the exact stored signed envelope and its hard gas/spend ceilings before any raw replay.
 
 Immediately before every fresh signature, the signer reads the dedicated owner's Bradbury EVM
 transaction counts at both `latest` and `pending` plus its pending balance. It signs zero bytes unless
@@ -133,9 +138,15 @@ If a process dies while state is `*_SIGNED`, run `reconcile` first. It looks up 
 hash and never signs another payload. Without `--broadcast`, a missing receipt is only reported.
 With `--broadcast`, recovery may replay only the byte-identical stored raw transaction; its returned
 hash and receipt must still match. A recovered finalized activation requires the bind proof and,
-after proving the exact activation receipt, must read back `payouts_enabled=true` and
-`new_risk_enabled=false`; recovery sends no second pause transaction. Any conflicting hash, receipt,
-event, state readback, or multiple unresolved operation is a hard stop.
+  after proving the exact activation receipt, must read back `payouts_enabled=true` and
+  `new_risk_enabled=false`. Resume recovery proves the stored owner-signed `resume_new_risk` bytes and
+  the exact pre-resume snapshot before any replay, then requires `payouts_enabled=true` and
+  `new_risk_enabled=true` before recording `RISK_ACTIVE`. An exact finalized resume execution failure
+  is instead call-verified, read back with risk still paused, durably marked non-replayable, and closed
+  to `PAYOUTS_ACTIVE_RISK_PAUSED`. Emergency pause may atomically supersede only one exact unsigned
+  `RESUME_PREPARED` record after exact active readback; it can also close that record without sending
+  when risk is already paused. Pause recovery applies the inverse proof. Any conflicting hash, receipt,
+  event, state readback, or other unresolved operation is a hard stop.
 
 Every state-changing or reconciliation run holds two exclusive lock files: one for the exact state
 path and one for the Bradbury owner address. The exact-state lock serializes its state file; the
@@ -170,6 +181,9 @@ npm run v8:bradbury:reconcile -- --config ops/bradbury-v8/config.local.json --br
 node ops/bradbury-v8/harness.mjs fund --config ops/bradbury-v8/config.local.json --bind-proof ops/bradbury-v8/bind-proof.local.json
 node ops/bradbury-v8/harness.mjs fund --config ops/bradbury-v8/config.local.json --bind-proof ops/bradbury-v8/bind-proof.local.json --broadcast
 node ops/bradbury-v8/harness.mjs activate --config ops/bradbury-v8/config.local.json --bind-proof ops/bradbury-v8/bind-proof.local.json --broadcast
+node ops/bradbury-v8/harness.mjs resume --config ops/bradbury-v8/config.local.json
+node ops/bradbury-v8/harness.mjs resume --config ops/bradbury-v8/config.local.json --broadcast
+node ops/bradbury-v8/harness.mjs pause --config ops/bradbury-v8/config.local.json --broadcast
 ```
 
 Omitting `--broadcast` performs only validation/readback and prints the exact plan. `status` is the
@@ -178,9 +192,11 @@ testnet GEN; they never use StudioNet's gasless environment or V7's existing GEN
 
 Activation is one safe GenLayer transaction: the contract sets `payouts_enabled=true` and preserves
 `new_risk_enabled=false`. A crash after submission is recovered by exact-hash `reconcile`; it cannot
-open epochs or wagers. Any future `resume_new_risk` canary/cutover requires a separately reviewed,
-attended tool and safety plan and is intentionally outside this harness.
+open epochs or wagers. `resume` performs one attended owner-only `resume_new_risk` transaction with
+the same durable pre-sign and reconciliation protections. Its terminal `RISK_ACTIVE` status proves
+both live flags are true; it is not an app or database cutover.
 
-After `PAYOUTS_ACTIVE_RISK_PAUSED`, separately review the payout-only ghost/EVM canary plan, then run it.
-Application and
-database cutover remains a later, independent release operation after those canaries pass.
+For a value-bearing production network, run and separately review the payout-only ghost/EVM canary
+before authorizing `resume`. The present Bradbury rollout is faucet-funded testnet: its explicit
+operator authorization accepts the finalized sacrificial factory/vault rehearsal as the pre-resume
+rail gate and does not claim a live claimable-position canary.

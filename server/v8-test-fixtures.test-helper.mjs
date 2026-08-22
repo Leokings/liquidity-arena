@@ -4,7 +4,7 @@ export const V8_CONTRACT = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 export const V8_OWNER = '0x797d3b25fb2cca0ff93f60df1910267f3822d655';
 export const V8_KEEPER = V8_OWNER;
 export const V8_TREASURY = '0x87e94edab4418e8a9ea37c0fab0675cf0602a9f2';
-export const V8_FACTORY = '0x944fdadd826c2a159c63cb100db174716ccd1317';
+export const V8_FACTORY = '0xc812709d267372ad7e06807bf0a4d451ed263a30';
 
 export function v8Environment(overrides = {}) {
   return {

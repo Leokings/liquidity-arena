@@ -2,7 +2,7 @@
 
 ## Scope
 
-The active target is `LIQUIDITY_ARENA_V8` at `0xe6aa95e551f8407b139474ec60c2012e4cc8a6cd` on GenLayer Bradbury testnet. Payout delivery uses the audited factory `0x944fdadd826c2a159c63cb100db174716ccd1317` on chain 4221.
+The active target is `LIQUIDITY_ARENA_V8` at `0x06b643f94003e51c6dc47e89524e7fd045630549` on GenLayer Bradbury testnet. Payout delivery uses the audited factory `0xc812709d267372ad7e06807bf0a4d451ed263a30` on chain 4221.
 
 Bradbury GEN is test currency. This release is not a real-value production wagering system.
 

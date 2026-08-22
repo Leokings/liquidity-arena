@@ -9,6 +9,7 @@ import { testnetBradbury } from 'genlayer-js/chains';
 import { CalldataAddress } from 'genlayer-js/types';
 
 import {
+  ACTIVATION_TERMINAL_STAGE,
   BRADBURY_CHAIN_ID,
   BRADBURY_RPC_URL,
   assertExactPauseAccountingIdentity,
@@ -23,6 +24,7 @@ import {
   loadState,
   readAndVerifyDeployment,
   readAndVerifyPauseState,
+  readAndVerifyResumePreSignState,
   reconcileEvmSubmission,
   recordEvmReceiptEvidence,
   recordSignedOperation,
@@ -67,8 +69,8 @@ function parseArguments(argv) {
     } else fail(`unknown option ${option}`);
   }
   if (!options.broadcast) fail('the internal signer requires explicit --broadcast');
-  if (!['deploy', 'fund', 'activate', 'pause'].includes(options.action)) {
-    fail('action must be deploy, fund, activate, or pause');
+  if (!['deploy', 'fund', 'activate', 'pause', 'resume'].includes(options.action)) {
+    fail('action must be deploy, fund, activate, pause, or resume');
   }
   if (!options.configPath || !options.statePath || !options.nonce) {
     fail('--config, --state, and --nonce are required');
@@ -180,10 +182,14 @@ function statePreflight(state, action, nonce) {
     fund: 'RESERVE_FUND_PREPARED',
     activate: 'ACTIVATION_PREPARED',
     pause: 'PAUSE_PREPARED',
+    resume: 'RESUME_PREPARED',
   }[action];
   if (state.stage !== expectedStage) fail(`durable state is not ${expectedStage}`);
   if (action === 'deploy' && state.contractAddress !== null) {
     fail('deploy cannot target a state that already has a contract');
+  }
+  if (action === 'resume' && operation.preparedFromStage !== ACTIVATION_TERMINAL_STAGE) {
+    fail('resume PREPARED state is not derived from the exact risk-paused terminal stage');
   }
   if (action !== 'deploy' && !ADDRESS_PATTERN.test(String(state.contractAddress || ''))) {
     fail(`${action} requires the exact recorded contract address`);
@@ -228,6 +234,14 @@ async function livePreflight({ options, config, state, local, reader }) {
       state.operations.pause.pauseAccountingIdentity,
       current.accounting,
     );
+  } else if (options.action === 'resume') {
+    await readAndVerifyResumePreSignState(
+      reader,
+      state.contractAddress,
+      local,
+      config,
+      state.operations.resume,
+    );
   }
 }
 
@@ -252,15 +266,25 @@ function withDurablePreSign(account, {
       const expectedValue = options.action === 'fund'
         ? config.reserve.initialFundingAtto
         : '0';
-      // This is the last asynchronous gate before fresh signing. It detects
-      // external-wallet pending transactions, pins the SDK nonce, caps spend,
-      // and proves the pending balance can cover the exact maximum cost.
+      const beforeFreshAccountPreflight = options.action === 'resume'
+        ? () => readAndVerifyResumePreSignState(
+          reader,
+          state.contractAddress,
+          local,
+          config,
+          state.operations.resume,
+        )
+        : undefined;
+      // Resume first rechecks its exact durable snapshot. The fresh account
+      // gate then detects external-owner activity, pins the SDK nonce, caps
+      // spend, and remains the final awaited network work before signing.
       const { signedEvmTransaction, accountPreflight } = await signAfterFreshAccountPreflight({
         reader,
         ownerAddress: config.expected.ownerAddress,
         transactionRequest,
         config,
         expectedValueAtto: expectedValue,
+        beforeFreshAccountPreflight,
         signImpl: originalSign,
         signOptions,
       });
@@ -310,6 +334,7 @@ async function broadcast(signingClient, action, state, local, config) {
     fund: 'fund_delivery_reserve',
     activate: 'activate_payouts',
     pause: 'pause_new_risk',
+    resume: 'resume_new_risk',
   }[action];
   return signingClient.writeContract({
     address: state.contractAddress,
@@ -398,7 +423,10 @@ async function main() {
 }
 
 main().catch((error) => {
-  const message = error instanceof Error && error.message.startsWith('Bradbury V8 signer refused:')
+  const message = error instanceof Error && (
+    error.message.startsWith('Bradbury V8 signer refused:')
+      || error.message.startsWith('Bradbury V8 harness refused:')
+  )
     ? error.message
     : 'Bradbury V8 signer refused: signing or broadcast failed; inspect the protected operational state and reconcile the exact pre-signed EVM hash';
   process.stderr.write(`${JSON.stringify({

@@ -1128,7 +1128,7 @@ def test_global_history_pages_are_bounded(
         contract.get_payout_page(0, bad_limit)
 
 
-def test_activation_fails_closed_by_chain_binding_and_factory_protocol(
+def test_activation_uses_the_immutable_factory_not_genvm_context_chain_id(
     direct_vm, direct_deploy, direct_owner, direct_charlie
 ):
     contract = deploy_arena(
@@ -1140,12 +1140,10 @@ def test_activation_fails_closed_by_chain_binding_and_factory_protocol(
     )
     factory = contract._test_payout_factory
 
+    # GenVM's message chain ID is execution context and is not the outer EVM
+    # settlement-chain identity. The immutable source anchor and deployment
+    # tooling pin Bradbury instead.
     direct_vm._chain_id = 61_999
-    direct_vm._refresh_gl_message()
-    with direct_vm.expect_revert("PAYOUT_NETWORK_UNSUPPORTED"):
-        contract.activate_payouts()
-
-    direct_vm._chain_id = 4_221
     direct_vm._refresh_gl_message()
     contract_module = sys.modules[contract._instance.__class__.__module__]
     trusted_factory = contract_module.AUDITED_PAYOUT_FACTORY_4221
