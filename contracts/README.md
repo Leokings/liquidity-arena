@@ -35,9 +35,9 @@ the factory to Bradbury EVM chain `4221`; GenVM's message-domain chain ID is not
 settlement-chain identifier. That factory was deployed as a zero-value CREATE,
 finalized, byte-matched, and source-verified before its address was frozen into V8. V8 is now
 finalized at `0x06b643f94003e51c6dc47e89524e7fd045630549`, and the factory's one-time binding to that exact
-arena is finalized. Reserve funding, payout activation, risk resume, and production cutover remain
-pending, so the deployment manifest stays inactive. A live claimable-position canary is post-resume
-testnet follow-up, not a claimed pre-resume gate.
+arena is finalized. The 0.6 GEN reserve funding, payout activation, and owner-controlled risk resume
+are also finalized, and the V8-only deployment manifest is active. A live claimable-position canary
+remains a post-resume testnet follow-up, not a claimed pre-resume gate.
 
 Player and treasury payouts use this state machine:
 

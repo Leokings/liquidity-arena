@@ -1171,8 +1171,11 @@ function evmQuantity(value) {
 /**
  * Re-estimates the exact SDK-built outer transaction immediately before the
  * account/nonce gate. genlayer-js 1.1.8 catches every estimate error and
- * substitutes 200,000 gas, so a successful independent estimate and exact
- * equality with the SDK request are mandatory before any signature.
+ * substitutes 200,000 gas, so a successful independent estimate, an explicit
+ * fallback rejection, and an SDK gas limit no lower than the fresh estimate
+ * are mandatory before any signature. A slightly higher SDK estimate is safe:
+ * Bradbury can advance between the SDK estimate and this final read, while the
+ * separate hard gas/spend ceilings still bind the signed envelope.
  */
 export async function assertExactBradburyGasEstimate({
   reader,
@@ -1230,11 +1233,13 @@ export async function assertExactBradburyGasEstimate({
     fail('Bradbury gas estimate exceeds operator.maxEvmGasLimit');
   }
   const sdkGas = exactTransactionRequestGas(transactionRequest);
-  if (sdkGas !== estimate) {
+  if (sdkGas === 200_000n) {
     fail(
-      'SDK-requested gas does not exactly match the independent Bradbury estimate; '
-      + 'the 200,000 fallback or estimation drift is prohibited',
+      'SDK-requested gas is the prohibited 200,000 estimation fallback',
     );
+  }
+  if (sdkGas < estimate) {
+    fail('SDK-requested gas is below the independent Bradbury estimate');
   }
   return Object.freeze({
     gas: estimate.toString(),
@@ -1327,11 +1332,12 @@ export async function signAfterFreshAccountPreflight({
     && typeof beforeFreshAccountPreflight !== 'function') {
     fail('fresh signing preflight hook must be a function');
   }
-  const gasEstimate = await assertExactBradburyGasEstimate(preflightInput);
   // Resume binds its exact risk-paused accounting snapshot here. The owner
-  // nonce/balance gate deliberately follows it, so no awaited network work can
-  // make the persisted nonce evidence stale before the cryptographic signer.
+  // gas estimate deliberately follows it so snapshot reads cannot make the
+  // live gas requirement stale. The owner nonce/balance gate then remains the
+  // final awaited network work before the cryptographic signer.
   if (beforeFreshAccountPreflight) await beforeFreshAccountPreflight();
+  const gasEstimate = await assertExactBradburyGasEstimate(preflightInput);
   const accountPreflight = await assertFreshSignerAccountPreflight(preflightInput);
   // Intentionally no asynchronous operation is inserted between the final
   // onchain account gate and the signer call.

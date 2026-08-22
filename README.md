@@ -17,7 +17,7 @@ Liquidity Arena is a GenLayer testnet market game for hourly BTC, ETH, BNB, SOL,
 | V8 release source SHA-256 | `1e7545f8f0fd121d64f3565675ac8f541d0ba8274abbde60db0dd02d7d777db5` |
 | V8 schema SHA-256 | `c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4` |
 
-The V8 deployment and one-time EVM factory binding are finalized. Reserve funding, payout activation, risk enablement, and public routing remain fail-closed until their rollout gates complete.
+The V8 deployment, one-time EVM factory binding, 0.6 GEN delivery-reserve funding, payout activation, and owner-controlled risk resume are finalized. The checked-in manifest routes the product exclusively to this V8 deployment.
 
 Bradbury GEN is faucet-issued test currency with no promised monetary value.
 

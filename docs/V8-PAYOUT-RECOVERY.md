@@ -5,10 +5,10 @@
 V8 is deployed and finalized on Bradbury at
 `0x06b643f94003e51c6dc47e89524e7fd045630549`. Its production payout factory is finalized and
 explorer-verified at `0xC812709d267372Ad7E06807bf0A4d451ED263A30`, and its one-time binding to
-that exact V8 arena is also finalized. The checked-in manifest remains deliberately `active:false`:
-delivery-reserve funding, payout activation, risk resume, and production cutover are still pending.
-The live claimable-position canary is an explicitly non-gating testnet follow-up. An address and
-finalized binding are not an assertion that payouts or new risk are live.
+that exact V8 arena is also finalized. The 0.6 GEN delivery reserve, payout activation, and explicit
+owner-controlled risk resume are finalized; the checked-in V8-only manifest is active. The live
+claimable-position canary remains an explicitly non-gating testnet follow-up and is not claimed as
+completed by this release.
 
 The deployed V7 contract remains immutable and its storage/balance cannot be moved into V8. This is
 a testnet cutover: V7 state and its remaining test-token claims will be abandoned rather than
@@ -222,9 +222,8 @@ CI run. They prove the local state machine and tooling, not live ghost/EVM parit
 deployment evidence. The live gate must publish the resulting bytecode and constructor immutables
 and repeat the source/address-anchor review.
 
-The finalized rehearsal, production-factory deployment, source freeze, V8 deployment, and one-time
-factory binding are complete. The remaining testnet sequence is: fund the delivery reserve; activate
-payouts with risk paused; explicitly resume new risk under the durable harness; then complete the
-application, history-service, and keeper cutover. Migration 004 and the global one-active constraint
-are already part of the release. The manifest remains `active:false` until the live fund, activation,
-resume, and external cutover gates are closed.
+The finalized rehearsal, production-factory deployment, source freeze, V8 deployment, one-time
+factory binding, 0.6 GEN reserve funding, payout activation, and durable risk resume are complete.
+Migration 004 and the global one-active constraint are part of the release, and the checked-in
+manifest is active. Application, history-service, and keeper deployment use only this V8 identity;
+V7 remains inactive audit history with no public route or retained claim path.

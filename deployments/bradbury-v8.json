@@ -13,6 +13,6 @@
   "sourceSha256": "1e7545f8f0fd121d64f3565675ac8f541d0ba8274abbde60db0dd02d7d777db5",
   "deploymentTransactionHash": "0xe024e26a5d439858a6505b7f704d778c56ae9b1ccbf95e08f629fff9c762de64",
   "factoryBindingTransactionHash": "0x72a0ce9d8dc5961292381d536910d9d39f703c26c5f8619e48972500df502717",
-  "deploymentStatus": "FINALIZED_BOUND_INACTIVE",
-  "active": false
+  "deploymentStatus": "FINALIZED",
+  "active": true
 }

@@ -34,7 +34,7 @@ function response() {
   };
 }
 
-test('Vercel retains the fail-closed Bradbury V8 deployment manifest', async () => {
+test('Vercel ships the finalized active Bradbury V8 deployment manifest', async () => {
   const ignore = await readFile(new URL('../.vercelignore', import.meta.url), 'utf8');
   const manifest = JSON.parse(await readFile(new URL('../deployments/bradbury-v8.json', import.meta.url), 'utf8'));
   const rules = ignore
@@ -47,7 +47,7 @@ test('Vercel retains the fail-closed Bradbury V8 deployment manifest', async () 
   assert.equal(manifest.network, 'testnet-bradbury');
   assert.equal(manifest.chainId, 4_221);
   assert.equal(manifest.contractAddress, '0x06b643f94003e51c6dc47e89524e7fd045630549');
-  assert.equal(manifest.deploymentStatus, 'FINALIZED_BOUND_INACTIVE');
+  assert.equal(manifest.deploymentStatus, 'FINALIZED');
   assert.equal(
     manifest.deploymentTransactionHash,
     '0xe024e26a5d439858a6505b7f704d778c56ae9b1ccbf95e08f629fff9c762de64',
@@ -56,7 +56,7 @@ test('Vercel retains the fail-closed Bradbury V8 deployment manifest', async () 
     manifest.factoryBindingTransactionHash,
     '0x72a0ce9d8dc5961292381d536910d9d39f703c26c5f8619e48972500df502717',
   );
-  assert.equal(manifest.active, false);
+  assert.equal(manifest.active, true);
   assert.equal(
     manifest.sourceSha256,
     '1e7545f8f0fd121d64f3565675ac8f541d0ba8274abbde60db0dd02d7d777db5',

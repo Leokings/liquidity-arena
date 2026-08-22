@@ -27,6 +27,7 @@ import {
   PAYOUT_PROTOCOL_VERSION,
   V8_POLICY_VERSION,
   V8_PROTOCOL_VERSION,
+  assertExactBradburyGasEstimate,
   assertExactCallReceipt,
   assertExactFailedCallReceipt,
   assertExactConfigReadback,
@@ -420,7 +421,7 @@ test('an unavailable headless keychain silently uses the encrypted-keystore fall
 
 test('fresh signing requires a quiescent exact nonce and sufficient pending balance', async () => {
   const config = normalizeConfig(rawConfig());
-  const gasLimit = 200_000n;
+  const gasLimit = 210_000n;
   const gasPrice = 1_000_000_000n;
   const maximumCost = gasLimit * gasPrice;
   const transactionRequest = {
@@ -475,8 +476,8 @@ test('fresh signing requires a quiescent exact nonce and sufficient pending bala
   assert.equal(exact.accountPreflight.maximumTransactionCostAtSign, maximumCost.toString());
   assert.deepEqual(exact.gasEstimate, { gas: gasLimit.toString(), calldataBytes: 2 });
   assert.deepEqual(ordering, [
-    'eth_estimateGas',
     'resume-snapshot',
+    'eth_estimateGas',
     'eth_getTransactionCount',
     'eth_getTransactionCount',
     'eth_getBalance',
@@ -485,7 +486,8 @@ test('fresh signing requires a quiescent exact nonce and sufficient pending bala
 
   for (const [label, reader, request, pattern] of [
     ['Bradbury estimate failure', readerFor({ estimateError: true }), transactionRequest, /200,000 fallback is prohibited/i],
-    ['SDK fallback/drift', readerFor({ estimate: gasLimit - 1n }), transactionRequest, /does not exactly match/i],
+    ['SDK gas below fresh estimate', readerFor({ estimate: gasLimit + 1n }), transactionRequest, /below the independent/i],
+    ['SDK fallback', readerFor({ estimate: 199_999n }), { ...transactionRequest, gas: 200_000n }, /200,000 estimation fallback/i],
     ['pending owner transaction', readerFor({ pending: '0x8' }), transactionRequest, /pending EVM transaction/i],
     ['SDK nonce drift', readerFor(), { ...transactionRequest, nonce: 8 }, /nonce does not equal/i],
     ['insufficient balance', readerFor({ balance: maximumCost - 1n }), transactionRequest, /balance cannot cover/i],
@@ -502,6 +504,15 @@ test('fresh signing requires a quiescent exact nonce and sufficient pending bala
     }), pattern, label);
     assert.equal(signs, 0, `${label} must perform zero signatures`);
   }
+
+  const conservativeSdkGas = await assertExactBradburyGasEstimate({
+    reader: readerFor({ estimate: gasLimit - 1n }),
+    ownerAddress: OWNER,
+    transactionRequest,
+    config,
+    expectedValueAtto: 0n,
+  });
+  assert.equal(conservativeSdkGas.gas, (gasLimit - 1n).toString());
 });
 
 test('signed envelope independently enforces the hard 0.03 GEN gas ceiling', async () => {

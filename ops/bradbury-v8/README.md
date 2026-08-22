@@ -1,4 +1,4 @@
-# Bradbury V8 inactive-deployment canary
+# Bradbury V8 rollout harness
 
 This harness deploys and certifies an initially **inactive** Liquidity Arena V8 candidate on
 GenLayer Bradbury. It never edits an application route, deployment registry, database, or keeper
@@ -104,12 +104,13 @@ to send the SDK's fallback transaction.
 
 Immediately before the account/nonce gate, the signer independently calls Bradbury
 `eth_estimateGas` for the exact SDK-built sender, consensus recipient, calldata, and value. Any RPC
-error is fatal. The result must be positive, no greater than `operator.maxEvmGasLimit`, and exactly
-equal the SDK-requested gas. This specifically prevents `genlayer-js` 1.1.8 from signing after its
-silent 200,000-gas fallback. The signed legacy envelope must reproduce those bytes and stay under
+error is fatal. The result must be positive, no greater than `operator.maxEvmGasLimit`, and no greater
+than the SDK-requested gas. A conservative higher SDK limit is accepted because Bradbury can advance
+between the two estimates; a lower SDK limit and the exact silent 200,000-gas fallback from
+`genlayer-js` 1.1.8 are rejected. The signed legacy envelope must reproduce those bytes and stay under
 the explicit gas-limit and gas-price caps in the configuration. Their configured product and every
 signed envelope are also subject to a non-configurable 0.03 GEN maximum gas-cost ceiling. Recovery
-redoes the same check before any raw replay.
+revalidates the exact stored signed envelope and its hard gas/spend ceilings before any raw replay.
 
 Immediately before every fresh signature, the signer reads the dedicated owner's Bradbury EVM
 transaction counts at both `latest` and `pending` plus its pending balance. It signs zero bytes unless
