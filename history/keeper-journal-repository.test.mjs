@@ -82,24 +82,25 @@ function healthySchemaRow(overrides = {}) {
     subject_columns_exist: true,
     base_migration_valid: true,
     attempt_migration_valid: true,
+    v4_migration_valid: true,
     migration_valid: true,
     no_unknown_migrations: true,
     ...overrides,
   };
 }
 
-test('health requires the exact version 4 Bradbury subject schema and its v2/v3 prerequisites', async () => {
+test('health requires the exact version 5 receipt revalidation schema and its v2-v4 prerequisites', async () => {
   const { repository, calls } = fixture([[healthySchemaRow()]]);
-  assert.deepEqual(await repository.health(), { configured: true, ready: true, schemaVersion: 4 });
-  assert.match(calls[0].sql, /version = 2[\s\S]*version = 3[\s\S]*version = 4/);
+  assert.deepEqual(await repository.health(), { configured: true, ready: true, schemaVersion: 5 });
+  assert.match(calls[0].sql, /version = 2[\s\S]*version = 3[\s\S]*version = 4[\s\S]*version = 5/);
   assert.match(calls[0].sql, /logical_operation_id/);
   assert.match(calls[0].sql, /arena_keeper_operations_logical_attempt_key/);
   assert.match(calls[0].sql, /subject_type[\s\S]*subject_id/);
-  assert.match(calls[0].sql, /NOT EXISTS \([\s\S]*version > 4/);
-  assert.equal(calls[0].params.length, 3);
+  assert.match(calls[0].sql, /NOT EXISTS \([\s\S]*version > 5/);
+  assert.equal(calls[0].params.length, 4);
 });
 
-test('health rejects an otherwise valid database with a migration newer than V4', async () => {
+test('health rejects an otherwise valid database with a migration newer than V5', async () => {
   const { repository } = fixture([[healthySchemaRow({ no_unknown_migrations: false })]]);
   assert.deepEqual(await repository.health(), { configured: true, ready: false, schemaVersion: null });
 });
@@ -193,6 +194,41 @@ test('transition query permits VERIFIED only from FINALIZED_SUCCESS or idempoten
   assert.match(calls[0].sql, /RECEIPT_IDENTITY_AMBIGUOUS/);
   assert.match(calls[0].sql, /quarantine_reason = CASE/);
   assertBradburyV8Isolation(calls[0].sql);
+});
+
+test('transition query clears only an exact generic identity quarantine after successful receipt proof', async () => {
+  const row = operationRow({
+    state: 'FINALIZED_SUCCESS',
+    lifecycle_status: 'FINALIZED',
+    state_reason_code: null,
+    quarantine_reason: null,
+    finalized_at: '2026-08-20T00:02:00.000Z',
+  });
+  const { repository, calls } = fixture([[{
+    lease_valid: true, operation_exists: true, attempt_frozen: false, operation: row,
+  }]]);
+  const result = await repository.transition({
+    holderId: HOLDER,
+    signerAddress: SIGNER,
+    fencingToken: '9',
+    operationId: OPERATION_ID,
+    targetState: 'FINALIZED_SUCCESS',
+    reasonCode: null,
+    metadata: {
+      transactionHash: HASH,
+      lifecycleStatus: 'FINALIZED',
+      receiptIdentityVerified: true,
+      executionVerified: true,
+    },
+  });
+  assert.equal(result.state, 'FINALIZED_SUCCESS');
+  assert.deepEqual(calls[0].params.at(-1), ['SUBMITTED', 'FINALIZED_SUCCESS', 'QUARANTINED']);
+  assert.match(calls[0].sql, /target\.state = 'QUARANTINED'[\s\S]*\$6 = 'FINALIZED_SUCCESS'[\s\S]*THEN NULL/);
+  assert.match(
+    calls[0].sql,
+    /target\.quarantine_reason = 'RECEIPT_IDENTITY_AMBIGUOUS'[\s\S]*target\.state_reason_code = 'RECEIPT_IDENTITY_AMBIGUOUS'/,
+  );
+  assert.match(calls[0].sql, /receiptIdentityVerified[\s\S]*executionVerified/);
 });
 
 test('recovery query is keyset-paginated and asks for only limit plus one rows', async () => {

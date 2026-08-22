@@ -254,11 +254,11 @@ test('history sync authenticates before service work and accepts only the V8 ali
   assert.equal(calls, 1);
 });
 
-test('history health requires exact Bradbury V8 configuration and schema-v4 integrity', async () => {
+test('history health requires exact Bradbury V8 configuration and schema-v5 integrity', async () => {
   const integrity = {
     checked: true,
     ready: false,
-    journalSchemaVersion: 4,
+    journalSchemaVersion: 5,
     activeDeploymentCount: 1,
     activeV8Count: 1,
     activeLegacyCount: 0,
@@ -275,7 +275,7 @@ test('history health requires exact Bradbury V8 configuration and schema-v4 inte
   const repository = {
     configured: true,
     async health() {
-      return { configured: true, ready: false, schemaVersion: 4, integrity };
+      return { configured: true, ready: false, schemaVersion: 5, integrity };
     },
   };
   const environment = v8Environment({
@@ -289,7 +289,7 @@ test('history health requires exact Bradbury V8 configuration and schema-v4 inte
   const payload = JSON.parse(res.body);
   assert.equal(payload.status, 'degraded');
   assert.equal(payload.configuration.chainConfigured, true);
-  assert.equal(payload.database.schemaVersion, 4);
+  assert.equal(payload.database.schemaVersion, 5);
   assert.deepEqual(payload.database.integrity, integrity);
 
   const legacyEnvironment = {

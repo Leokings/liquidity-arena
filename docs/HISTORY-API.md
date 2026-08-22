@@ -39,15 +39,16 @@ The synchronizer uses a persisted rotating payout cursor plus bounded epoch work
 
 `GET /api/history-health` is ready only when:
 
-- migrations 001–004 have exact checksums;
-- no later migration exists;
+- migrations 001–005 have exact checksums;
+- no migration newer than version 5 exists;
 - exactly one configured Bradbury V8 deployment is active;
 - legacy deployments are inactive;
 - epoch and payout projections are complete;
 - required payout-stage evidence is present and internally consistent;
-- keeper journal schema V4 is healthy.
+- keeper journal schema V5 is healthy.
 
 Migration 004 is append-only and intentionally refuses a second application. Its checksum is `1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910`.
+Migration 005 (`keeper_receipt_identity_revalidation`) is likewise append-only and checksum-pinned at `a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59`.
 
 ## Synchronization
 

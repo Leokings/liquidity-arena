@@ -5,6 +5,7 @@ import { publicKeeperOperation } from './schema.mjs';
 export const KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM = 'd2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266';
 export const KEEPER_JOURNAL_SCHEMA_CHECKSUM = '9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70';
 export const KEEPER_JOURNAL_SCHEMA_V4_CHECKSUM = '1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910';
+export const KEEPER_JOURNAL_SCHEMA_V5_CHECKSUM = 'a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59';
 const QUERY_TIMEOUT_MS = 8_000;
 const LEASE_SCOPE = 'bradbury:4221:keeper';
 
@@ -154,14 +155,21 @@ export function createNeonKeeperJournalRepository({
               WHERE version = 4
                 AND name = 'bradbury_v8_cutover'
                 AND schema_checksum = $3
+           ) AS v4_migration_valid,
+           EXISTS (
+             SELECT 1 FROM arena_schema_migrations
+              WHERE version = 5
+                AND name = 'keeper_receipt_identity_revalidation'
+                AND schema_checksum = $4
            ) AS migration_valid,
            NOT EXISTS (
-             SELECT 1 FROM arena_schema_migrations WHERE version > 4
+             SELECT 1 FROM arena_schema_migrations WHERE version > 5
            ) AS no_unknown_migrations`,
         [
           KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_V4_CHECKSUM,
+          KEEPER_JOURNAL_SCHEMA_V5_CHECKSUM,
         ],
         3_000,
       );
@@ -177,9 +185,10 @@ export function createNeonKeeperJournalRepository({
         && row.subject_columns_exist === true
         && row.base_migration_valid === true
         && row.attempt_migration_valid === true
+        && row.v4_migration_valid === true
         && row.migration_valid === true
         && row.no_unknown_migrations === true;
-      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 4 : null });
+      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 5 : null });
     },
 
     async claimRequest({ keyHash, requestHash, action }) {
@@ -713,7 +722,7 @@ export function createNeonKeeperJournalRepository({
       metadata,
     }) {
       const allowed = Object.freeze({
-        FINALIZED_SUCCESS: ['SUBMITTED', 'FINALIZED_SUCCESS'],
+        FINALIZED_SUCCESS: ['SUBMITTED', 'FINALIZED_SUCCESS', 'QUARANTINED'],
         VERIFIED: ['FINALIZED_SUCCESS', 'VERIFIED'],
         FINALIZED_FAILURE: ['SUBMITTED', 'FINALIZED_FAILURE'],
         STATE_SATISFIED_UNPROVEN: ['PREPARED', 'SUBMITTED', 'STATE_SATISFIED_UNPROVEN'],
@@ -774,6 +783,7 @@ export function createNeonKeeperJournalRepository({
              quarantine_reason = CASE
                WHEN target.state = $6 THEN target.quarantine_reason
                WHEN $6 = 'QUARANTINED' THEN $7
+               WHEN target.state = 'QUARANTINED' AND $6 = 'FINALIZED_SUCCESS' THEN NULL
                ELSE target.quarantine_reason
              END,
              last_fencing_token = active.fencing_token
@@ -789,6 +799,13 @@ export function createNeonKeeperJournalRepository({
                AND target.transition_metadata ->> 'lifecycleStatus' = 'FINALIZED'
                AND target.transition_metadata
                  @> '{"receiptIdentityVerified":true,"executionVerified":true}'::jsonb
+               AND (
+                 target.state <> 'QUARANTINED'
+                 OR (
+                   target.quarantine_reason = 'RECEIPT_IDENTITY_AMBIGUOUS'
+                   AND target.state_reason_code = 'RECEIPT_IDENTITY_AMBIGUOUS'
+                 )
+               )
              ))
              AND ($6 <> 'FINALIZED_FAILURE' OR (
                target.lifecycle_status = 'FINALIZED'
