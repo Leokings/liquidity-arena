@@ -1232,7 +1232,7 @@ test('asynchronous CLI actions remain awaited inside the exclusive-lock lifetime
     'reconcileAction(context, options)',
     'emergencyPauseAction(context, options)',
   ]) {
-    assert.match(source, new RegExp(`return await ${action.replace(/[()]/g, '\\$&')}`));
+    assert.ok(source.includes(`return await ${action};`));
   }
 });
 
