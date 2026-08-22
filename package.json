@@ -37,7 +37,7 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "1.1.0",
-    "@noble/hashes": "1.8.0",
+    "@noble/hashes": "2.3.0",
     "genlayer-js": "1.1.8",
     "ws": "^7.5.13"
   },
