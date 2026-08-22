@@ -504,6 +504,122 @@ test('recovery polls UNKNOWN and ACCEPTED until the exact submitted epoch is fin
   assert.equal(journal.operations.get(operationId).transactionHash, hash);
 });
 
+test('recovery revalidates only a finalized generic receipt-identity quarantine', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  const hash = `0x${'5'.padStart(64, '0')}`;
+  const epochEndTimestamp = (Math.floor(NOW / 3600) + 3) * 3600;
+  const operationId = journal.seedOperation({
+    deploymentAlias: 'v8',
+    chainId: '4221',
+    contractAddress: CONTRACT,
+    subjectType: 'epoch',
+    subjectId: String(epochEndTimestamp),
+    method: 'create_epoch',
+    args: [String(epochEndTimestamp)],
+    valueAtto: '0',
+    signerAddress: KEEPER,
+    state: 'QUARANTINED',
+    transactionHash: hash,
+    lifecycleStatus: 'FINALIZED',
+    stateReasonCode: 'RECEIPT_IDENTITY_AMBIGUOUS',
+    quarantineReason: 'RECEIPT_IDENTITY_AMBIGUOUS',
+  });
+  let submitCalls = 0;
+  const operator = {
+    canSignLockedAccount: true,
+    getNetworkInfo: async () => ({ alias: 'testnet-bradbury', chainId: 4221 }),
+    getAccountInfo: async () => ({ address: KEEPER, active: true, status: 'locked' }),
+    getSchema: async () => structuredClone(V8_KEEPER_ABI),
+    getConfig: async () => chainConfig({ new_risk_enabled: false }),
+    getReserveState: async () => reserveState(),
+    getEpochPage: async (offset) => ({
+      offset,
+      next_offset: offset === 0 ? 1 : offset,
+      total: 1,
+      epoch_ids: offset === 0 ? [String(epochEndTimestamp)] : [],
+    }),
+    getEpoch: async () => epochRecord(epochEndTimestamp, { status: 'OPEN' }),
+    getPayoutPage: async (offset) => ({ offset, next_offset: offset, total: 0, payouts: [] }),
+    waitFinalized: async () => ({
+      transactionHash: hash,
+      statusName: 'FINALIZED',
+      txExecutionResultName: 'FINISHED_WITH_RETURN',
+      recipient: CONTRACT,
+      txDataDecoded: {
+        type: 'call',
+        callData: { method: 'create_epoch', args: [String(epochEndTimestamp)] },
+      },
+    }),
+    submitWrite: async () => { submitCalls += 1; },
+  };
+  const result = await runV8KeeperOnce({
+    config: config(),
+    execute: true,
+    operator,
+    journalClient: journal.client,
+    nowEpochSeconds: NOW,
+    logger: () => {},
+    sleep: async () => {},
+    journalSessionOptions: { setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {} },
+  });
+  const operation = journal.operations.get(operationId);
+  assert.equal(submitCalls, 0);
+  assert.equal(result.blocked, false);
+  assert.equal(result.recovered[0].status, 'EPOCH_OPEN');
+  assert.equal(operation.state, 'VERIFIED');
+  assert.equal(operation.stateReasonCode, null);
+  assert.equal(operation.quarantineReason, null);
+  const transitions = journal.calls.filter(({ method }) => method === 'transition');
+  assert.deepEqual(transitions.map(({ request }) => request.targetState), [
+    'FINALIZED_SUCCESS', 'VERIFIED',
+  ]);
+  assert.equal(transitions[0].request.metadata.transactionHash, hash);
+});
+
+test('receipt hash, contract, method, and argument mismatch quarantines remain terminal', async () => {
+  for (const reason of [
+    'RECEIPT_HASH_MISMATCH',
+    'RECEIPT_CONTRACT_MISMATCH',
+    'RECEIPT_METHOD_MISMATCH',
+    'RECEIPT_ARGUMENTS_MISMATCH',
+  ]) {
+    const journal = createMemoryAuthoritativeKeeperJournalClient();
+    const hash = `0x${'6'.padStart(64, '0')}`;
+    const epochEndTimestamp = (Math.floor(NOW / 3600) + 3) * 3600;
+    const operationId = journal.seedOperation({
+      deploymentAlias: 'v8', chainId: '4221', contractAddress: CONTRACT,
+      subjectType: 'epoch', subjectId: String(epochEndTimestamp), method: 'create_epoch',
+      args: [String(epochEndTimestamp)], valueAtto: '0', signerAddress: KEEPER,
+      state: 'QUARANTINED', transactionHash: hash, lifecycleStatus: 'FINALIZED',
+      stateReasonCode: reason, quarantineReason: reason,
+    });
+    let receiptReads = 0;
+    const result = await runV8KeeperOnce({
+      config: config(),
+      execute: true,
+      operator: {
+        canSignLockedAccount: true,
+        getNetworkInfo: async () => ({ alias: 'testnet-bradbury', chainId: 4221 }),
+        getAccountInfo: async () => ({ address: KEEPER, active: true, status: 'locked' }),
+        getSchema: async () => structuredClone(V8_KEEPER_ABI),
+        getConfig: async () => chainConfig({ new_risk_enabled: false }),
+        getReserveState: async () => reserveState(),
+        waitFinalized: async () => { receiptReads += 1; },
+      },
+      journalClient: journal.client,
+      nowEpochSeconds: NOW,
+      logger: () => {},
+      sleep: async () => {},
+      journalSessionOptions: { setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {} },
+    });
+    assert.equal(result.blocked, true, reason);
+    assert.equal(receiptReads, 0, reason);
+    assert.equal(journal.operations.get(operationId).state, 'QUARANTINED', reason);
+    assert.equal(journal.operations.get(operationId).quarantineReason, reason, reason);
+    assert.equal(journal.calls.some(({ method }) => method === 'transition'), false, reason);
+  }
+});
+
 test('receipt validation rejects any contract, method, or payout ID mismatch', () => {
   const receipt = {
     transactionHash: `0x${'2'.padStart(64, '0')}`,

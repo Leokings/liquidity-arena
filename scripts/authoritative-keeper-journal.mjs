@@ -155,7 +155,10 @@ export function validateRecoveredKeeperOperation(operation) {
       || signerAddress !== operation.signerAddress
       || !JOURNAL_STATES.has(operation.state)
       || (operation.lifecycleStatus !== null
-        && !LIFECYCLE_STATUSES.has(operation.lifecycleStatus))) {
+        && !LIFECYCLE_STATUSES.has(operation.lifecycleStatus))
+      || (operation.state !== 'QUARANTINED' && operation.quarantineReason !== null)
+      || (['FINALIZED_SUCCESS', 'VERIFIED'].includes(operation.state)
+        && operation.stateReasonCode !== null)) {
     fail('KEEPER_JOURNAL_SCHEMA', 'Recovered operation identity is not canonical.');
   }
   if (operation.transactionHash !== null
@@ -225,10 +228,10 @@ export function createAuthoritativeKeeperSession({
         || health?.configuration?.signerConfigured !== true
         || health?.database?.configured !== true
         || health?.database?.ready !== true
-        || health?.database?.schemaVersion !== 4) {
+        || health?.database?.schemaVersion !== 5) {
       fail(
         'KEEPER_JOURNAL_NOT_READY',
-        'The authoritative keeper journal is not ready on schema version 4; no lease or write is permitted.',
+        'The authoritative keeper journal is not ready on schema version 5; no lease or write is permitted.',
       );
     }
     const response = await client.acquireLease({
@@ -503,7 +506,75 @@ export async function reconcileAuthoritativeOperation({
       pending: pending(operation, 'PREPARED_WITHOUT_DURABLE_HASH'),
     });
   }
-  if (operation.state === 'QUARANTINED' || operation.state === 'STATE_SATISFIED_UNPROVEN') {
+  if (operation.state === 'QUARANTINED') {
+    const genericIdentityQuarantine = operation.quarantineReason === RECEIPT_AMBIGUITY_CODES.OTHER
+      && operation.stateReasonCode === RECEIPT_AMBIGUITY_CODES.OTHER
+      && operation.lifecycleStatus === 'FINALIZED'
+      && operation.transactionHash !== null;
+    if (!genericIdentityQuarantine) {
+      return Object.freeze({
+        verified: false,
+        operation,
+        pending: pending(operation, 'JOURNAL_QUARANTINED'),
+      });
+    }
+
+    let receipt;
+    try {
+      receipt = await operator.waitFinalized(operation.transactionHash, receiptPolicy);
+    } catch (error) {
+      return Object.freeze({
+        verified: false,
+        operation,
+        pending: pending(operation, 'FINALIZED_RECEIPT_NOT_INDEXED', {
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      });
+    }
+    const ambiguityCode = receiptAmbiguityCode(receipt, operation);
+    if (ambiguityCode) {
+      return Object.freeze({
+        verified: false,
+        operation,
+        pending: pending(operation, ambiguityCode),
+      });
+    }
+    if (receipt.txExecutionResultName !== SUCCESSFUL_EXECUTION) {
+      return Object.freeze({
+        verified: false,
+        operation,
+        pending: pending(operation, 'FINALIZED_EXECUTION_FAILED'),
+      });
+    }
+    try {
+      validateReceipt(receipt, operation);
+    } catch {
+      return Object.freeze({
+        verified: false,
+        operation,
+        pending: pending(operation, RECEIPT_AMBIGUITY_CODES.OTHER),
+      });
+    }
+    const transitioned = await session.transition(operation.operationId, 'FINALIZED_SUCCESS', {
+      metadata: {
+        transactionHash: operation.transactionHash,
+        lifecycleStatus: 'FINALIZED',
+        receiptIdentityVerified: true,
+        executionVerified: true,
+      },
+    });
+    operation = validateRecoveredKeeperOperation(transitioned?.operation);
+    if (operation.state !== 'FINALIZED_SUCCESS'
+        || operation.stateReasonCode !== null
+        || operation.quarantineReason !== null) {
+      fail(
+        'KEEPER_JOURNAL_TRANSITION_CONFLICT',
+        'Corrected receipt evidence did not clear the generic identity quarantine.',
+      );
+    }
+  }
+
+  if (operation.state === 'STATE_SATISFIED_UNPROVEN') {
     return Object.freeze({
       verified: false,
       operation,

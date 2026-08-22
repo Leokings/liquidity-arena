@@ -59,6 +59,7 @@ function healthySchema(overrides = {}) {
     journal_base_migration_valid: true,
     journal_attempt_migration_valid: true,
     bradbury_v8_migration_valid: true,
+    keeper_revalidation_migration_valid: true,
     no_future_migrations: true,
     active_deployment_count: 1,
     active_v8_count: 1,
@@ -99,18 +100,18 @@ test('Neon history repository remains lazy and build-safe without DATABASE_URL',
   assert.equal(imports, 0);
 });
 
-test('history health requires schema v4, one active Bradbury V8, and complete epoch and payout projections', async () => {
+test('history health requires schema v5, one active Bradbury V8, and complete epoch and payout projections', async () => {
   const { repository, calls } = repositoryWithResults([
     [healthySchema()],
     [healthyProjection()],
   ]);
   const health = await repository.health();
   assert.equal(health.ready, true);
-  assert.equal(health.schemaVersion, 4);
+  assert.equal(health.schemaVersion, 5);
   assert.deepEqual(health.integrity, {
     checked: true,
     ready: true,
-    journalSchemaVersion: 4,
+    journalSchemaVersion: 5,
     activeDeploymentCount: 1,
     activeV8Count: 1,
     activeLegacyCount: 0,
@@ -126,14 +127,14 @@ test('history health requires schema v4, one active Bradbury V8, and complete ep
     countsCapped: false,
   });
   assert.equal(calls.length, 2);
-  assert.equal(calls[0].params.length, 11);
+  assert.equal(calls[0].params.length, 12);
   assert.equal(calls[0].params[3], BRADBURY_V8_SCHEMA_CHECKSUM);
-  assert.equal(calls[0].params[4], '0xc812709d267372ad7e06807bf0a4d451ed263a30');
-  assert.equal(calls[0].params[5], 'c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4');
-  assert.equal(calls[0].params[6], testDeployment().deploymentId);
-  assert.equal(calls[0].params[7], testDeployment().addressKey);
-  assert.equal(calls[0].params[8], testDeployment().expectations.owner);
-  assert.match(calls[0].text, /version = 4/);
+  assert.equal(calls[0].params[5], '0xc812709d267372ad7e06807bf0a4d451ed263a30');
+  assert.equal(calls[0].params[6], 'c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4');
+  assert.equal(calls[0].params[7], testDeployment().deploymentId);
+  assert.equal(calls[0].params[8], testDeployment().addressKey);
+  assert.equal(calls[0].params[9], testDeployment().expectations.owner);
+  assert.match(calls[0].text, /version = 4[\s\S]*version = 5/);
   assert.match(calls[0].text, /active_v8_count/);
   assert.match(calls[1].text, /deployment_alias = 'v8'/);
   assert.match(calls[1].text, /operation\.network = 'bradbury'/);

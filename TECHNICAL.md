@@ -64,9 +64,9 @@ EVM withdrawal attempts are stored in a bounded durable multi-attempt journal. P
 
 ## History and database
 
-Migrations 001–003 remain immutable. Migration 004 adds Bradbury V8 identity, globally deactivates legacy deployments, enforces one globally active deployment, adds payout identity and stage-proof tables, generalizes keeper subjects to epochs or payout IDs, and persists rotating payout cursors.
+Migrations 001–003 remain immutable. Migration 004 adds Bradbury V8 identity, globally deactivates legacy deployments, enforces one globally active deployment, adds payout identity and stage-proof tables, generalizes keeper subjects to epochs or payout IDs, and persists rotating payout cursors. Migration 005 narrowly permits revalidation of a finalized generic receipt-identity quarantine after the exact finalized receipt—using raw transaction bytes for call identity—proves the stored hash, contract, method, arguments, and successful execution; specific identity mismatches remain terminal.
 
-Public history exposes only V8 deployments, epochs, proofs, and payouts. Health requires exact contract/role/factory/schema identity, schema version 4 with no unknown later migration, complete epoch/payout projections, and verified payout-stage evidence.
+Public history exposes only V8 deployments, epochs, proofs, and payouts. Health requires exact contract/role/factory/schema identity, schema version 5 with no unknown later migration, complete epoch/payout projections, and verified payout-stage evidence.
 
 ## Keeper
 

@@ -224,6 +224,6 @@ and repeat the source/address-anchor review.
 
 The finalized rehearsal, production-factory deployment, source freeze, V8 deployment, one-time
 factory binding, 0.6 GEN reserve funding, payout activation, and durable risk resume are complete.
-Migration 004 and the global one-active constraint are part of the release, and the checked-in
+Migrations 004 and 005 and the global one-active constraint are part of the release, and the checked-in
 manifest is active. Application, history-service, and keeper deployment use only this V8 identity;
 V7 remains inactive audit history with no public route or retained claim path.

@@ -33,7 +33,7 @@ The keeper never calls EVM `withdraw()` and has no recipient key.
 
 ## Durable journal
 
-Journal schema V4 supports epoch and payout subjects. An operation is prepared before broadcast and records exact method, arguments, signer, contract, nonce/transaction identity, attempt, and final receipt.
+Journal schema V5 supports epoch and payout subjects plus narrowly gated revalidation of a finalized generic receipt-identity quarantine. An operation is prepared before broadcast and records exact method, arguments, signer, contract, nonce/transaction identity, attempt, and final receipt.
 
 Recovery rules:
 
@@ -43,7 +43,7 @@ Recovery rules:
 4. Accept only the exact finalized receipt and monotonic post-state.
 5. Quarantine contradictory hashes, arguments, or domain identity.
 
-Migration 004 checksum is `1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910`. Keeper health rejects missing migrations and any version newer than 4.
+Migration 004 checksum is `1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910`. Migration 005 (`keeper_receipt_identity_revalidation`) checksum is `a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59`. Keeper health requires exact migrations 001–005 and rejects any version newer than 5.
 
 ## Local dry run
 

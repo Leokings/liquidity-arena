@@ -580,6 +580,50 @@ test('receipt parser preserves exact decoded call identity for imported proof ch
   });
 });
 
+test('receipt parser recovers exact Bradbury call identity from raw transaction bytes', () => {
+  const raw = '0xe2a01604617267730d81fcbfa235066d6574686f64646372656174655f65706f636800';
+  const receipt = parseGenlayerReceiptOutput(`Result:\n{
+  status_name: 'FINALIZED',
+  txExecutionResultName: 'FINISHED_WITH_RETURN',
+  recipient: '0x06B643f94003e51c6dC47E89524e7fD045630549',
+  txCalldata: '${raw}',
+  txData: '${raw}',
+  txDataDecoded: { leaderOnly: false, type: 'call' }
+}`, { transactionHash: TRANSACTION_HASH });
+
+  assert.deepEqual(receipt.txDataDecoded, {
+    type: 'call',
+    callData: { method: 'create_epoch', args: [1787428800n] },
+  });
+});
+
+test('receipt parser rejects malformed, conflicting, or disagreeing raw call identity', () => {
+  const raw = '0xe2a01604617267730d81fcbfa235066d6574686f64646372656174655f65706f636800';
+  const receipt = ({ txData = raw, txCalldata = raw, decoded = "{ leaderOnly: false, type: 'call' }" } = {}) => `Result:\n{
+  status_name: 'FINALIZED',
+  txExecutionResultName: 'FINISHED_WITH_RETURN',
+  recipient: '0x06B643f94003e51c6dC47E89524e7fD045630549',
+  txCalldata: '${txCalldata}',
+  txData: '${txData}',
+  txDataDecoded: ${decoded}
+}`;
+
+  assert.throws(
+    () => parseGenlayerReceiptOutput(receipt({ txData: '0xabc' })),
+    /malformed txData/,
+  );
+  assert.throws(
+    () => parseGenlayerReceiptOutput(receipt({ txCalldata: `${raw.slice(0, -2)}01` })),
+    /conflicting txData and txCalldata/,
+  );
+  assert.throws(
+    () => parseGenlayerReceiptOutput(receipt({
+      decoded: "{ type: 'call', callData: { method: 'resolve_epoch', args: [ 1787428800n ] } }",
+    })),
+    /conflicting decoded call identity evidence/,
+  );
+});
+
 test('receipt parser converts StudioNet data.calldata.readable into imported-proof identity', () => {
   const contract = '0xd0a7430b25379B7483B61eEa881Fe1bede103852';
   const receipt = parseGenlayerReceiptOutput(studioWriteOutput({

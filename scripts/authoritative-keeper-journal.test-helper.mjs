@@ -90,7 +90,7 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
           authenticationConfigured: true,
           signerConfigured: true,
         },
-        database: { configured: true, ready: true, schemaVersion: 4 },
+        database: { configured: true, ready: true, schemaVersion: 5 },
       };
     },
     async acquireLease(request) {
@@ -199,10 +199,26 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       await hooks.transition?.(request);
       const operation = operations.get(request.operationId);
       if (!operation) throw new Error('fake transition rejected');
+      const sourceState = operation.state;
+      if (sourceState === 'QUARANTINED' && request.targetState === 'FINALIZED_SUCCESS') {
+        if (operation.quarantineReason !== 'RECEIPT_IDENTITY_AMBIGUOUS'
+            || operation.stateReasonCode !== 'RECEIPT_IDENTITY_AMBIGUOUS'
+            || operation.lifecycleStatus !== 'FINALIZED'
+            || request.metadata?.transactionHash !== operation.transactionHash
+            || request.metadata?.lifecycleStatus !== 'FINALIZED'
+            || request.metadata?.receiptIdentityVerified !== true
+            || request.metadata?.executionVerified !== true) {
+          throw new Error('fake generic quarantine revalidation rejected');
+        }
+      } else if (sourceState === 'QUARANTINED' && request.targetState !== 'QUARANTINED') {
+        throw new Error('fake mismatch quarantine is terminal');
+      }
       operation.state = request.targetState;
       operation.stateReasonCode = request.reasonCode;
       if (request.targetState === 'QUARANTINED') {
         operation.quarantineReason = request.reasonCode;
+      } else if (sourceState === 'QUARANTINED' && request.targetState === 'FINALIZED_SUCCESS') {
+        operation.quarantineReason = null;
       }
       operation.updatedAt = timestamp();
       if (['FINALIZED_SUCCESS', 'FINALIZED_FAILURE'].includes(request.targetState)) {
@@ -221,6 +237,8 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
     state = 'SUBMITTED',
     transactionHash,
     lifecycleStatus = null,
+    stateReasonCode = null,
+    quarantineReason = null,
     attemptNumber = '1',
     ...input
   }) {
@@ -253,8 +271,8 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       transactionHash: transactionHash?.toLowerCase() ?? null,
       lifecycleStatus,
       lifecycleObservedAt: lifecycleStatus ? now : null,
-      stateReasonCode: null,
-      quarantineReason: null,
+      stateReasonCode,
+      quarantineReason,
       preparedAt: now,
       submittedAt: transactionHash ? now : null,
       finalizedAt: ['FINALIZED_SUCCESS', 'FINALIZED_FAILURE'].includes(state) ? now : null,

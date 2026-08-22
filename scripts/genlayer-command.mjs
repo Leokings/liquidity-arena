@@ -4,6 +4,8 @@ import { join as joinPath, win32 as windowsPath } from 'node:path';
 import process from 'node:process';
 import { isDeepStrictEqual } from 'node:util';
 
+import { decodeInputData } from 'genlayer-js';
+
 const ANSI_ESCAPE_PATTERN = /\u001B\[[0-?]*[ -/]*[@-~]/g;
 const TRANSACTION_HASH_PATTERN = /Write Transaction Hash:\s*(0x[\da-f]{64})/i;
 const ERROR_TAG_PATTERN = /\[(TRANSIENT|EXPECTED|EXTERNAL)\]/i;
@@ -361,14 +363,56 @@ function oneObjectVariant(object, snakeName, camelName, label) {
 }
 
 function decodedCallIdentity(value, label) {
-  if (!isPlainObject(value) || value.type !== 'call' || !isPlainObject(value.callData)) {
+  const callData = value?.callData;
+  if (!isPlainObject(value) || value.type !== 'call'
+      || (!isPlainObject(callData) && !(callData instanceof Map))) {
     throw new Error(`GenLayer receipt reported malformed ${label}.`);
   }
-  const { method, args } = value.callData;
+  const method = callData instanceof Map ? callData.get('method') : callData.method;
+  const args = callData instanceof Map ? callData.get('args') : callData.args;
   if (typeof method !== 'string' || method.trim() === '' || !Array.isArray(args)) {
     throw new Error(`GenLayer receipt reported malformed ${label}.`);
   }
   return { type: 'call', callData: { method, args } };
+}
+
+function sameDecodedCallIdentity(left, right) {
+  if (left.callData.method !== right.callData.method
+      || left.callData.args.length !== right.callData.args.length) return false;
+  return left.callData.args.every((value, index) => {
+    const other = right.callData.args[index];
+    if (isDeepStrictEqual(value, other)) return true;
+    const scalar = (entry) => ['bigint', 'boolean', 'number', 'string'].includes(typeof entry);
+    return scalar(value) && scalar(other) && String(value) === String(other);
+  });
+}
+
+function rawDecodedTransactionEvidence(direct) {
+  const fields = [
+    ['txData', direct.txData],
+    ['txCalldata', direct.txCalldata],
+  ].filter(([, value]) => value !== undefined);
+  if (fields.length === 0) return undefined;
+
+  const normalized = fields.map(([name, value]) => {
+    if (typeof value !== 'string' || !/^0x(?:[\da-f]{2})+$/i.test(value)) {
+      throw new Error(`GenLayer receipt reported malformed ${name}.`);
+    }
+    return [name, value.toLowerCase()];
+  });
+  if (new Set(normalized.map(([, value]) => value)).size !== 1) {
+    throw new Error('GenLayer receipt reported conflicting txData and txCalldata values.');
+  }
+
+  const decoded = decodeInputData(normalized[0][1], direct.recipient);
+  if (!isPlainObject(decoded)) {
+    throw new Error('GenLayer receipt raw transaction data could not be decoded.');
+  }
+  if (decoded.type === 'deploy') return { type: 'deploy' };
+  if (decoded.type !== 'call') {
+    throw new Error('GenLayer receipt raw transaction data reported an unknown transaction type.');
+  }
+  return { type: 'call', callIdentity: decodedCallIdentity(decoded, 'raw transaction data') };
 }
 
 function studioDecodedCallIdentity(direct) {
@@ -575,14 +619,29 @@ export function parseGenlayerReceiptOutput(output, {
   }
   const txExecutionResultName = nativeExecution || studioExecution;
   const studioDecoded = studioExecution ? studioDecodedCallIdentity(direct) : undefined;
-  if (studioDecoded && direct.txDataDecoded !== undefined) {
-    const nativeDecoded = decodedCallIdentity(direct.txDataDecoded, 'txDataDecoded');
-    if (nativeDecoded.callData.method !== studioDecoded.callData.method
-      || !isDeepStrictEqual(nativeDecoded.callData.args, studioDecoded.callData.args)) {
+  const rawEvidence = rawDecodedTransactionEvidence(direct);
+  const rawDecoded = rawEvidence?.callIdentity;
+  if (studioDecoded && rawEvidence && rawEvidence.type !== 'call') {
+    throw new Error('GenLayer receipt reported conflicting decoded call identity evidence.');
+  }
+  let nativeDecoded;
+  if (direct.txDataDecoded !== undefined) {
+    if (!isPlainObject(direct.txDataDecoded)) {
+      throw new Error('GenLayer receipt reported malformed txDataDecoded.');
+    }
+    const expectedDecodedType = rawEvidence?.type || (studioDecoded ? 'call' : undefined);
+    if (expectedDecodedType && direct.txDataDecoded.type !== expectedDecodedType) {
       throw new Error('GenLayer receipt reported conflicting decoded call identity evidence.');
     }
+    if (direct.txDataDecoded.type === 'call' && direct.txDataDecoded.callData !== undefined) {
+      nativeDecoded = decodedCallIdentity(direct.txDataDecoded, 'txDataDecoded');
+    }
   }
-  const txDataDecoded = studioDecoded || direct.txDataDecoded;
+  const decodedEvidence = [studioDecoded, rawDecoded, nativeDecoded].filter(Boolean);
+  if (decodedEvidence.some((decoded) => !sameDecodedCallIdentity(decodedEvidence[0], decoded))) {
+    throw new Error('GenLayer receipt reported conflicting decoded call identity evidence.');
+  }
+  const txDataDecoded = studioDecoded || rawDecoded || nativeDecoded || direct.txDataDecoded;
   if (!statusName) throw new Error('GenLayer receipt did not report status_name.');
   if (requireExecution && !txExecutionResultName) {
     throw new Error('GenLayer receipt did not report txExecutionResultName.');

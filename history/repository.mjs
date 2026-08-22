@@ -2,6 +2,8 @@ import { HistoryError } from './errors.mjs';
 import {
   KEEPER_JOURNAL_SCHEMA_CHECKSUM,
   KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM,
+  KEEPER_JOURNAL_SCHEMA_V4_CHECKSUM,
+  KEEPER_JOURNAL_SCHEMA_V5_CHECKSUM,
 } from '../keeper-journal/repository.mjs';
 import {
   AUDITED_PAYOUT_FACTORY_4221,
@@ -13,7 +15,7 @@ import {
 import { EXPECTED_V8_SCHEMA_SHA256 } from '../server/v8-contract-config.mjs';
 
 const HISTORY_SCHEMA_CHECKSUM = 'dd95ed3a5c55bf55d02090605a46557377778afb220126451bb4e750dbc280b2';
-const BRADBURY_V8_SCHEMA_CHECKSUM = '1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910';
+const BRADBURY_V8_SCHEMA_CHECKSUM = KEEPER_JOURNAL_SCHEMA_V4_CHECKSUM;
 const HISTORY_INTEGRITY_COUNT_LIMIT = 10_000;
 const QUERY_TIMEOUT_MS = 8_000;
 const PAYOUT_STAGE_BY_KEEPER_METHOD = Object.freeze({
@@ -334,30 +336,37 @@ export function createNeonHistoryRepository({
                 AND name = 'bradbury_v8_cutover'
                 AND schema_checksum = $4
            ) AS bradbury_v8_migration_valid,
+           EXISTS (
+             SELECT 1 FROM arena_schema_migrations
+              WHERE version = 5
+                AND name = 'keeper_receipt_identity_revalidation'
+                AND schema_checksum = $5
+           ) AS keeper_revalidation_migration_valid,
            NOT EXISTS (
-             SELECT 1 FROM arena_schema_migrations WHERE version > 4
+             SELECT 1 FROM arena_schema_migrations WHERE version > 5
            ) AS no_future_migrations,
            (SELECT count(*)::integer FROM arena_deployments WHERE active) AS active_deployment_count,
            (SELECT count(*)::integer FROM arena_deployments
              WHERE active AND deployment_alias = 'v8'
                AND network = 'testnet-bradbury' AND chain_id = 4221
-               AND deployment_id = $7
-               AND contract_address = $8
-               AND owner_address = $9
-               AND keeper_address = $10
-               AND treasury_address = $11
+               AND deployment_id = $8
+               AND contract_address = $9
+               AND owner_address = $10
+               AND keeper_address = $11
+               AND treasury_address = $12
                AND protocol_version = '${LIQUIDITY_ARENA_V8_PROTOCOL}'
                AND policy_version = '${LIQUIDITY_ARENA_POLICY}'
                AND payout_protocol_version = '${LIQUIDITY_ARENA_PAYOUT_PROTOCOL}'
-               AND payout_factory_address = $5
-               AND contract_schema_sha256 = $6) AS active_v8_count,
+               AND payout_factory_address = $6
+               AND contract_schema_sha256 = $7) AS active_v8_count,
            (SELECT count(*)::integer FROM arena_deployments
              WHERE active AND deployment_alias IN ('v6', 'v7')) AS active_legacy_count`,
         [
           HISTORY_SCHEMA_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_CHECKSUM,
-          BRADBURY_V8_SCHEMA_CHECKSUM,
+          KEEPER_JOURNAL_SCHEMA_V4_CHECKSUM,
+          KEEPER_JOURNAL_SCHEMA_V5_CHECKSUM,
           AUDITED_PAYOUT_FACTORY_4221,
           EXPECTED_V8_SCHEMA_SHA256,
           expectedDeployment.deploymentId,
@@ -379,11 +388,13 @@ export function createNeonHistoryRepository({
         && state.runs_exists === true
         && state.migration_valid === true
         && state.bradbury_v8_migration_valid === true
+        && state.keeper_revalidation_migration_valid === true
         && state.no_future_migrations === true;
       const journalCompatible = state.journal_operations_exists === true
         && state.journal_base_migration_valid === true
         && state.journal_attempt_migration_valid === true
         && state.bradbury_v8_migration_valid === true
+        && state.keeper_revalidation_migration_valid === true
         && state.no_future_migrations === true;
       const deploymentCutoverReady = Number(state.active_deployment_count || 0) === 1
         && Number(state.active_v8_count || 0) === 1
@@ -391,7 +402,7 @@ export function createNeonHistoryRepository({
       let integrity = Object.freeze({
         checked: false,
         ready: false,
-        journalSchemaVersion: state.bradbury_v8_migration_valid === true ? 4 : null,
+        journalSchemaVersion: state.keeper_revalidation_migration_valid === true ? 5 : null,
         activeDeploymentCount: Number(state.active_deployment_count || 0),
         activeV8Count: Number(state.active_v8_count || 0),
         activeLegacyCount: Number(state.active_legacy_count || 0),
@@ -540,7 +551,7 @@ export function createNeonHistoryRepository({
             && missingDurablePayoutCount === 0
             && staleDurablePayoutCount === 0
             && missingDurablePayoutStageProofCount === 0,
-          journalSchemaVersion: 4,
+          journalSchemaVersion: 5,
           activeDeploymentCount: 1,
           activeV8Count: 1,
           activeLegacyCount: 0,
@@ -559,7 +570,7 @@ export function createNeonHistoryRepository({
       return Object.freeze({
         configured: true,
         ready: schemaReady && journalCompatible && deploymentCutoverReady && integrity.ready,
-        schemaVersion: schemaReady ? 4 : null,
+        schemaVersion: schemaReady ? 5 : null,
         integrity,
       });
     },

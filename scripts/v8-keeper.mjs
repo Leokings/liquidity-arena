@@ -756,7 +756,7 @@ export function createCliV8KeeperOperator({ config, environment = process.env } 
 }
 
 function usage() {
-  return 'Reconcile Liquidity Arena V8 epochs and EVM-backed payouts on Bradbury.\n\nUsage:\n  node scripts/v8-keeper.mjs --config <file> [--execute]\n\nThe default is a read-only plan. --execute requires the fenced V8 keeper, schema-v4 journal, and exact testnet-bradbury network. The keeper never calls an EVM vault withdrawal; only recipients can withdraw.';
+  return 'Reconcile Liquidity Arena V8 epochs and EVM-backed payouts on Bradbury.\n\nUsage:\n  node scripts/v8-keeper.mjs --config <file> [--execute]\n\nThe default is a read-only plan. --execute requires the fenced V8 keeper, schema-v5 journal, and exact testnet-bradbury network. The keeper never calls an EVM vault withdrawal; only recipients can withdraw.';
 }
 
 function parseArguments(argv) {
