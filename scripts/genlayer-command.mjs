@@ -20,6 +20,7 @@ const GENLAYER_TRANSACTION_STATUSES = new Set([
 export const GENLAYER_FINALIZED_STATUS = 'FINALIZED';
 export const GENLAYER_SUCCESS_RESULT = 'FINISHED_WITH_RETURN';
 export const GENLAYER_STUDIONET_RPC_URL = 'https://studio.genlayer.com/api';
+export const GENLAYER_BRADBURY_RPC_URL = 'https://rpc-bradbury.genlayer.com';
 
 function asText(value) {
   if (value === undefined || value === null) return '';

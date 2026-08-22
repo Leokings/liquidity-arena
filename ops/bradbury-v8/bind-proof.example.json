@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "network": "testnet-bradbury",
+  "chainId": 4221,
+  "factoryAddress": "0x4444444444444444444444444444444444444444",
+  "arenaAddress": "0x7777777777777777777777777777777777777777",
+  "binderAddress": "0x1111111111111111111111111111111111111111",
+  "reserveSinkAddress": "0x6666666666666666666666666666666666666666",
+  "protocolVersion": "IDEMPOTENT_EVM_VAULT_V1",
+  "factoryRuntimeBytecodeSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "bindTransactionHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "bindReceiptStatus": "FINALIZED",
+  "bindExecutionSuccess": true,
+  "boundArenaReadback": "0x7777777777777777777777777777777777777777",
+  "verifiedAt": "2026-08-21T00:00:00.000Z"
+}

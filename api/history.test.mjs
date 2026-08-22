@@ -10,6 +10,8 @@ import {
   createHistorySyncHandler,
   createPublicHistoryHandler,
 } from '../history/http.mjs';
+import { TEST_EPOCH, TEST_PAYOUT_ID, testDeployment } from '../history/test-fixtures.mjs';
+import { v8Environment } from '../server/v8-test-fixtures.test-helper.mjs';
 
 function request({ method = 'GET', url = '/', headers = {}, body } = {}) {
   const req = Readable.from(body === undefined ? [] : [Buffer.from(body)]);
@@ -32,165 +34,170 @@ function response() {
   };
 }
 
-test('Vercel retains the deployment manifests required by history sync', async () => {
+test('Vercel retains the fail-closed Bradbury V8 deployment manifest', async () => {
   const ignore = await readFile(new URL('../.vercelignore', import.meta.url), 'utf8');
+  const manifest = JSON.parse(await readFile(new URL('../deployments/bradbury-v8.json', import.meta.url), 'utf8'));
   const rules = ignore
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith('#'));
   assert.equal(rules.includes('deployments/'), false);
   assert.equal(rules.includes('deployments/*.json'), false);
+  assert.equal(manifest.deploymentAlias, 'v8');
+  assert.equal(manifest.network, 'testnet-bradbury');
+  assert.equal(manifest.chainId, 4_221);
+  assert.equal(manifest.contractAddress, '0xe6aa95e551f8407b139474ec60c2012e4cc8a6cd');
+  assert.equal(manifest.deploymentStatus, 'FINALIZED_BOUND_INACTIVE');
+  assert.equal(
+    manifest.deploymentTransactionHash,
+    '0x955ec665a7f9a1ee7c7d9dabcac603d5eaba12fefd5eb0e5b738708daaa58e27',
+  );
+  assert.equal(
+    manifest.factoryBindingTransactionHash,
+    '0xc51b7ebb2755f6303a5a1d2959055461eb8a78f2889177f6d83abbb7ef29f7e4',
+  );
+  assert.equal(manifest.active, false);
+  assert.equal(
+    manifest.sourceSha256,
+    '160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa',
+  );
 });
 
-test('scheduled history projection stays within the StudioNet read quota', async () => {
-  const workflow = await readFile(new URL('../.github/workflows/studionet-v7-keeper.yml', import.meta.url), 'utf8');
-  assert.match(
-    workflow,
-    /history-sync\.mjs --deployment v7 --max-epochs 3 --no-known-proofs --idempotency-key "history-sync:\$\{\{ github\.run_id \}\}"/,
-  );
-  assert.doesNotMatch(workflow, /history-sync\.mjs[^\r\n]*--deployment v6/);
-  assert.doesNotMatch(workflow, /history-sync\.mjs[^\r\n]*--max-epochs 10/);
-  assert.match(workflow, /cron: '27 \* \* \* \*'/);
-  assert.equal((workflow.match(/group: studionet-liquidity-arena-writer/g) || []).length, 2);
-  assert.equal((workflow.match(/queue: max/g) || []).length, 2);
-  assert.match(workflow, /::error::HISTORY_SYNC_URL or HISTORY_INGEST_SECRET is missing/);
-  assert.doesNotMatch(workflow, /History synchronization is disabled/);
-
-  const proofBackfill = await readFile(
-    new URL('../.github/workflows/studionet-v7-proof-backfill.yml', import.meta.url),
-    'utf8',
-  );
-  assert.match(proofBackfill, /group: studionet-liquidity-arena-writer/);
-  assert.match(proofBackfill, /queue: max/);
-  assert.doesNotMatch(proofBackfill, /group: studionet-liquidity-arena-history/);
-
-  const legacyDrain = await readFile(
-    new URL('../.github/workflows/studionet-v6-keeper.yml', import.meta.url),
-    'utf8',
-  );
-  assert.match(legacyDrain, /group: studionet-liquidity-arena-writer/);
-  assert.match(legacyDrain, /queue: max/);
-});
-
-test('manual history repair is bounded, serialized with the writer, and quota-isolated', async () => {
-  const workflow = await readFile(new URL('../.github/workflows/studionet-history-repair.yml', import.meta.url), 'utf8');
-  assert.match(workflow, /workflow_dispatch:/);
-  assert.match(workflow, /group: studionet-liquidity-arena-writer/);
-  assert.match(workflow, /queue: max/);
-  assert.match(workflow, /START_OFFSET.*inputs\.start_offset/);
-  assert.match(workflow, /MAX_EPOCHS.*inputs\.max_epochs/);
-  assert.match(workflow, /\^\[0-9\]\{1,6\}\$/);
-  assert.match(workflow, /\^\[1-3\]\$/);
-  assert.match(workflow, /--deployment v7/);
-  assert.match(workflow, /--start-offset "\$START_OFFSET"/);
-  assert.match(workflow, /--max-epochs "\$MAX_EPOCHS"/);
-  assert.match(workflow, /if: always\(\)[\s\S]*run: sleep 90/);
-  assert.doesNotMatch(workflow, /schedule:/);
-});
-
-test('public history endpoint uses keyset pagination and never exposes repository internals', async () => {
+test('public history exposes only active V8 epochs and rejects every legacy selector', async () => {
+  const deployment = testDeployment();
   const repository = {
     configured: true,
     async listEpochs(query) {
+      assert.equal(query.deployment, 'v8');
       assert.equal(query.limit, 1);
       return [
-        { deploymentId: `studionet:0x${'7'.repeat(40)}`, deploymentAlias: 'v7', epochEndTimestamp: '200' },
-        { deploymentId: `studionet:0x${'6'.repeat(40)}`, deploymentAlias: 'v6', epochEndTimestamp: '100' },
+        {
+          deploymentId: deployment.deploymentId,
+          deploymentAlias: 'v8',
+          epochEndTimestamp: String(TEST_EPOCH),
+        },
+        {
+          deploymentId: deployment.deploymentId,
+          deploymentAlias: 'v8',
+          epochEndTimestamp: String(TEST_EPOCH - 3_600),
+        },
       ];
     },
   };
   const handler = createPublicHistoryHandler({ repository });
   const res = response();
-  await handler(request({ url: '/api/history?view=epochs&limit=1' }), res);
+  await handler(request({ url: '/api/history?view=epochs&deployment=v8&limit=1' }), res);
   assert.equal(res.statusCode, 200);
   const payload = JSON.parse(res.body);
+  assert.equal(payload.deployment, 'v8');
   assert.equal(payload.items.length, 1);
   assert.ok(payload.page.nextCursor);
   assert.equal(Object.hasOwn(payload, 'database'), false);
 
-  const invalid = response();
-  await handler(request({ url: '/api/history?sql=select' }), invalid);
-  assert.equal(invalid.statusCode, 400);
+  for (const selector of ['v6', 'v7']) {
+    const invalid = response();
+    await handler(request({ url: `/api/history?deployment=${selector}` }), invalid);
+    assert.equal(invalid.statusCode, 400);
+  }
+  const rawSql = response();
+  await handler(request({ url: '/api/history?sql=select' }), rawSql);
+  assert.equal(rawSql.statusCode, 400);
 });
 
-test('public proof view paginates the live V7 fee parent without claiming treasury child credit', async () => {
-  const feeParent = '0x3df8d942bd9c5d699ee0d7816761ec5fd6264108d3a3e8bf3486c2c4f4fbb01f';
-  const treasuryChild = '0x566082ceef10482356f7aeac310098b7ece8f9c0a7e054eb1db718623602470e';
-  const deploymentId = `studionet:0x${'7'.repeat(40)}`;
-  const feeProof = {
-    transactionHash: feeParent,
-    deploymentId,
-    deploymentAlias: 'v7',
-    epochEndTimestamp: null,
-    kind: 'FEE_WITHDRAWAL',
-    method: 'withdraw_accrued_fees',
+test('public payout history paginates by Bradbury deployment plus payout ID and exposes stage proofs', async () => {
+  const deployment = testDeployment();
+  const newer = {
+    deploymentId: deployment.deploymentId,
+    deploymentAlias: 'v8',
+    payoutId: TEST_PAYOUT_ID,
+    createdAtTimestamp: String(TEST_EPOCH + 200),
+    state: 'FUNDED_IN_ESCROW',
+    stageProofs: [
+      { stage: 'PREPARING', domain: 'GENLAYER', transactionHash: `0x${'1'.repeat(64)}` },
+      { stage: 'FUNDED_IN_ESCROW', domain: 'EVM', transactionHash: `0x${'2'.repeat(64)}` },
+    ],
+  };
+  const older = {
+    ...newer,
+    payoutId: '9'.repeat(64),
+    createdAtTimestamp: String(TEST_EPOCH + 100),
+  };
+  let calls = 0;
+  const repository = {
+    configured: true,
+    async listPayouts(query) {
+      calls += 1;
+      assert.equal(query.deployment, 'v8');
+      assert.equal(query.limit, 1);
+      if (calls === 1) {
+        assert.equal(query.cursor, null);
+        return [newer, older];
+      }
+      assert.equal(query.cursor.deploymentId, deployment.deploymentId);
+      assert.equal(query.cursor.payoutId, TEST_PAYOUT_ID);
+      return [older];
+    },
+  };
+  const handler = createPublicHistoryHandler({ repository });
+  const first = response();
+  await handler(request({ url: '/api/history?view=payouts&limit=1' }), first);
+  assert.equal(first.statusCode, 200);
+  const firstPayload = JSON.parse(first.body);
+  assert.equal(firstPayload.dataScope, 'V8_PAYOUT_STAGES');
+  assert.equal(firstPayload.items[0].state, 'FUNDED_IN_ESCROW');
+  assert.deepEqual(firstPayload.items[0].stageProofs.map((proof) => proof.domain), ['GENLAYER', 'EVM']);
+  assert.ok(firstPayload.page.nextCursor);
+
+  const second = response();
+  await handler(request({
+    url: `/api/history?view=payouts&limit=1&cursor=${firstPayload.page.nextCursor}`,
+  }), second);
+  assert.equal(second.statusCode, 200);
+  assert.equal(JSON.parse(second.body).items[0].payoutId, older.payoutId);
+  assert.equal(calls, 2);
+});
+
+test('public V8 proof view records claim as a request without legacy transfer-child liability', async () => {
+  const deployment = testDeployment();
+  const claimRequest = {
+    transactionHash: `0x${'3'.repeat(64)}`,
+    deploymentId: deployment.deploymentId,
+    deploymentAlias: 'v8',
+    epochEndTimestamp: String(TEST_EPOCH),
+    kind: 'CLAIM_REQUEST',
+    method: 'claim',
     status: 'FINALIZED',
     valueAtto: '0',
     valueCredited: null,
     parentTransactionHash: null,
     childTransactionHashes: [],
-    verifiedAt: '2026-08-19T22:42:37.000Z',
+    verifiedAt: '2026-08-22T00:00:00.000Z',
   };
-  const olderProof = {
-    ...feeProof,
-    transactionHash: `0x${'2'.repeat(64)}`,
-    epochEndTimestamp: '1787166000',
-    kind: 'RESOLVE_EPOCH',
-    method: 'resolve_epoch',
-  };
-  let calls = 0;
   const repository = {
     configured: true,
     async listProofs(query) {
-      calls += 1;
-      assert.equal(query.view, 'proofs');
-      assert.equal(query.deployment, 'v7');
-      assert.equal(query.limit, 1);
-      if (calls === 1) {
-        assert.equal(query.cursor, null);
-        return [feeProof, olderProof];
-      }
-      assert.equal(query.cursor.transactionHash, feeParent);
-      return [olderProof];
+      assert.equal(query.deployment, 'v8');
+      return [claimRequest];
     },
   };
   const handler = createPublicHistoryHandler({ repository });
-  const first = response();
-  await handler(request({ url: '/api/history?view=proofs&deployment=v7&limit=1' }), first);
-  assert.equal(first.statusCode, 200);
-  const firstPayload = JSON.parse(first.body);
-  assert.equal(firstPayload.dataScope, 'VERIFIED_TRANSACTION_PROOFS');
-  assert.equal(firstPayload.view, 'proofs');
-  assert.equal(firstPayload.deployment, 'v7');
-  assert.equal(firstPayload.items[0].transactionHash, feeParent);
-  assert.equal(firstPayload.items[0].epochEndTimestamp, null);
-  assert.equal(firstPayload.items[0].valueCredited, null);
-  assert.deepEqual(firstPayload.items[0].childTransactionHashes, []);
-  assert.equal(firstPayload.items[0].childTransactionHashes.includes(treasuryChild), false);
-  assert.ok(firstPayload.page.nextCursor);
-
-  const second = response();
-  await handler(request({
-    url: `/api/history?view=proofs&deployment=v7&limit=1&cursor=${firstPayload.page.nextCursor}`,
-  }), second);
-  assert.equal(second.statusCode, 200);
-  const secondPayload = JSON.parse(second.body);
-  assert.equal(secondPayload.items[0].transactionHash, olderProof.transactionHash);
-  assert.equal(secondPayload.page.nextCursor, null);
-
-  const missingDeployment = response();
-  await handler(request({ url: '/api/history?view=proofs' }), missingDeployment);
-  assert.equal(missingDeployment.statusCode, 400);
-  assert.equal(calls, 2);
+  const res = response();
+  await handler(request({ url: '/api/history?view=proofs&limit=1' }), res);
+  assert.equal(res.statusCode, 200);
+  const payload = JSON.parse(res.body);
+  assert.equal(payload.items[0].kind, 'CLAIM_REQUEST');
+  assert.equal(payload.items[0].valueCredited, null);
+  assert.deepEqual(payload.items[0].childTransactionHashes, []);
 });
 
-test('history sync authenticates before service work and rejects duplicate JSON keys', async () => {
+test('history sync authenticates before service work and accepts only the V8 alias', async () => {
   const secret = 's'.repeat(32);
   let calls = 0;
   const service = {
-    async sync() {
+    async sync({ request: parsed }) {
       calls += 1;
-      return { status: 'ok', epochsSynced: 0 };
+      assert.deepEqual(parsed.deployments, ['v8']);
+      return { status: 'ok', deployments: ['v8'], epochsSynced: 0, payoutsSynced: 0 };
     },
   };
   const handler = createHistorySyncHandler({
@@ -228,13 +235,78 @@ test('history sync authenticates before service work and rejects duplicate JSON 
       'content-type': 'application/json',
       'idempotency-key': 'history-0003',
     },
-    body: '{"deployments":["v7"],"maxEpochs":1,"includeKnownProofs":false}',
+    body: '{"deployments":["v8"],"maxEpochs":1,"includeKnownProofs":false}',
   }), accepted);
   assert.equal(accepted.statusCode, 200);
   assert.equal(calls, 1);
+
+  const legacy = response();
+  await handler(request({
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${secret}`,
+      'content-type': 'application/json',
+      'idempotency-key': 'history-0004',
+    },
+    body: '{"deployments":["v7"]}',
+  }), legacy);
+  assert.equal(legacy.statusCode, 400);
+  assert.equal(calls, 1);
 });
 
-test('history rate limiter is bounded and health explicitly reports unconfigured state', async () => {
+test('history health requires exact Bradbury V8 configuration and schema-v4 integrity', async () => {
+  const integrity = {
+    checked: true,
+    ready: false,
+    journalSchemaVersion: 4,
+    activeDeploymentCount: 1,
+    activeV8Count: 1,
+    activeLegacyCount: 0,
+    verifiedV8TerminalOperationCount: 2,
+    verifiedV8PayoutOperationCount: 3,
+    missingDurableEpochCount: 0,
+    staleDurableEpochCount: 0,
+    missingDeterminedSnapshotCount: 0,
+    missingDurablePayoutCount: 1,
+    staleDurablePayoutCount: 0,
+    countLimit: 10_000,
+    countsCapped: false,
+  };
+  const repository = {
+    configured: true,
+    async health() {
+      return { configured: true, ready: false, schemaVersion: 4, integrity };
+    },
+  };
+  const environment = v8Environment({
+    DATABASE_URL: 'postgresql://ignored.invalid/database',
+    HISTORY_INGEST_SECRET: 's'.repeat(32),
+  });
+  const handler = createHistoryHealthHandler({ repository, environment });
+  const res = response();
+  await handler(request({ method: 'GET', url: '/api/history-health' }), res);
+  assert.equal(res.statusCode, 503);
+  const payload = JSON.parse(res.body);
+  assert.equal(payload.status, 'degraded');
+  assert.equal(payload.configuration.chainConfigured, true);
+  assert.equal(payload.database.schemaVersion, 4);
+  assert.deepEqual(payload.database.integrity, integrity);
+
+  const legacyEnvironment = {
+    ...environment,
+    VITE_GENLAYER_NETWORK: 'studionet',
+    VITE_GENLAYER_PROTOCOL: 'LIQUIDITY_ARENA_V7',
+  };
+  const unconfigured = response();
+  await createHistoryHealthHandler({ repository, environment: legacyEnvironment })(
+    request({ method: 'GET', url: '/api/history-health' }),
+    unconfigured,
+  );
+  assert.equal(unconfigured.statusCode, 200);
+  assert.equal(JSON.parse(unconfigured.body).status, 'unconfigured');
+});
+
+test('history rate limiter is bounded and strict JSON rejects duplicate or unsafe members', () => {
   let timestamp = 0;
   const limiter = createHistoryRateLimiter({ limit: 2, windowMs: 1000, now: () => timestamp });
   assert.equal(limiter.allow('a'), true);
@@ -242,63 +314,6 @@ test('history rate limiter is bounded and health explicitly reports unconfigured
   assert.equal(limiter.allow('a'), false);
   timestamp = 1000;
   assert.equal(limiter.allow('a'), true);
-
-  const handler = createHistoryHealthHandler({
-    repository: { configured: false, health: async () => { throw new Error('must not run'); } },
-    environment: {},
-  });
-  const res = response();
-  await handler(request({ method: 'GET', url: '/api/history-health' }), res);
-  assert.equal(res.statusCode, 200);
-  const payload = JSON.parse(res.body);
-  assert.equal(payload.status, 'unconfigured');
-  assert.equal(payload.configuration.databaseConfigured, false);
-});
-
-test('history health returns 503 and bounded diagnostics for an inconsistent journal projection', async () => {
-  const integrity = {
-    checked: true,
-    ready: false,
-    journalSchemaVersion: 3,
-    verifiedV7TerminalOperationCount: 10_000,
-    verifiedV7ResolveOperationCount: 10_000,
-    verifiedV7TimeoutOperationCount: 3,
-    missingDurableEpochCount: 1,
-    staleDurableEpochCount: 2,
-    missingDeterminedSnapshotCount: 4,
-    countLimit: 10_000,
-    countsCapped: true,
-  };
-  const repository = {
-    configured: true,
-    async health() {
-      return {
-        configured: true,
-        ready: true,
-        schemaVersion: 1,
-        integrity,
-      };
-    },
-  };
-  const environment = {
-    DATABASE_URL: 'postgresql://ignored.invalid/database',
-    HISTORY_INGEST_SECRET: 's'.repeat(32),
-    VITE_GENLAYER_NETWORK: 'studionet',
-    VITE_GENLAYER_PROTOCOL: 'LIQUIDITY_ARENA_V6',
-    VITE_GENLAYER_CONTRACT: `0x${'7'.repeat(40)}`,
-    GENLAYER_RPC_URL: 'https://studio.genlayer.com/api',
-  };
-  const handler = createHistoryHealthHandler({ repository, environment });
-  const res = response();
-  await handler(request({ method: 'GET', url: '/api/history-health' }), res);
-
-  assert.equal(res.statusCode, 503);
-  const payload = JSON.parse(res.body);
-  assert.equal(payload.status, 'degraded');
-  assert.deepEqual(payload.database.integrity, integrity);
-});
-
-test('strict JSON parser rejects duplicate members and unsafe integer literals', () => {
   assert.throws(() => new StrictJsonParser('{"a":1,"a":2}').document(), /strict JSON/);
   assert.throws(() => new StrictJsonParser('{"a":9007199254740993}').document(), /strict JSON/);
   assert.deepEqual(new StrictJsonParser('{"a":[true,false,null]}').document(), { a: [true, false, null] });

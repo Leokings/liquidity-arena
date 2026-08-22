@@ -1,8 +1,8 @@
 import { MARKET_ASSETS, createMarketFrame } from './index.js';
 import { arenaEpochState } from './epoch-schedule.js';
-import { PROTOCOL_V6, PROTOCOL_V7 } from './deployment-registry.js';
+import { PROTOCOL_V8 } from './deployment-registry.js';
 
-const TERMINAL_ROUND_STATUSES = new Set(['RESOLVED', 'UNDETERMINED', 'TIMED_OUT']);
+const TERMINAL_ROUND_STATUSES = new Set(['RESOLVED', 'TIMED_OUT']);
 const PPB_PER_PERCENT = 10_000_000;
 
 function exactEpochEndSeconds(value, label) {
@@ -158,11 +158,11 @@ export function reconcileFinalizedRoundFrame(frame, round, assetRecords) {
   const vector = normalizedFinalVector(round, assetRecords);
   if (!vector) return frame;
   const protocolVersion = String(round.protocolVersion || '').trim().toUpperCase();
-  if (protocolVersion !== PROTOCOL_V6 && protocolVersion !== PROTOCOL_V7) {
+  if (protocolVersion !== PROTOCOL_V8) {
     throw new Error('Finalized ROUND protocol is not allowlisted.');
   }
   const deploymentAlias = String(round.deploymentAlias || '').trim().toLowerCase();
-  if (!['v6', 'v7'].includes(deploymentAlias)) {
+  if (deploymentAlias !== 'v8') {
     throw new Error('Finalized ROUND deployment alias is not allowlisted.');
   }
   const contractAddress = String(round.contractAddress || '').trim();

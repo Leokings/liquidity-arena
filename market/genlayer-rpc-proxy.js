@@ -1,5 +1,5 @@
 const DEFAULT_ROUTE = '/genlayer-rpc';
-const DEFAULT_UPSTREAM = 'https://studio.genlayer.com/api';
+const DEFAULT_UPSTREAM = 'https://rpc-bradbury.genlayer.com';
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BATCH_SIZE = 25;
@@ -461,7 +461,7 @@ export function createGenLayerRpcProxyMiddleware({
           jsonRpcError(res, 502, -32000, 'GenLayer returned a malformed transaction proof response.');
           return;
         }
-        // Do not stringify this response. Studio transaction values are JSON
+        // Do not stringify this response. GenLayer transaction values are JSON
         // integer literals that can exceed Number.MAX_SAFE_INTEGER. Returning
         // the already size-bounded, structurally validated upstream bytes lets
         // the browser's strict proof parser preserve every integer digit.

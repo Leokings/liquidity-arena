@@ -8,13 +8,13 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const TARGETS = Object.freeze({
   '37 * * * *': Object.freeze({
     name: 'keeper',
-    workflow: 'studionet-v7-keeper.yml',
+    workflow: 'bradbury-v8-keeper.yml',
     events: Object.freeze(['schedule', 'workflow_dispatch']),
     inputs: null,
   }),
   '57 * * * *': Object.freeze({
     name: 'watchdog',
-    workflow: 'studionet-ops-watchdog.yml',
+    workflow: 'bradbury-v8-ops-watchdog.yml',
     events: Object.freeze(['schedule', 'workflow_dispatch', 'workflow_run']),
     inputs: Object.freeze({ synthetic_failure: 'false' }),
   }),

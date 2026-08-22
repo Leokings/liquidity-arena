@@ -166,7 +166,9 @@ export async function runOpsWatchdog({
     const ready = result.ok
       && result.body?.status === 'ready'
       && result.body?.ready === true
-      && result.body?.database?.schemaVersion === 3;
+      && result.body?.network === 'bradbury'
+      && result.body?.chainId === '4221'
+      && result.body?.database?.schemaVersion === 4;
     results.push(check('authoritative keeper journal', ready, `HTTP ${result.status}; schema=${result.body?.database?.schemaVersion ?? 'unknown'}`));
   } catch (error) {
     results.push(check('authoritative keeper journal', false, error?.message || 'request failed'));
@@ -174,7 +176,7 @@ export async function runOpsWatchdog({
 
   try {
     const runsUrl = new URL(
-      `/repos/${repository}/actions/workflows/studionet-v7-keeper.yml/runs`,
+      `/repos/${repository}/actions/workflows/bradbury-v8-keeper.yml/runs`,
       'https://api.github.com',
     );
     runsUrl.searchParams.set('branch', 'main');
@@ -221,7 +223,7 @@ export async function runOpsWatchdog({
 
 export function watchdogMarkdown(result) {
   const lines = [
-    '# StudioNet liquidity arena watchdog',
+    '# Bradbury V8 liquidity arena watchdog',
     '',
     `Overall: **${result.healthy ? 'PASS' : 'FAIL'}**`,
     '',

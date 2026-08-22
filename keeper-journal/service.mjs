@@ -45,8 +45,8 @@ export function createKeeperJournalService({
       status: ready ? 'ready' : 'degraded',
       service: 'liquidity-arena-keeper-journal',
       ready,
-      network: 'studionet',
-      chainId: '61999',
+      network: 'bradbury',
+      chainId: '4221',
       configuration,
       database,
     });

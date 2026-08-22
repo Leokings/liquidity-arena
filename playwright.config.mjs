@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const isCi = Boolean(process.env.CI);
+const e2eV8Contract = '0x8888888888888888888888888888888888888888';
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -32,17 +33,18 @@ export default defineConfig({
   webServer: {
     command: 'npm run dev',
     url: 'http://127.0.0.1:4400/market.html',
-    reuseExistingServer: !isCi,
+    // Never inherit a developer server with stale deployment environment.
+    reuseExistingServer: false,
     timeout: 120_000,
     env: {
       ...process.env,
-      VITE_GENLAYER_NETWORK: 'studionet',
-      VITE_GENLAYER_ACTIVE_DEPLOYMENT: 'v7',
-      VITE_GENLAYER_PROTOCOL: 'LIQUIDITY_ARENA_V7',
-      VITE_GENLAYER_CONTRACT: '0xb2ae59aE641f571726Ae81E30080f8c2192b15EF',
-      VITE_GENLAYER_V7_CONTRACT: '0xb2ae59aE641f571726Ae81E30080f8c2192b15EF',
-      VITE_GENLAYER_V6_CONTRACT: '0x587950DCDc2A8c4DFcde98a72715A06F5844e0b1',
+      VITE_GENLAYER_NETWORK: 'testnet-bradbury',
+      VITE_GENLAYER_ACTIVE_DEPLOYMENT: 'v8',
+      VITE_GENLAYER_PROTOCOL: 'LIQUIDITY_ARENA_V8',
+      VITE_GENLAYER_CONTRACT: e2eV8Contract,
+      VITE_GENLAYER_V8_CONTRACT: e2eV8Contract,
       VITE_GENLAYER_WALLET_RPC: '',
+      GENLAYER_RPC_URL: 'https://rpc-bradbury.genlayer.com',
     },
   },
 });

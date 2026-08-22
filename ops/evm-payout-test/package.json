@@ -1,0 +1,24 @@
+{
+  "name": "liquidity-arena-evm-payout-test",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "compile": "node scripts/compile.mjs",
+    "test": "node --test ../../tests/evm/LiquidityArenaPayoutVault.test.mjs ../../tests/evm/BradburyFactoryDeploy.test.mjs ../../tests/evm/BradburyFactoryBind.test.mjs",
+    "test:deploy": "node --test ../../tests/evm/BradburyFactoryDeploy.test.mjs ../../tests/evm/BradburyFactoryBind.test.mjs",
+    "deploy:bradbury": "node scripts/bradbury-factory.mjs",
+    "bind:bradbury": "node scripts/bradbury-bind.mjs",
+    "audit:contracts": "node scripts/audit.mjs",
+    "audit": "npm run audit:contracts && npm audit"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "4.0.15",
+    "ethers": "6.17.0",
+    "hardhat": "3.14.0",
+    "solc": "0.8.28"
+  },
+  "overrides": {
+    "tmp": "0.2.7"
+  }
+}

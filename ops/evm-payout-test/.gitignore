@@ -1,0 +1,8 @@
+node_modules/
+cache/
+artifacts/
+evidence/
+*.keystore.json
+*.keystore.json.b64
+*.tmp-*
+*.bind.lock

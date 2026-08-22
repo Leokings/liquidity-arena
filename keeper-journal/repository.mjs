@@ -4,8 +4,9 @@ import { publicKeeperOperation } from './schema.mjs';
 
 export const KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM = 'd2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266';
 export const KEEPER_JOURNAL_SCHEMA_CHECKSUM = '9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70';
+export const KEEPER_JOURNAL_SCHEMA_V4_CHECKSUM = '1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910';
 const QUERY_TIMEOUT_MS = 8_000;
-const LEASE_SCOPE = 'studionet:61999:keeper';
+const LEASE_SCOPE = 'bradbury:4221:keeper';
 
 function databaseUnavailable(cause) {
   return new KeeperJournalError(
@@ -76,7 +77,7 @@ export function createNeonKeeperJournalRepository({
       if (String(error?.code || '') === '23505') {
         throw new KeeperJournalError(
           'KEEPER_JOURNAL_UNRESOLVED_OPERATION',
-          'The StudioNet keeper signer already has an unresolved operation.',
+          'The Bradbury keeper signer already has an unresolved operation.',
           { statusCode: 409, cause: error },
         );
       }
@@ -119,8 +120,8 @@ export function createNeonKeeperJournalRepository({
            ) AS guard_trigger_exists,
            to_regclass('public.arena_keeper_operations_logical_attempt_key') IS NOT NULL
              AS logical_attempt_key_exists,
-           (
-             SELECT count(*) = 4
+            (
+              SELECT count(*) = 4
                FROM information_schema.columns
               WHERE table_schema = 'public'
                 AND table_name = 'arena_keeper_operations'
@@ -128,7 +129,14 @@ export function createNeonKeeperJournalRepository({
                   'logical_operation_id', 'attempt_number',
                   'retry_of_operation_id', 'retry_of_attempt_number'
                 )
-           ) AS attempt_columns_exist,
+            ) AS attempt_columns_exist,
+            (
+              SELECT count(*) = 2
+                FROM information_schema.columns
+               WHERE table_schema = 'public'
+                 AND table_name = 'arena_keeper_operations'
+                 AND column_name IN ('subject_type', 'subject_id')
+            ) AS subject_columns_exist,
            EXISTS (
              SELECT 1 FROM arena_schema_migrations
               WHERE version = 2
@@ -140,8 +148,21 @@ export function createNeonKeeperJournalRepository({
               WHERE version = 3
                 AND name = 'keeper_transaction_journal_attempts'
                 AND schema_checksum = $2
-           ) AS migration_valid`,
-        [KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM, KEEPER_JOURNAL_SCHEMA_CHECKSUM],
+           ) AS attempt_migration_valid,
+           EXISTS (
+             SELECT 1 FROM arena_schema_migrations
+              WHERE version = 4
+                AND name = 'bradbury_v8_cutover'
+                AND schema_checksum = $3
+           ) AS migration_valid,
+           NOT EXISTS (
+             SELECT 1 FROM arena_schema_migrations WHERE version > 4
+           ) AS no_unknown_migrations`,
+        [
+          KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM,
+          KEEPER_JOURNAL_SCHEMA_CHECKSUM,
+          KEEPER_JOURNAL_SCHEMA_V4_CHECKSUM,
+        ],
         3_000,
       );
       const row = rows[0] || {};
@@ -153,9 +174,12 @@ export function createNeonKeeperJournalRepository({
         && row.guard_trigger_exists === true
         && row.logical_attempt_key_exists === true
         && row.attempt_columns_exist === true
+        && row.subject_columns_exist === true
         && row.base_migration_valid === true
-        && row.migration_valid === true;
-      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 3 : null });
+        && row.attempt_migration_valid === true
+        && row.migration_valid === true
+        && row.no_unknown_migrations === true;
+      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 4 : null });
     },
 
     async claimRequest({ keyHash, requestHash, action }) {
@@ -185,7 +209,7 @@ export function createNeonKeeperJournalRepository({
              lease_scope, network, chain_id, signer_address, holder_id,
              fencing_token, acquired_at, renewed_at, lease_expires_at, released_at
            ) VALUES (
-             $1, 'studionet', 61999, $2, $3::uuid,
+             $1, 'bradbury', 4221, $2, $3::uuid,
              1, now(), now(), now() + make_interval(secs => $4::integer), NULL
            )
            ON CONFLICT (lease_scope) DO UPDATE SET
@@ -219,8 +243,11 @@ export function createNeonKeeperJournalRepository({
            UPDATE arena_keeper_operations operation
               SET last_fencing_token = selected_lease.fencing_token::bigint
              FROM selected_lease
-            WHERE operation.signer_address = selected_lease.signer_address
-              AND operation.state IN (
+             WHERE operation.signer_address = selected_lease.signer_address
+               AND operation.deployment_alias = 'v8'
+               AND operation.network = 'bradbury'
+               AND operation.chain_id = 4221
+               AND operation.state IN (
                 'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS',
                 'QUARANTINED', 'STATE_SATISFIED_UNPROVEN'
               )
@@ -234,7 +261,7 @@ export function createNeonKeeperJournalRepository({
       if (rows.length !== 1) {
         throw new KeeperJournalError(
           'KEEPER_JOURNAL_LEASE_BUSY',
-          'The global StudioNet keeper signer lease is held by another run.',
+          'The global Bradbury keeper signer lease is held by another run.',
           { statusCode: 409 },
         );
       }
@@ -311,15 +338,19 @@ export function createNeonKeeperJournalRepository({
            SELECT candidate.*
              FROM logical_latest candidate
             WHERE candidate.deployment_alias = $6
-              AND candidate.network = 'studionet'
-              AND candidate.chain_id = 61999
+              AND candidate.network = 'bradbury'
+              AND candidate.chain_id = 4221
               AND candidate.signer_address = $2
               AND candidate.contract_address = $7
               AND candidate.method = $8
               AND candidate.arguments = $9::jsonb
               AND candidate.value_atto = $10::numeric
-              AND candidate.epoch_end_timestamp = $11::bigint
-              AND candidate.canonical_operation = $12
+              AND candidate.subject_type = $11
+              AND candidate.subject_id = $12
+              AND candidate.epoch_end_timestamp IS NOT DISTINCT FROM CASE
+                    WHEN $11 = 'epoch' THEN $12::bigint ELSE NULL
+                  END
+              AND candidate.canonical_operation = $13
          ), candidate_attempt AS (
            SELECT active.fencing_token,
                   COALESCE(exact_latest.attempt_number + 1, 1) AS attempt_number,
@@ -327,14 +358,19 @@ export function createNeonKeeperJournalRepository({
                   exact_latest.attempt_number AS retry_of_attempt_number
              FROM active
              LEFT JOIN exact_latest ON true
-            WHERE exact_latest.operation_id IS NULL
-               OR exact_latest.state = 'FINALIZED_FAILURE'
+             WHERE exact_latest.operation_id IS NULL
+                OR exact_latest.state = 'FINALIZED_FAILURE'
+                OR (
+                  exact_latest.state = 'VERIFIED'
+                  AND exact_latest.method IN ('retry_prepare_payout', 'retry_payout')
+                )
          ), inserted AS (
            INSERT INTO arena_keeper_operations (
              operation_id, logical_operation_id, attempt_number,
              retry_of_operation_id, retry_of_attempt_number,
              deployment_alias, network, chain_id, signer_address,
-             contract_address, method, arguments, value_atto, epoch_end_timestamp,
+             contract_address, method, arguments, value_atto,
+             epoch_end_timestamp, subject_type, subject_id,
              canonical_operation, state, prepared_fencing_token, last_fencing_token
            )
            SELECT CASE
@@ -350,13 +386,18 @@ export function createNeonKeeperJournalRepository({
                   $5, candidate_attempt.attempt_number,
                   candidate_attempt.retry_of_operation_id,
                   candidate_attempt.retry_of_attempt_number,
-                  $6, 'studionet', 61999, $2, $7, $8, $9::jsonb,
-                  $10::numeric, $11::bigint, $12, 'PREPARED',
+                  $6, 'bradbury', 4221, $2, $7, $8, $9::jsonb,
+                  $10::numeric,
+                  CASE WHEN $11 = 'epoch' THEN $12::bigint ELSE NULL END,
+                  $11, $12, $13, 'PREPARED',
                   candidate_attempt.fencing_token, candidate_attempt.fencing_token
              FROM candidate_attempt
             WHERE NOT EXISTS (
               SELECT 1 FROM arena_keeper_operations blocker
                WHERE blocker.signer_address = $2
+                 AND blocker.deployment_alias = 'v8'
+                 AND blocker.network = 'bradbury'
+                 AND blocker.chain_id = 4221
                  AND blocker.state IN (
                    'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS',
                    'QUARANTINED', 'STATE_SATISFIED_UNPROVEN'
@@ -381,6 +422,9 @@ export function createNeonKeeperJournalRepository({
            EXISTS (
              SELECT 1 FROM arena_keeper_operations blocker
               WHERE blocker.signer_address = $2
+                AND blocker.deployment_alias = 'v8'
+                AND blocker.network = 'bradbury'
+                AND blocker.chain_id = 4221
                 AND blocker.state IN (
                   'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS',
                   'QUARANTINED', 'STATE_SATISFIED_UNPROVEN'
@@ -390,7 +434,6 @@ export function createNeonKeeperJournalRepository({
                    || jsonb_build_object(
                      'chain_id', selected.chain_id::text,
                      'value_atto', selected.value_atto::text,
-                     'epoch_end_timestamp', selected.epoch_end_timestamp::text,
                      'attempt_number', selected.attempt_number::text,
                      'prepared_fencing_token', selected.prepared_fencing_token::text,
                      'last_fencing_token', selected.last_fencing_token::text,
@@ -409,7 +452,8 @@ export function createNeonKeeperJournalRepository({
           operation.method,
           JSON.stringify(operation.args),
           operation.valueAtto,
-          operation.epochEndTimestamp,
+          operation.subjectType,
+          operation.subjectId,
           operation.canonicalOperation,
         ],
       );
@@ -420,7 +464,7 @@ export function createNeonKeeperJournalRepository({
         if (row.unresolved_blocked === true) {
           throw new KeeperJournalError(
             'KEEPER_JOURNAL_UNRESOLVED_OPERATION',
-            'The StudioNet keeper signer already has an unresolved operation.',
+            'The Bradbury keeper signer already has an unresolved operation.',
             { statusCode: 409 },
           );
         }
@@ -463,8 +507,12 @@ export function createNeonKeeperJournalRepository({
                        AND other.operation_id <> operation.operation_id
                   ) AS hash_bound_elsewhere
              FROM arena_keeper_operations operation, active
-            WHERE operation.operation_id = $5
-              AND NOT EXISTS (
+             WHERE operation.operation_id = $5
+               AND operation.signer_address = $2
+               AND operation.deployment_alias = 'v8'
+               AND operation.network = 'bradbury'
+               AND operation.chain_id = 4221
+               AND NOT EXISTS (
                 SELECT 1 FROM arena_keeper_operations later
                  WHERE later.logical_operation_id = operation.logical_operation_id
                    AND later.attempt_number > operation.attempt_number
@@ -509,21 +557,31 @@ export function createNeonKeeperJournalRepository({
          )
          SELECT
            EXISTS (SELECT 1 FROM active) AS lease_valid,
-           EXISTS (SELECT 1 FROM arena_keeper_operations WHERE operation_id = $5) AS operation_exists,
+            EXISTS (
+              SELECT 1 FROM arena_keeper_operations
+               WHERE operation_id = $5
+                 AND signer_address = $2
+                 AND deployment_alias = 'v8'
+                 AND network = 'bradbury'
+                 AND chain_id = 4221
+            ) AS operation_exists,
            EXISTS (
              SELECT 1
                FROM arena_keeper_operations operation
                JOIN arena_keeper_operations later
-                 ON later.logical_operation_id = operation.logical_operation_id
-                AND later.attempt_number > operation.attempt_number
-              WHERE operation.operation_id = $5
-           ) AS attempt_frozen,
+                  ON later.logical_operation_id = operation.logical_operation_id
+                 AND later.attempt_number > operation.attempt_number
+               WHERE operation.operation_id = $5
+                 AND operation.signer_address = $2
+                 AND operation.deployment_alias = 'v8'
+                 AND operation.network = 'bradbury'
+                 AND operation.chain_id = 4221
+            ) AS attempt_frozen,
            EXISTS (SELECT 1 FROM conflict) AS hash_conflict,
            (SELECT to_jsonb(updated)
                    || jsonb_build_object(
                      'chain_id', updated.chain_id::text,
                      'value_atto', updated.value_atto::text,
-                     'epoch_end_timestamp', updated.epoch_end_timestamp::text,
                      'attempt_number', updated.attempt_number::text,
                      'prepared_fencing_token', updated.prepared_fencing_token::text,
                      'last_fencing_token', updated.last_fencing_token::text,
@@ -570,8 +628,12 @@ export function createNeonKeeperJournalRepository({
             FOR UPDATE
          ), target AS (
            SELECT operation.* FROM arena_keeper_operations operation, active
-            WHERE operation.operation_id = $5
-              AND NOT EXISTS (
+             WHERE operation.operation_id = $5
+               AND operation.signer_address = $2
+               AND operation.deployment_alias = 'v8'
+               AND operation.network = 'bradbury'
+               AND operation.chain_id = 4221
+               AND NOT EXISTS (
                 SELECT 1 FROM arena_keeper_operations later
                  WHERE later.logical_operation_id = operation.logical_operation_id
                    AND later.attempt_number > operation.attempt_number
@@ -588,20 +650,30 @@ export function createNeonKeeperJournalRepository({
          )
          SELECT
            EXISTS (SELECT 1 FROM active) AS lease_valid,
-           EXISTS (SELECT 1 FROM arena_keeper_operations WHERE operation_id = $5) AS operation_exists,
+            EXISTS (
+              SELECT 1 FROM arena_keeper_operations
+               WHERE operation_id = $5
+                 AND signer_address = $2
+                 AND deployment_alias = 'v8'
+                 AND network = 'bradbury'
+                 AND chain_id = 4221
+            ) AS operation_exists,
            EXISTS (
              SELECT 1
                FROM arena_keeper_operations operation
                JOIN arena_keeper_operations later
-                 ON later.logical_operation_id = operation.logical_operation_id
-                AND later.attempt_number > operation.attempt_number
-              WHERE operation.operation_id = $5
-           ) AS attempt_frozen,
+                  ON later.logical_operation_id = operation.logical_operation_id
+                 AND later.attempt_number > operation.attempt_number
+               WHERE operation.operation_id = $5
+                 AND operation.signer_address = $2
+                 AND operation.deployment_alias = 'v8'
+                 AND operation.network = 'bradbury'
+                 AND operation.chain_id = 4221
+            ) AS attempt_frozen,
            (SELECT to_jsonb(updated)
                    || jsonb_build_object(
                      'chain_id', updated.chain_id::text,
                      'value_atto', updated.value_atto::text,
-                     'epoch_end_timestamp', updated.epoch_end_timestamp::text,
                      'attempt_number', updated.attempt_number::text,
                      'prepared_fencing_token', updated.prepared_fencing_token::text,
                      'last_fencing_token', updated.last_fencing_token::text,
@@ -669,8 +741,12 @@ export function createNeonKeeperJournalRepository({
                   metadata_shape.transition_metadata,
                   metadata_shape.metadata_key_count
              FROM arena_keeper_operations operation, active, metadata_shape
-            WHERE operation.operation_id = $5
-              AND NOT EXISTS (
+             WHERE operation.operation_id = $5
+               AND operation.signer_address = $2
+               AND operation.deployment_alias = 'v8'
+               AND operation.network = 'bradbury'
+               AND operation.chain_id = 4221
+               AND NOT EXISTS (
                 SELECT 1 FROM arena_keeper_operations later
                  WHERE later.logical_operation_id = operation.logical_operation_id
                    AND later.attempt_number > operation.attempt_number
@@ -753,20 +829,30 @@ export function createNeonKeeperJournalRepository({
          )
          SELECT
            EXISTS (SELECT 1 FROM active) AS lease_valid,
-           EXISTS (SELECT 1 FROM arena_keeper_operations WHERE operation_id = $5) AS operation_exists,
+            EXISTS (
+              SELECT 1 FROM arena_keeper_operations
+               WHERE operation_id = $5
+                 AND signer_address = $2
+                 AND deployment_alias = 'v8'
+                 AND network = 'bradbury'
+                 AND chain_id = 4221
+            ) AS operation_exists,
            EXISTS (
              SELECT 1
                FROM arena_keeper_operations operation
                JOIN arena_keeper_operations later
-                 ON later.logical_operation_id = operation.logical_operation_id
-                AND later.attempt_number > operation.attempt_number
-              WHERE operation.operation_id = $5
-           ) AS attempt_frozen,
+                  ON later.logical_operation_id = operation.logical_operation_id
+                 AND later.attempt_number > operation.attempt_number
+               WHERE operation.operation_id = $5
+                 AND operation.signer_address = $2
+                 AND operation.deployment_alias = 'v8'
+                 AND operation.network = 'bradbury'
+                 AND operation.chain_id = 4221
+            ) AS attempt_frozen,
            (SELECT to_jsonb(updated)
                    || jsonb_build_object(
                      'chain_id', updated.chain_id::text,
                      'value_atto', updated.value_atto::text,
-                     'epoch_end_timestamp', updated.epoch_end_timestamp::text,
                      'attempt_number', updated.attempt_number::text,
                      'prepared_fencing_token', updated.prepared_fencing_token::text,
                      'last_fencing_token', updated.last_fencing_token::text,
@@ -821,6 +907,9 @@ export function createNeonKeeperJournalRepository({
          SELECT operation.*
            FROM arena_keeper_operations operation, active
           WHERE operation.signer_address = $2
+            AND operation.deployment_alias = 'v8'
+            AND operation.network = 'bradbury'
+            AND operation.chain_id = 4221
             AND operation.state IN (
               'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS',
               'QUARANTINED', 'STATE_SATISFIED_UNPROVEN'

@@ -20,7 +20,13 @@ const REASON_CODE = /^[A-Z][A-Z0-9_]{0,79}$/;
 const FORBIDDEN_METADATA_KEY = /(?:authorization|credential|database.*url|keystore|mnemonic|password|passphrase|private.*key|secret|api.*key)/i;
 const UINT256_MAX = BigInt('115792089237316195423570985008687907853269984665640564039457584007913129639935');
 const BIGINT_MAX = BigInt('9223372036854775807');
-const METHODS = new Set(['create_epoch', 'resolve_epoch', 'activate_timeout_refund']);
+const EPOCH_METHODS = new Set(['create_epoch', 'resolve_epoch', 'activate_timeout_refund']);
+const PAYOUT_METHODS = new Set([
+  'retry_prepare_payout', 'dispatch_payout', 'retry_payout',
+  'confirm_payout', 'refresh_payout_withdrawal',
+]);
+const METHODS = new Set([...EPOCH_METHODS, ...PAYOUT_METHODS]);
+const PAYOUT_ID = /^[0-9a-f]{64}$/;
 const LIFECYCLE_STATUSES = new Set([
   'UNKNOWN', 'PENDING', 'PROPOSING', 'COMMITTING', 'REVEALING', 'ACCEPTED', 'FINALIZED',
 ]);
@@ -230,36 +236,44 @@ function stableJson(value) {
 export function canonicalKeeperOperation(value) {
   exactObject(value, [
     'deploymentAlias', 'chainId', 'contractAddress', 'method',
-    'args', 'valueAtto', 'epochEndTimestamp',
+    'args', 'valueAtto', 'subjectType', 'subjectId',
   ], 'operation');
   const deploymentAlias = String(value.deploymentAlias || '').toLowerCase();
-  if (!['v6', 'v7'].includes(deploymentAlias)) fail('deploymentAlias is invalid.');
+  if (deploymentAlias !== 'v8') fail('deploymentAlias must be v8.');
   const chainId = String(value.chainId ?? '');
-  if (chainId !== KEEPER_JOURNAL_CHAIN_ID) fail('chainId must be 61999.');
+  if (chainId !== KEEPER_JOURNAL_CHAIN_ID) fail('chainId must be 4221.');
   const contractAddress = canonicalAddress(value.contractAddress, 'contractAddress');
   const method = String(value.method || '');
   if (!METHODS.has(method)) fail('method is invalid.');
-  if (deploymentAlias === 'v6' && method === 'create_epoch') {
-    fail('V6 creation is disabled; V6 is recovery and drain only.');
-  }
-  const epochEndTimestamp = canonicalDecimal(value.epochEndTimestamp, 'epochEndTimestamp', BIGINT_MAX);
-  if (BigInt(epochEndTimestamp) === 0n || BigInt(epochEndTimestamp) % 3600n !== 0n) {
-    fail('epochEndTimestamp must be an exact positive UTC hour.');
+  const subjectType = String(value.subjectType || '').toLowerCase();
+  if (!['epoch', 'payout'].includes(subjectType)) fail('subjectType is invalid.');
+  let subjectId;
+  if (subjectType === 'epoch') {
+    if (!EPOCH_METHODS.has(method)) fail('epoch subjects require an epoch method.');
+    subjectId = canonicalDecimal(value.subjectId, 'subjectId', BIGINT_MAX);
+    if (BigInt(subjectId) === 0n || BigInt(subjectId) % 3600n !== 0n) {
+      fail('epoch subjectId must be an exact positive UTC hour.');
+    }
+  } else {
+    if (!PAYOUT_METHODS.has(method)) fail('payout subjects require a payout method.');
+    subjectId = String(value.subjectId || '');
+    if (!PAYOUT_ID.test(subjectId)) fail('payout subjectId must be lowercase 64-hex without 0x.');
   }
   if (!Array.isArray(value.args) || value.args.length !== 1 || typeof value.args[0] !== 'string') {
     fail('args must contain exactly one canonical string argument.');
   }
-  const args = Object.freeze([canonicalDecimal(value.args[0], 'args[0]', BIGINT_MAX)]);
-  if (args[0] !== epochEndTimestamp) fail('args[0] must equal epochEndTimestamp.');
+  const args = Object.freeze([String(value.args[0])]);
+  if (args[0] !== subjectId) fail('args[0] must equal subjectId.');
   const valueAtto = canonicalDecimal(value.valueAtto, 'valueAtto', UINT256_MAX);
   if (valueAtto !== '0') fail('Keeper journal operations must have valueAtto equal to 0.');
   const identity = Object.freeze({
     chainId,
     contractAddress,
+    subjectType,
+    subjectId,
     method,
     args,
     valueAtto,
-    epochEndTimestamp,
   });
   const canonicalOperation = JSON.stringify(identity);
   const operationId = createHash('sha256').update(canonicalOperation, 'utf8').digest('hex');
@@ -495,10 +509,11 @@ export function publicKeeperOperation(row) {
     chainId: String(row.chain_id),
     signerAddress: String(row.signer_address),
     contractAddress: String(row.contract_address),
+    subjectType: String(row.subject_type),
+    subjectId: String(row.subject_id),
     method: String(row.method),
     args: Object.freeze([...(row.arguments || [])].map(String)),
     valueAtto: String(row.value_atto),
-    epochEndTimestamp: String(row.epoch_end_timestamp),
     state,
     transactionHash: row.transaction_hash === null ? null : String(row.transaction_hash),
     lifecycleStatus: row.lifecycle_status === null ? null : String(row.lifecycle_status),

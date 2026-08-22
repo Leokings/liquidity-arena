@@ -1,78 +1,51 @@
-import v6Artifact from '../deployments/studionet-v6.json' with { type: 'json' };
-import v7Artifact from '../deployments/studionet-v7.json' with { type: 'json' };
+import v8Artifact from '../deployments/bradbury-v8.json' with { type: 'json' };
+import {
+  AUDITED_PAYOUT_FACTORY_4221,
+  LIQUIDITY_ARENA_PAYOUT_PROTOCOL,
+} from '../server/deployment-config.mjs';
+import { EXPECTED_V8_SCHEMA_SHA256 } from '../server/v8-contract-config.mjs';
 
 const HASH = /^0x[0-9a-fA-F]{64}$/;
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+const EXPECTED_V8_SOURCE_SHA256 = '160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa';
 
-function proof(deployment, hash, kind) {
+function proof(hash) {
   if (!HASH.test(String(hash || ''))) return null;
-  return Object.freeze({ deployment, hash: String(hash).toLowerCase(), kind });
+  return Object.freeze({ deployment: 'v8', hash: String(hash).toLowerCase(), kind: 'DEPLOYMENT' });
 }
-
-function v6KnownProofs(artifact) {
-  const items = [proof('v6', artifact?.deployment?.transactionHash, 'DEPLOYMENT')];
-  for (const epoch of artifact?.epochs || []) {
-    items.push(proof('v6', epoch?.transactionHash, 'CREATE_EPOCH'));
-  }
-  const evidence = artifact?.livePaymentEvidence;
-  items.push(proof('v6', evidence?.resolution?.transactionHash, 'RESOLVE_EPOCH'));
-  for (const position of evidence?.positions || []) {
-    items.push(proof('v6', position?.transactionHash, 'WAGER'));
-  }
-  for (const delivery of evidence?.deliveries || []) {
-    items.push(proof('v6', delivery?.parentTransactionHash, 'CLAIM'));
-    // Child hashes are never trusted as standalone proof targets. A verified
-    // claim parent must derive and verify its only transfer child itself.
-  }
-  return Object.freeze(items.filter(Boolean));
-}
-
-const MANIFESTS = Object.freeze({
-  v6: Object.freeze({
-    address: String(v6Artifact.contractAddress || '').toLowerCase(),
-    protocolVersion: v6Artifact.protocolVersion,
-    deploymentTransactionHash: String(v6Artifact?.deployment?.transactionHash || '').toLowerCase(),
-    sourceMetadata: Object.freeze({
-      artifact: 'deployments/studionet-v6.json',
-      sourcePath: v6Artifact.sourceFile,
-      sourceSha256: v6Artifact.sourceSha256,
-      artifactClaimsSourceMatchesDeployedCode: v6Artifact.sourceMatchesDeployedCode === true,
-      deployedAt: v6Artifact.deployedAt,
-    }),
-    knownProofs: v6KnownProofs(v6Artifact),
-  }),
-  v7: Object.freeze({
-    address: String(v7Artifact.contractAddress || '').toLowerCase(),
-    protocolVersion: v7Artifact.protocolVersion,
-    deploymentTransactionHash: String(v7Artifact.deploymentTransactionHash || '').toLowerCase(),
-    sourceMetadata: Object.freeze({
-      artifact: 'deployments/studionet-v7.json',
-      sourcePath: v7Artifact?.source?.path,
-      sourceSha256: v7Artifact?.source?.sha256,
-      runner: v7Artifact?.source?.runner,
-      deployedAt: v7Artifact.deployedAt,
-      finalizedAt: v7Artifact.finalizedAt,
-    }),
-    knownProofs: Object.freeze([
-      proof('v7', v7Artifact.deploymentTransactionHash, 'DEPLOYMENT'),
-    ].filter(Boolean)),
-  }),
-});
 
 export function deploymentManifest(deployment) {
-  const manifest = MANIFESTS[deployment.alias];
+  const artifactAddress = String(v8Artifact.contractAddress || '').toLowerCase();
   const artifactMatched = Boolean(
-    manifest
-    && manifest.address === deployment.addressKey
-    && manifest.protocolVersion === deployment.protocolVersion,
+    ADDRESS.test(artifactAddress)
+    && artifactAddress === deployment.addressKey
+    && v8Artifact.deploymentAlias === 'v8'
+    && v8Artifact.network === 'testnet-bradbury'
+    && v8Artifact.chainId === 4_221
+    && v8Artifact.protocolVersion === deployment.protocolVersion
+    && v8Artifact.policyVersion === deployment.policyVersion
+    && v8Artifact.payoutProtocolVersion === LIQUIDITY_ARENA_PAYOUT_PROTOCOL
+    && v8Artifact.payoutProtocolVersion === deployment.payoutProtocolVersion
+    && String(v8Artifact.payoutFactoryAddress || '').toLowerCase() === AUDITED_PAYOUT_FACTORY_4221
+    && v8Artifact.schemaSha256 === EXPECTED_V8_SCHEMA_SHA256
+    && v8Artifact.sourceSha256 === EXPECTED_V8_SOURCE_SHA256
+    && v8Artifact.deploymentStatus === 'FINALIZED'
+    && v8Artifact.active === true,
   );
+  const deploymentProof = artifactMatched ? proof(v8Artifact.deploymentTransactionHash) : null;
   return Object.freeze({
-    deploymentTransactionHash: artifactMatched && HASH.test(manifest.deploymentTransactionHash)
-      ? manifest.deploymentTransactionHash
-      : null,
+    deploymentTransactionHash: deploymentProof?.hash || null,
+    payoutFactoryAddress: artifactMatched ? v8Artifact.payoutFactoryAddress : null,
+    schemaSha256: artifactMatched ? v8Artifact.schemaSha256 : null,
     sourceMetadata: Object.freeze({
       artifactMatched,
-      ...(artifactMatched ? manifest.sourceMetadata : {}),
+      ...(artifactMatched ? {
+        artifact: 'deployments/bradbury-v8.json',
+        sourcePath: v8Artifact.sourcePath,
+        sourceSha256: v8Artifact.sourceSha256,
+        deploymentStatus: v8Artifact.deploymentStatus,
+      } : {}),
     }),
-    knownProofs: artifactMatched ? manifest.knownProofs : Object.freeze([]),
+    knownProofs: Object.freeze(deploymentProof ? [deploymentProof] : []),
   });
 }

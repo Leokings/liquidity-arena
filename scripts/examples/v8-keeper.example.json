@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "network": "testnet-bradbury",
+  "chainId": 4221,
+  "contractAddress": "${V8_CONTRACT_ADDRESS}",
+  "expected": {
+    "protocolVersion": "LIQUIDITY_ARENA_V8",
+    "policyVersion": "CRYPTO_SPOT_1M_MEDIAN_V1",
+    "payoutProtocolVersion": "IDEMPOTENT_EVM_VAULT_V1",
+    "payoutFactoryAddress": "0x944fdadd826c2a159c63cb100db174716ccd1317",
+    "ownerAddress": "${V8_OWNER_ADDRESS}",
+    "keeperAddress": "${V8_KEEPER_ADDRESS}",
+    "treasuryAddress": "${V8_TREASURY_ADDRESS}",
+    "platformFeeBps": 200
+  },
+  "epochs": {
+    "futureHours": 24,
+    "minimumCreationLeadSeconds": 7200,
+    "minStakeGen": "0.1",
+    "maxStakePerWalletGen": "10"
+  },
+  "operator": {
+    "pageSize": 50,
+    "maxEpochReadsPerRun": 50,
+    "maxPayoutReadsPerRun": 500,
+    "maxWritesPerRun": 30,
+    "readAttempts": 3,
+    "retryBaseMs": 500,
+    "finalityRetries": 180,
+    "finalityIntervalMs": 5000,
+    "postStateAttempts": 5,
+    "postStateIntervalMs": 2000
+  }
+}

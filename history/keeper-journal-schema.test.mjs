@@ -19,13 +19,14 @@ const TRANSACTION_HASH = `0x${'a'.repeat(64)}`;
 
 function operation(overrides = {}) {
   return {
-    deploymentAlias: 'v7',
-    chainId: '61999',
+    deploymentAlias: 'v8',
+    chainId: '4221',
     contractAddress: CONTRACT_MIXED,
+    subjectType: 'epoch',
+    subjectId: EPOCH,
     method: 'resolve_epoch',
     args: [EPOCH],
     valueAtto: '0',
-    epochEndTimestamp: EPOCH,
     ...overrides,
   };
 }
@@ -33,7 +34,10 @@ function operation(overrides = {}) {
 test('operation identity is deterministic SHA-256 of exact canonical chain call identity', () => {
   const canonical = canonicalKeeperOperation(operation());
   assert.equal(canonical.contractAddress, CONTRACT_MIXED.toLowerCase());
-  assert.equal(canonical.chainId, '61999');
+  assert.equal(canonical.chainId, '4221');
+  assert.equal(canonical.network, 'bradbury');
+  assert.equal(canonical.subjectType, 'epoch');
+  assert.equal(canonical.subjectId, EPOCH);
   assert.equal(canonical.valueAtto, '0');
   assert.equal(
     canonical.operationId,
@@ -61,6 +65,37 @@ test('attempt identity preserves the logical ID for attempt one and hashes every
   assert.throws(() => keeperAttemptOperationId(logicalOperationId, '0'), /positive/);
 });
 
+test('payout operations bind one lowercase payout ID on Bradbury without an epoch field', () => {
+  const payoutId = 'b'.repeat(64);
+  const canonical = canonicalKeeperOperation({
+    deploymentAlias: 'v8',
+    chainId: '4221',
+    contractAddress: CONTRACT_MIXED,
+    subjectType: 'payout',
+    subjectId: payoutId,
+    method: 'dispatch_payout',
+    args: [payoutId],
+    valueAtto: '0',
+  });
+  assert.equal(canonical.network, 'bradbury');
+  assert.equal(canonical.subjectType, 'payout');
+  assert.equal(canonical.subjectId, payoutId);
+  assert.equal(Object.hasOwn(canonical, 'epochEndTimestamp'), false);
+  assert.throws(
+    () => canonicalKeeperOperation({
+      deploymentAlias: 'v8',
+      chainId: '4221',
+      contractAddress: CONTRACT_MIXED,
+      subjectType: 'payout',
+      subjectId: payoutId.toUpperCase(),
+      method: 'dispatch_payout',
+      args: [payoutId.toUpperCase()],
+      valueAtto: '0',
+    }),
+    /lowercase 64-hex/,
+  );
+});
+
 test('journal request canonicalizes RPC address casing and binds signer plus fencing token', () => {
   const request = parseKeeperJournalRequest({
     action: 'PREPARE',
@@ -74,14 +109,14 @@ test('journal request canonicalizes RPC address casing and binds signer plus fen
   assert.match(request.operation.operationId, /^[0-9a-f]{64}$/);
 });
 
-test('journal schema fails closed for payable calls, unsafe V6 creation, and secret metadata', () => {
+test('journal schema fails closed for payable calls, legacy deployments, and secret metadata', () => {
   assert.throws(
     () => canonicalKeeperOperation(operation({ valueAtto: '1' })),
     /valueAtto equal to 0/,
   );
   assert.throws(
-    () => canonicalKeeperOperation(operation({ deploymentAlias: 'v6', method: 'create_epoch' })),
-    /V6 creation is disabled/,
+    () => canonicalKeeperOperation(operation({ deploymentAlias: 'v7' })),
+    /deploymentAlias must be v8/,
   );
   assert.throws(
     () => parseKeeperJournalRequest({

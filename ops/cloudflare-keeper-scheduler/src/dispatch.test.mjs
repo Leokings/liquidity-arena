@@ -49,12 +49,12 @@ test('missing current-hour keeper run dispatches main with exact bounded credent
   assert.equal(result.runId, 12345);
   assert.equal(requests.length, 2);
   assert.equal(requests[0].options.method, 'GET');
-  assert.equal(requests[0].url.pathname, '/repos/Leokings/liquidity-arena/actions/workflows/studionet-v7-keeper.yml/runs');
+  assert.equal(requests[0].url.pathname, '/repos/Leokings/liquidity-arena/actions/workflows/bradbury-v8-keeper.yml/runs');
   assert.equal(requests[0].url.searchParams.get('branch'), 'main');
   assert.equal(requests[0].url.searchParams.get('created'), '>=2026-08-21T08:00:00.000Z');
   assert.equal(requests[0].url.searchParams.get('per_page'), '5');
   assert.equal(requests[1].options.method, 'POST');
-  assert.equal(requests[1].url.pathname, '/repos/Leokings/liquidity-arena/actions/workflows/studionet-v7-keeper.yml/dispatches');
+  assert.equal(requests[1].url.pathname, '/repos/Leokings/liquidity-arena/actions/workflows/bradbury-v8-keeper.yml/dispatches');
   assert.deepEqual(JSON.parse(requests[1].options.body), { ref: 'main' });
   assert.equal(requests[1].options.headers.authorization, `Bearer ${TOKEN}`);
   assert.equal(requests[1].options.headers['x-github-api-version'], '2026-03-10');
@@ -78,8 +78,8 @@ test('watchdog backup uses the watchdog workflow and disables synthetic failure'
   assert.equal(result.status, 'dispatched');
   assert.equal(result.target, 'watchdog');
   assert.equal(result.runId, null);
-  assert.equal(requests[0].url.pathname, '/repos/Leokings/liquidity-arena/actions/workflows/studionet-ops-watchdog.yml/runs');
-  assert.equal(requests[1].url.pathname, '/repos/Leokings/liquidity-arena/actions/workflows/studionet-ops-watchdog.yml/dispatches');
+  assert.equal(requests[0].url.pathname, '/repos/Leokings/liquidity-arena/actions/workflows/bradbury-v8-ops-watchdog.yml/runs');
+  assert.equal(requests[1].url.pathname, '/repos/Leokings/liquidity-arena/actions/workflows/bradbury-v8-ops-watchdog.yml/dispatches');
   assert.deepEqual(JSON.parse(requests[1].options.body), {
     ref: 'main',
     inputs: { synthetic_failure: 'false' },

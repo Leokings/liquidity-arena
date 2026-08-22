@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { decodeGenLayerReceiptCall } from './genlayer-receipt-call.js';
 
-test('StudioNet readable calldata decodes its omitted object comma and trailing array comma', () => {
+test('GenLayer readable calldata decodes its omitted object comma and trailing array comma', () => {
   const call = decodeGenLayerReceiptCall({
     data: {
       calldata: {
@@ -47,7 +47,7 @@ test('receipt call decoder rejects duplicate and conflicting call identities', (
   );
 });
 
-test('receipt call decoder accepts equal native and StudioNet identities after exact canonicalization', () => {
+test('receipt call decoder accepts equal native and readable identities after exact canonicalization', () => {
   const call = decodeGenLayerReceiptCall({
     txDataDecoded: { type: 'call', callData: { method: 'enter', args: ['1787166000', 'HIGH', 'BTC'] } },
     data: { calldata: { readable: '{"args":[1787166000,"HIGH","BTC",]"method":"enter"}' } },
@@ -58,7 +58,7 @@ test('receipt call decoder accepts equal native and StudioNet identities after e
   });
 });
 
-test('receipt call decoder bounds untrusted StudioNet readable calldata', () => {
+test('receipt call decoder bounds untrusted GenLayer readable calldata', () => {
   assert.throws(
     () => decodeGenLayerReceiptCall({
       data: { calldata: { readable: `{"args":["${'x'.repeat(17 * 1024)}"]"method":"enter"}` } },

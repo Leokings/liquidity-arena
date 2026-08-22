@@ -5,6 +5,7 @@ import { HistoryError } from './errors.mjs';
 
 export const HISTORY_MAX_PUBLIC_PAGE = 50;
 export const HISTORY_MAX_SYNC_EPOCHS = 10;
+export const HISTORY_MAX_SYNC_PAYOUTS = 25;
 export const HISTORY_MAX_PROOFS = 25;
 export const HISTORY_MAX_REQUEST_BYTES = 16 * 1024;
 export const HISTORY_SYNC_RATE_LIMIT = 8;
@@ -61,64 +62,26 @@ export function authorizedHistoryIngest(authorization, expectedSecret) {
   return timingSafeEqual(secretDigest(match[1]), secretDigest(expectedSecret));
 }
 
-function historyDeployment({ alias, address, protocolVersion, policyVersion, active }) {
-  const canonicalAddress = String(address || '').trim();
-  const addressKey = canonicalAddress.toLowerCase();
-  return Object.freeze({
-    alias,
-    // StudioNet's contract lookup currently requires the configured address
-    // casing, so this value is the RPC address and must not be normalized.
-    address: canonicalAddress,
-    // Persistence and allowlist identity remain case-insensitive and stable.
-    addressKey,
-    deploymentId: `studionet:${addressKey}`,
-    protocolVersion,
-    policyVersion,
-    active,
-  });
-}
-
 export function loadHistoryChainConfiguration(environment = process.env) {
-  const deployment = loadLiquidityArenaDeploymentConfig(environment);
-  const deployments = [];
-  if (deployment.v6ContractAddress) {
-    deployments.push(historyDeployment({
-      alias: 'v6',
-      address: deployment.v6ContractAddress,
-      protocolVersion: 'LIQUIDITY_ARENA_V6',
-      policyVersion: 'CRYPTO_SPOT_1M_MEDIAN_V1',
-      active: deployment.activeDeployment === 'v6',
-    }));
-  }
-  for (const legacyAddress of deployment.legacyV6Contracts || []) {
-    const addressKey = legacyAddress.toLowerCase();
-    if (deployments.some((item) => item.addressKey === addressKey)) continue;
-    deployments.push(historyDeployment({
-      alias: 'v6',
-      address: legacyAddress,
-      protocolVersion: 'LIQUIDITY_ARENA_V6',
-      policyVersion: 'CRYPTO_SPOT_1M_MEDIAN_V1',
-      active: false,
-    }));
-  }
-  if (deployment.v7ContractAddress) {
-    deployments.push(historyDeployment({
-      alias: 'v7',
-      address: deployment.v7ContractAddress,
-      protocolVersion: 'LIQUIDITY_ARENA_V7',
-      policyVersion: 'CRYPTO_SPOT_1M_MEDIAN_V1',
-      active: deployment.activeDeployment === 'v7',
-    }));
-  }
-  if (deployments.length === 0 || deployments.length > 10) {
-    throw new HistoryError('HISTORY_CHAIN_CONFIG', 'History has no allowlisted deployment.', {
-      statusCode: 503,
-    });
-  }
+  const config = loadLiquidityArenaDeploymentConfig(environment);
+  const address = config.v8ContractAddress;
+  const addressKey = address.toLowerCase();
+  const deployment = Object.freeze({
+    alias: 'v8',
+    address,
+    addressKey,
+    deploymentId: `testnet-bradbury:${addressKey}`,
+    protocolVersion: 'LIQUIDITY_ARENA_V8',
+    policyVersion: 'CRYPTO_SPOT_1M_MEDIAN_V1',
+    payoutProtocolVersion: 'IDEMPOTENT_EVM_VAULT_V1',
+    expectations: config.v8Expectations,
+    active: true,
+  });
   return Object.freeze({
-    network: 'studionet',
-    chainId: 61999,
-    rpcUrl: deployment.genLayerRpcUrl,
-    deployments: Object.freeze(deployments),
+    network: 'testnet-bradbury',
+    keeperNetwork: 'bradbury',
+    chainId: 4_221,
+    rpcUrl: config.genLayerRpcUrl,
+    deployments: Object.freeze([deployment]),
   });
 }

@@ -7,19 +7,29 @@ import {
   HISTORY_MAX_PUBLIC_PAGE,
   HISTORY_MAX_SYNC_EPOCHS,
 } from './config.mjs';
+import {
+  EXPECTED_V8_SCHEMA_SHA256,
+  validateLiquidityArenaV8Config,
+  validateLiquidityArenaV8Schema,
+} from '../server/v8-contract-config.mjs';
 import { HistoryError } from './errors.mjs';
 
 export const HISTORY_ASSETS = Object.freeze(['BTC', 'ETH', 'BNB', 'SOL', 'XRP']);
 export const HISTORY_VENUES = Object.freeze(['BINANCE', 'OKX', 'BYBIT', 'GATE', 'KUCOIN']);
-export const HISTORY_DEPLOYMENTS = Object.freeze(['v6', 'v7']);
+export const HISTORY_DEPLOYMENTS = Object.freeze(['v8']);
 export const HISTORY_PROOF_KINDS = Object.freeze([
   'DEPLOYMENT',
   'CREATE_EPOCH',
   'RESOLVE_EPOCH',
   'ACTIVATE_TIMEOUT_REFUND',
   'WAGER',
-  'CLAIM',
-  'FEE_WITHDRAWAL',
+  'CLAIM_REQUEST',
+  'REQUEST_FEE_PAYOUT',
+  'RETRY_PREPARE_PAYOUT',
+  'DISPATCH_PAYOUT',
+  'RETRY_PAYOUT',
+  'CONFIRM_PAYOUT',
+  'REFRESH_PAYOUT_WITHDRAWAL',
 ]);
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
@@ -35,7 +45,13 @@ const SETTLEMENT_MODES = new Set([
   'REFUND_TIE',
   'REFUND_UNBACKED_WINNER',
   'REFUND_NO_LOSING_SIDE',
-  'REFUND_UNDETERMINED',
+  'REFUND_TIMEOUT',
+]);
+const PAYOUT_SETTLEMENT_MODES = new Set([
+  'PARIMUTUEL',
+  'REFUND_TIE',
+  'REFUND_UNBACKED_WINNER',
+  'REFUND_NO_LOSING_SIDE',
   'REFUND_TIMEOUT',
 ]);
 
@@ -106,11 +122,11 @@ function optionalAddress(value, label) {
 
 function deploymentIdentity(deployment) {
   const addressKey = address(deployment?.address, 'deployment contract address');
-  const deploymentId = `studionet:${addressKey}`;
+  const deploymentId = `testnet-bradbury:${addressKey}`;
   if (deployment?.addressKey !== addressKey || deployment?.deploymentId !== deploymentId) {
     fail(
       'HISTORY_CHAIN_IDENTITY',
-      'StudioNet deployment identity does not match its configured RPC address.',
+      'Bradbury deployment identity does not match its configured RPC address.',
       502,
     );
   }
@@ -158,7 +174,9 @@ function base64Cursor(value) {
 function decodeCursor(value, view) {
   const encoded = String(value || '');
   if (!encoded) return null;
-  if (encoded.length > 256 || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
+  // Payout cursors carry both the canonical deployment id and a 64-hex payout id,
+  // so their canonical v1 encoding is larger than the legacy 256-character cap.
+  if (encoded.length > 512 || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
     fail('HISTORY_CURSOR', 'History cursor is malformed.');
   }
   let parsed;
@@ -173,7 +191,7 @@ function decodeCursor(value, view) {
       fail('HISTORY_CURSOR', 'Deployment cursor context is invalid.');
     }
     const deploymentId = String(parsed.deploymentId || '').toLowerCase();
-    if (!/^studionet:0x[0-9a-f]{40}$/.test(deploymentId)) fail('HISTORY_CURSOR', 'Deployment cursor is invalid.');
+    if (!/^testnet-bradbury:0x[0-9a-f]{40}$/.test(deploymentId)) fail('HISTORY_CURSOR', 'Deployment cursor is invalid.');
     return Object.freeze({ deploymentId });
   }
   if (view === 'proofs') {
@@ -186,13 +204,34 @@ function decodeCursor(value, view) {
     if (!HASH.test(hash)) fail('HISTORY_CURSOR', 'Proof cursor transaction hash is invalid.');
     return Object.freeze({ transactionHash: hash, deploymentFilter });
   }
+  if (view === 'payouts') {
+    exactKeys(
+      parsed,
+      ['version', 'view', 'deploymentFilter', 'createdAtTimestamp', 'deploymentId', 'payoutId'],
+      'payout cursor',
+    );
+    const deploymentFilter = String(parsed.deploymentFilter || '').toLowerCase();
+    const deploymentId = String(parsed.deploymentId || '').toLowerCase();
+    const payoutId = String(parsed.payoutId || '').toLowerCase();
+    if (parsed.version !== 1 || parsed.view !== 'payouts' || deploymentFilter !== 'v8'
+      || !/^testnet-bradbury:0x[0-9a-f]{40}$/.test(deploymentId)
+      || !/^[0-9a-f]{64}$/.test(payoutId)) {
+      fail('HISTORY_CURSOR', 'Payout cursor context is invalid.');
+    }
+    return Object.freeze({
+      createdAtTimestamp: decimalInteger(parsed.createdAtTimestamp, 'payout cursor timestamp', { positive: true }),
+      deploymentId,
+      payoutId,
+      deploymentFilter,
+    });
+  }
   exactKeys(parsed, ['version', 'view', 'deploymentFilter', 'epochEndTimestamp', 'deploymentId'], 'epoch cursor');
   if (parsed.version !== 1 || parsed.view !== 'epochs') fail('HISTORY_CURSOR', 'Epoch cursor context is invalid.');
   const epochEndTimestamp = decimalInteger(parsed.epochEndTimestamp, 'cursor epoch', { positive: true });
   const deploymentFilter = parsed.deploymentFilter === null ? null : String(parsed.deploymentFilter || '').toLowerCase();
   if (deploymentFilter !== null && !DEPLOYMENT_SET.has(deploymentFilter)) fail('HISTORY_CURSOR', 'Epoch cursor filter is invalid.');
   const deploymentId = String(parsed.deploymentId || '').toLowerCase();
-  if (!/^studionet:0x[0-9a-f]{40}$/.test(deploymentId)) fail('HISTORY_CURSOR', 'Epoch cursor deployment is invalid.');
+  if (!/^testnet-bradbury:0x[0-9a-f]{40}$/.test(deploymentId)) fail('HISTORY_CURSOR', 'Epoch cursor deployment is invalid.');
   return Object.freeze({ epochEndTimestamp, deploymentId, deploymentFilter });
 }
 
@@ -203,6 +242,15 @@ export function encodeHistoryCursor(value, view = 'epochs', deploymentFilter = n
   }
   if (view === 'proofs') {
     return base64Cursor({ view, deploymentFilter, transactionHash: value.transactionHash });
+  }
+  if (view === 'payouts') {
+    return base64Cursor({
+      view,
+      deploymentFilter,
+      createdAtTimestamp: String(value.createdAtTimestamp),
+      deploymentId: value.deploymentId,
+      payoutId: value.payoutId,
+    });
   }
   return base64Cursor({
     epochEndTimestamp: String(value.epochEndTimestamp),
@@ -221,14 +269,13 @@ export function parsePublicHistoryQuery(requestUrl) {
     }
   }
   const view = String(url.searchParams.get('view') || 'epochs').toLowerCase();
-  if (!['epochs', 'deployments', 'proofs'].includes(view)) {
-    fail('HISTORY_QUERY', 'History view must be epochs, deployments, or proofs.');
+  if (!['epochs', 'deployments', 'proofs', 'payouts'].includes(view)) {
+    fail('HISTORY_QUERY', 'History view must be epochs, deployments, proofs, or payouts.');
   }
   const rawDeployment = String(url.searchParams.get('deployment') || '').toLowerCase();
-  const deployment = rawDeployment || null;
-  if (deployment && !DEPLOYMENT_SET.has(deployment)) fail('HISTORY_QUERY', 'History deployment must be v6 or v7.');
+  const deployment = view === 'deployments' ? (rawDeployment || null) : (rawDeployment || 'v8');
+  if (deployment && !DEPLOYMENT_SET.has(deployment)) fail('HISTORY_QUERY', 'History deployment must be v8.');
   if (view === 'deployments' && deployment) fail('HISTORY_QUERY', 'Deployment history does not accept a deployment filter.');
-  if (view === 'proofs' && !deployment) fail('HISTORY_QUERY', 'Proof history requires a deployment filter.');
   const rawLimit = url.searchParams.get('limit');
   const limit = rawLimit === null
     ? 20
@@ -243,7 +290,7 @@ export function parsePublicHistoryQuery(requestUrl) {
 function normalizedProofRequest(value, index) {
   const object = exactKeys(value, ['deployment', 'hash', 'kind'], `proofs[${index}]`);
   const deployment = String(object.deployment || '').toLowerCase();
-  if (!DEPLOYMENT_SET.has(deployment)) fail('HISTORY_SCHEMA', `proofs[${index}].deployment must be v6 or v7.`);
+  if (!DEPLOYMENT_SET.has(deployment)) fail('HISTORY_SCHEMA', `proofs[${index}].deployment must be v8.`);
   const kind = String(object.kind || '').toUpperCase();
   if (!PROOF_KIND_SET.has(kind)) fail('HISTORY_SCHEMA', `proofs[${index}].kind is unsupported.`);
   return Object.freeze({ deployment, hash: transactionHash(object.hash, `proofs[${index}].hash`), kind });
@@ -258,12 +305,12 @@ export function parseHistorySyncBody(value) {
   );
   let deployments = object.deployments ?? null;
   if (deployments !== null) {
-    if (!Array.isArray(deployments) || deployments.length < 1 || deployments.length > 2) {
-      fail('HISTORY_SCHEMA', 'deployments must contain one or two aliases.');
+    if (!Array.isArray(deployments) || deployments.length !== 1) {
+      fail('HISTORY_SCHEMA', 'deployments must contain only the v8 alias.');
     }
     deployments = deployments.map((valueAtIndex, index) => {
       const alias = String(valueAtIndex || '').toLowerCase();
-      if (!DEPLOYMENT_SET.has(alias)) fail('HISTORY_SCHEMA', `deployments[${index}] must be v6 or v7.`);
+      if (!DEPLOYMENT_SET.has(alias)) fail('HISTORY_SCHEMA', `deployments[${index}] must be v8.`);
       return alias;
     });
     if (new Set(deployments).size !== deployments.length) fail('HISTORY_SCHEMA', 'deployments must not contain duplicates.');
@@ -304,75 +351,77 @@ export function normalizedIdempotencyKey(value) {
   return key;
 }
 
-function normalizedCatalog(catalog) {
-  const root = exactKeys(catalog, ['assets'], 'asset catalog');
-  if (!Array.isArray(root.assets) || root.assets.length !== HISTORY_ASSETS.length) {
-    fail('HISTORY_CHAIN_SCHEMA', 'StudioNet asset catalog must contain the fixed five-asset basket.', 502);
+const ASSET_LABELS = Object.freeze(['Bitcoin', 'Ethereum', 'BNB', 'Solana', 'XRP']);
+
+function v8Catalogs(config) {
+  if (!Array.isArray(config.asset_ids) || config.asset_ids.length !== HISTORY_ASSETS.length
+    || config.asset_ids.some((asset, index) => asset !== HISTORY_ASSETS[index])) {
+    fail('HISTORY_CHAIN_SCHEMA', 'Bradbury V8 asset IDs are not the fixed five-asset basket.', 502);
   }
-  const assets = root.assets.map((raw, index) => {
-    const item = exactKeys(raw, ['asset_id', 'label', 'quote_asset'], `asset catalog[${index}]`);
-    if (String(item.asset_id) !== HISTORY_ASSETS[index] || String(item.quote_asset) !== 'USDT') {
-      fail('HISTORY_CHAIN_SCHEMA', 'StudioNet asset catalog order or quote asset is invalid.', 502);
-    }
-    const label = String(item.label || '').trim();
-    if (!label || label.length > 80) fail('HISTORY_CHAIN_SCHEMA', 'StudioNet asset label is invalid.', 502);
-    return Object.freeze({ asset_id: HISTORY_ASSETS[index], label, quote_asset: 'USDT' });
+  if (!Array.isArray(config.venues) || config.venues.length !== HISTORY_VENUES.length
+    || config.venues.some((venue, index) => venue !== HISTORY_VENUES[index])) {
+    fail('HISTORY_CHAIN_SCHEMA', 'Bradbury V8 venues are not the fixed five-venue allowlist.', 502);
+  }
+  return Object.freeze({
+    assetCatalog: Object.freeze({
+      assets: Object.freeze(HISTORY_ASSETS.map((asset_id, index) => Object.freeze({
+        asset_id, label: ASSET_LABELS[index], quote_asset: 'USDT',
+      }))),
+    }),
+    venueCatalog: Object.freeze({
+      venues: Object.freeze([...HISTORY_VENUES]),
+      adapters_immutable: true,
+      candle_interval: '1m',
+      start_price_rule: 'OPEN_AT_E_MINUS_20_MINUTES',
+      end_price_rule: 'CLOSE_AT_E_MINUS_1_MINUTE',
+    }),
   });
-  return Object.freeze({ assets: Object.freeze(assets) });
 }
 
-function normalizedVenueCatalog(catalog) {
-  const root = exactKeys(
-    catalog,
-    ['venues', 'adapters_immutable', 'candle_interval', 'start_price_rule', 'end_price_rule'],
-    'venue catalog',
-  );
-  if (!Array.isArray(root.venues) || root.venues.length !== HISTORY_VENUES.length
-    || root.venues.some((venue, index) => String(venue) !== HISTORY_VENUES[index])) {
-    fail('HISTORY_CHAIN_SCHEMA', 'StudioNet venue catalog is not the fixed five-venue allowlist.', 502);
-  }
-  if (root.adapters_immutable !== true || root.candle_interval !== '1m'
-    || root.start_price_rule !== 'OPEN_AT_E_MINUS_20_MINUTES'
-    || root.end_price_rule !== 'CLOSE_AT_E_MINUS_1_MINUTE') {
-    fail('HISTORY_CHAIN_SCHEMA', 'StudioNet venue policy metadata is invalid.', 502);
-  }
-  return Object.freeze(canonicalJson(root));
-}
-
-export function normalizeDeploymentState({ deployment, config, assetCatalog, venueCatalog, epochCount, manifest }) {
+export function normalizeDeploymentState({
+  deployment, config, schema, epochCount, payoutCount = 0, manifest,
+}) {
   const identity = deploymentIdentity(deployment);
   const protocol = String(config?.protocol_version || '').trim().toUpperCase();
   if (protocol !== deployment.protocolVersion || config?.policy_version !== deployment.policyVersion) {
-    fail('HISTORY_CHAIN_IDENTITY', `StudioNet ${deployment.alias} contract identity does not match its allowlist.`, 502);
+    fail('HISTORY_CHAIN_IDENTITY', 'Bradbury V8 contract identity does not match its allowlist.', 502);
   }
-  const owner = address(config.owner, 'contract owner');
-  const treasury = address(config.treasury, 'contract treasury');
-  const keeper = deployment.alias === 'v7' ? address(config.keeper, 'contract keeper') : null;
-  if (config.native_token_symbol !== 'GEN' || boundedInteger(config.native_token_decimals, 'token decimals') !== 18
-    || config.transfer_finality !== 'FINALIZED') {
-    fail('HISTORY_CHAIN_SCHEMA', 'StudioNet contract payment policy is invalid.', 502);
+  let verified;
+  let schemaIdentity;
+  try {
+    verified = validateLiquidityArenaV8Config(config, deployment.expectations);
+    schemaIdentity = validateLiquidityArenaV8Schema(schema);
+  } catch (error) {
+    fail('HISTORY_CHAIN_SCHEMA', 'Bradbury V8 config or 25-method schema is not release-exact.', 502, error);
   }
   const count = boundedInteger(epochCount, 'epoch count', { minimum: 0, maximum: 1_000_000 });
-  const normalizedAssets = normalizedCatalog(assetCatalog);
-  const normalizedVenues = normalizedVenueCatalog(venueCatalog);
+  const payouts = boundedInteger(payoutCount, 'payout count', { minimum: 0, maximum: 1_000_000 });
+  const catalogs = v8Catalogs(config);
   return Object.freeze({
-    alias: deployment.alias,
-    network: 'studionet',
-    chainId: 61999,
+    alias: 'v8',
+    network: 'testnet-bradbury',
+    chainId: 4_221,
     contractAddress: identity.addressKey,
     protocolVersion: protocol,
     policyVersion: deployment.policyVersion,
-    owner,
-    keeper,
-    treasury,
+    payoutProtocolVersion: verified.payoutProtocolVersion,
+    payoutFactoryAddress: verified.payoutFactory,
+    contractSchemaSha256: schemaIdentity.schemaSha256,
+    owner: verified.owner,
+    keeper: verified.keeper,
+    treasury: verified.treasury,
     active: deployment.active === true,
     epochCount: count,
+    payoutCount: payouts,
     deploymentId: identity.deploymentId,
     deploymentTransactionHash: manifest?.deploymentTransactionHash || null,
-    sourceMetadata: canonicalJson(manifest?.sourceMetadata || {}),
+    sourceMetadata: canonicalJson({
+      ...(manifest?.sourceMetadata || {}),
+      schemaSha256: EXPECTED_V8_SCHEMA_SHA256,
+    }),
     contractConfig: canonicalJson(config),
-    assetCatalog: normalizedAssets,
-    venueCatalog: normalizedVenues,
+    assetCatalog: catalogs.assetCatalog,
+    venueCatalog: catalogs.venueCatalog,
   });
 }
 
@@ -380,8 +429,9 @@ function objectiveState(raw, expectedObjective, epochEndTimestamp) {
   const keys = [
     'epoch_id', 'objective', 'settlement_mode', 'winner_asset_id', 'winner_return_ppb',
     'payout_pool_atto', 'winning_stake_atto', 'losing_stake_atto', 'platform_fee_atto',
-    'total_stake_atto', 'participant_count', 'paid_atto', 'remaining_payout_atto',
-    'unclaimed_winning_stake_atto',
+    'total_stake_atto', 'participant_count', 'paid_atto', 'funded_in_escrow_atto',
+    'allocated_atto', 'remaining_payout_atto', 'unallocated_payout_atto',
+    'allocated_not_funded_atto', 'funded_not_withdrawn_atto', 'unclaimed_winning_stake_atto',
   ];
   const item = exactKeys(raw, keys, `${expectedObjective} objective`);
   if (String(item.epoch_id) !== String(epochEndTimestamp) || item.objective !== expectedObjective) {
@@ -405,13 +455,21 @@ function objectiveState(raw, expectedObjective, epochEndTimestamp) {
     total_stake_atto: decimalInteger(item.total_stake_atto, `${expectedObjective} total stake`),
     participant_count: boundedInteger(item.participant_count, `${expectedObjective} participant count`, { minimum: 0 }),
     paid_atto: decimalInteger(item.paid_atto, `${expectedObjective} paid amount`),
+    funded_in_escrow_atto: decimalInteger(item.funded_in_escrow_atto, `${expectedObjective} escrow funded amount`),
+    allocated_atto: decimalInteger(item.allocated_atto, `${expectedObjective} allocated amount`),
     remaining_payout_atto: decimalInteger(item.remaining_payout_atto, `${expectedObjective} remaining payout`),
+    unallocated_payout_atto: decimalInteger(item.unallocated_payout_atto, `${expectedObjective} unallocated payout`),
+    allocated_not_funded_atto: decimalInteger(item.allocated_not_funded_atto, `${expectedObjective} allocated not funded`),
+    funded_not_withdrawn_atto: decimalInteger(item.funded_not_withdrawn_atto, `${expectedObjective} funded not withdrawn`),
     unclaimed_winning_stake_atto: decimalInteger(
       item.unclaimed_winning_stake_atto,
       `${expectedObjective} unclaimed winning stake`,
     ),
   };
-  if (BigInt(normalized.paid_atto) + BigInt(normalized.remaining_payout_atto) !== BigInt(normalized.payout_pool_atto)) {
+  if (BigInt(normalized.funded_in_escrow_atto) + BigInt(normalized.remaining_payout_atto) !== BigInt(normalized.payout_pool_atto)
+    || BigInt(normalized.allocated_atto) + BigInt(normalized.unallocated_payout_atto) !== BigInt(normalized.payout_pool_atto)
+    || BigInt(normalized.allocated_atto) - BigInt(normalized.funded_in_escrow_atto) !== BigInt(normalized.allocated_not_funded_atto)
+    || BigInt(normalized.funded_in_escrow_atto) - BigInt(normalized.paid_atto) !== BigInt(normalized.funded_not_withdrawn_atto)) {
     fail('HISTORY_CHAIN_SCHEMA', `${expectedObjective} payout accounting is inconsistent.`, 502);
   }
   return Object.freeze(normalized);
@@ -494,12 +552,11 @@ export function normalizeEpochState({ deployment, epoch, assets = [], syncedAt }
   if (createdAtTimestamp > end - 3600) {
     fail('HISTORY_CHAIN_SCHEMA', 'Epoch creation timestamp violates its minimum one-hour lead.', 502);
   }
-  const status = textEnum(item.status, new Set(['OPEN', 'RESOLVED', 'UNDETERMINED', 'TIMED_OUT']), 'epoch status');
-  const resultStatus = textEnum(item.result_status, new Set(['PENDING', 'DETERMINED', 'UNDETERMINED', 'TIMEOUT']), 'epoch result status');
+  const status = textEnum(item.status, new Set(['OPEN', 'RESOLVED', 'TIMED_OUT']), 'epoch status');
+  const resultStatus = textEnum(item.result_status, new Set(['PENDING', 'DETERMINED', 'TIMEOUT']), 'epoch result status');
   const expectedResultForStatus = {
     OPEN: 'PENDING',
     RESOLVED: 'DETERMINED',
-    UNDETERMINED: 'UNDETERMINED',
     TIMED_OUT: 'TIMEOUT',
   }[status];
   if (resultStatus !== expectedResultForStatus) {
@@ -562,23 +619,10 @@ export function normalizeEpochState({ deployment, epoch, assets = [], syncedAt }
       qualifiedVenues: Object.freeze(qualifiedVenues),
       resolutionDigest: digest,
       sourceMetadata: Object.freeze({
-        authority: 'GENLAYER_STUDIONET_FINALIZED_CONTRACT_STATE',
+        authority: 'GENLAYER_BRADBURY_FINALIZED_CONTRACT_STATE',
         policyVersion: deployment.policyVersion,
         syncedAt,
       }),
-    });
-  } else if (resultStatus === 'UNDETERMINED') {
-    expectedDigest = resolutionDigest({
-      policy_version: deployment.policyVersion,
-      status: 'UNDETERMINED',
-      epoch_end_timestamp: end,
-      qualified_venues: qualifiedVenues,
-      venue_count: venueCount,
-      assets: [],
-      high_winner_asset_id: '',
-      high_winner_return_ppb: 0,
-      low_winner_asset_id: '',
-      low_winner_return_ppb: 0,
     });
   } else if (resultStatus === 'TIMEOUT') {
     expectedDigest = resolutionDigest({
@@ -592,13 +636,13 @@ export function normalizeEpochState({ deployment, epoch, assets = [], syncedAt }
   }
   const rawDigest = String(item.resolution_digest || '').replace(/^0x/, '').toLowerCase();
   if (rawDigest && !DIGEST.test(rawDigest)) fail('HISTORY_CHAIN_SCHEMA', 'Epoch resolution digest is invalid.', 502);
-  if (expectedDigest && rawDigest !== expectedDigest) fail('HISTORY_CHAIN_SCHEMA', 'Epoch resolution digest does not match canonical StudioNet state.', 502);
+  if (expectedDigest && rawDigest !== expectedDigest) fail('HISTORY_CHAIN_SCHEMA', 'Epoch resolution digest does not match canonical Bradbury state.', 502);
   const resolvedAtTimestamp = boundedInteger(item.resolved_at_timestamp, 'resolved timestamp', { minimum: 0 });
   if ((status === 'OPEN' && (resolvedAtTimestamp !== 0 || rawDigest))
     || (status !== 'OPEN' && (resolvedAtTimestamp === 0 || !rawDigest))) {
     fail('HISTORY_CHAIN_SCHEMA', 'Epoch terminal timestamp or digest is inconsistent with its status.', 502);
   }
-  if ((['RESOLVED', 'UNDETERMINED'].includes(status)
+  if ((status === 'RESOLVED'
       && (resolvedAtTimestamp < schedule.resolutionAvailableTimestamp
         || resolvedAtTimestamp >= schedule.timeoutRefundAvailableTimestamp))
     || (status === 'TIMED_OUT' && resolvedAtTimestamp < schedule.timeoutRefundAvailableTimestamp)) {
@@ -627,18 +671,134 @@ export function normalizeEpochState({ deployment, epoch, assets = [], syncedAt }
     highObjective: high,
     lowObjective: low,
     sourceMetadata: Object.freeze({
-      authority: 'GENLAYER_STUDIONET_CONTRACT_STATE',
+      authority: 'GENLAYER_BRADBURY_CONTRACT_STATE',
       contractAddress: identity.addressKey,
       protocolVersion: deployment.protocolVersion,
       policyVersion: deployment.policyVersion,
     }),
     finalityMetadata: Object.freeze({
-      chainId: 61999,
-      network: 'studionet',
+      chainId: 4_221,
+      network: 'testnet-bradbury',
       stateReadAt: syncedAt,
-      settlementTransfersTriggerOn: 'FINALIZED',
+      settlementTransfersTriggerOn: 'FUNDED_IN_ESCROW',
     }),
     snapshot,
+  });
+}
+
+const PAYOUT_STATES = new Set(['PREPARING', 'DISPATCHED', 'FUNDED_IN_ESCROW', 'EOA_WITHDRAWN']);
+
+export function normalizePayoutState({ deployment, payout, syncedAt }) {
+  const identity = deploymentIdentity(deployment);
+  const item = exactKeys(payout, [
+    'payout_id', 'kind', 'recipient', 'amount_atto', 'epoch_end_timestamp', 'objective',
+    'wallet_key', 'stake_atto', 'settlement_mode', 'includes_rounding_remainder',
+    'state', 'prepare_attempt_count', 'attempt_count', 'reserve_remaining_atto',
+    'vault', 'created_at_timestamp', 'last_prepare_timestamp', 'last_dispatch_timestamp',
+    'funded_at_timestamp', 'withdrawn_at_timestamp', 'escrow_withdrawn',
+  ], 'payout state');
+  const payoutId = String(item.payout_id || '').trim();
+  if (!/^[0-9a-f]{64}$/.test(payoutId)) {
+    fail('HISTORY_CHAIN_SCHEMA', 'V8 payout ID must be lowercase 64-hex without 0x.', 502);
+  }
+  const kind = textEnum(item.kind, new Set(['PLAYER', 'FEE']), 'payout kind');
+  const state = textEnum(item.state, PAYOUT_STATES, 'payout state');
+  const epochValue = boundedInteger(item.epoch_end_timestamp, 'payout epoch', { minimum: 0 });
+  const objective = String(item.objective || '').toUpperCase();
+  if ((kind === 'PLAYER' && (epochValue <= 0 || !['HIGH', 'LOW'].includes(objective)))
+    || (kind === 'FEE' && (epochValue !== 0 || objective !== ''))) {
+    fail('HISTORY_CHAIN_SCHEMA', 'V8 payout kind, epoch, and objective are inconsistent.', 502);
+  }
+  const recipientAddress = address(item.recipient, 'payout recipient');
+  const walletKey = String(item.wallet_key ?? '');
+  const stakeAtto = decimalInteger(item.stake_atto, 'payout stake');
+  const settlementMode = String(item.settlement_mode || '').trim().toUpperCase();
+  const includesRoundingRemainder = item.includes_rounding_remainder;
+  const expectedWalletKey = `${epochValue}|${objective}|${recipientAddress}`;
+  if (typeof includesRoundingRemainder !== 'boolean'
+    || (kind === 'PLAYER' && (
+      walletKey !== expectedWalletKey
+      || BigInt(stakeAtto) <= 0n
+      || !PAYOUT_SETTLEMENT_MODES.has(settlementMode)
+      || (includesRoundingRemainder && settlementMode !== 'PARIMUTUEL')
+    ))
+    || (kind === 'FEE' && (
+      recipientAddress !== String(deployment?.expectations?.treasury || '').toLowerCase()
+      || walletKey !== '' || stakeAtto !== '0' || settlementMode !== 'FEE_WITHDRAWAL'
+      || includesRoundingRemainder
+    ))) {
+    fail('HISTORY_CHAIN_SCHEMA', 'V8 payout wallet and settlement identity are inconsistent.', 502);
+  }
+  const attemptCount = boundedInteger(item.attempt_count, 'payout attempt count', { minimum: 0, maximum: 3 });
+  const prepareAttemptCount = boundedInteger(
+    item.prepare_attempt_count,
+    'payout prepare attempt count',
+    { minimum: 1, maximum: 1_000_000 },
+  );
+  const createdAtTimestamp = boundedInteger(item.created_at_timestamp, 'payout created timestamp', { minimum: 1 });
+  const lastPrepareTimestamp = boundedInteger(item.last_prepare_timestamp, 'payout last prepare timestamp', { minimum: createdAtTimestamp });
+  const lastDispatchTimestamp = boundedInteger(item.last_dispatch_timestamp, 'payout last dispatch timestamp', { minimum: 0 });
+  const fundedAtTimestamp = boundedInteger(item.funded_at_timestamp, 'payout funded timestamp', { minimum: 0 });
+  const withdrawnAtTimestamp = boundedInteger(item.withdrawn_at_timestamp, 'payout withdrawn timestamp', { minimum: 0 });
+  const escrowWithdrawn = item.escrow_withdrawn;
+  if (typeof escrowWithdrawn !== 'boolean'
+    || (lastDispatchTimestamp !== 0 && lastDispatchTimestamp < createdAtTimestamp)
+    || (fundedAtTimestamp !== 0 && (lastDispatchTimestamp === 0 || fundedAtTimestamp < lastDispatchTimestamp))
+    || (withdrawnAtTimestamp !== 0 && (fundedAtTimestamp === 0 || withdrawnAtTimestamp < fundedAtTimestamp))
+    || (state === 'PREPARING' && (
+      attemptCount !== 0 || lastDispatchTimestamp !== 0 || fundedAtTimestamp !== 0
+      || withdrawnAtTimestamp !== 0 || escrowWithdrawn
+    ))
+    || (state === 'DISPATCHED' && (
+      attemptCount === 0 || lastDispatchTimestamp === 0 || fundedAtTimestamp !== 0
+      || withdrawnAtTimestamp !== 0 || escrowWithdrawn
+    ))
+    || (state === 'FUNDED_IN_ESCROW' && (
+      attemptCount === 0 || lastDispatchTimestamp === 0 || fundedAtTimestamp === 0
+      || withdrawnAtTimestamp !== 0 || escrowWithdrawn
+    ))
+    || (state === 'EOA_WITHDRAWN' && (
+      attemptCount === 0 || lastDispatchTimestamp === 0 || fundedAtTimestamp === 0
+      || withdrawnAtTimestamp === 0 || !escrowWithdrawn
+    ))) {
+    fail('HISTORY_CHAIN_SCHEMA', 'V8 payout stage timestamps or attempt state are inconsistent.', 502);
+  }
+  const rawVault = String(item.vault || '').toLowerCase();
+  const vaultAddress = /^0x0{40}$/.test(rawVault) ? null : address(rawVault, 'payout vault');
+  if (state !== 'PREPARING' && !vaultAddress) {
+    fail('HISTORY_CHAIN_SCHEMA', 'A dispatched V8 payout must have an immutable vault.', 502);
+  }
+  return Object.freeze({
+    deploymentId: identity.deploymentId,
+    deploymentAlias: 'v8',
+    payoutId,
+    kind,
+    recipientAddress,
+    amountAtto: decimalInteger(item.amount_atto, 'payout amount', { positive: true }),
+    epochEndTimestamp: epochValue === 0 ? null : String(epochValue),
+    objective,
+    walletKey,
+    stakeAtto,
+    settlementMode,
+    includesRoundingRemainder,
+    state,
+    vaultAddress,
+    prepareAttemptCount,
+    attemptCount,
+    reserveRemainingAtto: decimalInteger(item.reserve_remaining_atto, 'payout remaining reserve'),
+    escrowWithdrawn,
+    createdAtTimestamp: String(createdAtTimestamp),
+    lastPrepareTimestamp: String(lastPrepareTimestamp),
+    lastDispatchTimestamp: String(lastDispatchTimestamp),
+    fundedAtTimestamp: String(fundedAtTimestamp),
+    withdrawnAtTimestamp: String(withdrawnAtTimestamp),
+    sourceMetadata: Object.freeze({
+      authority: 'GENLAYER_BRADBURY_CONTRACT_STATE',
+      chainId: 4_221,
+      contractAddress: identity.addressKey,
+      payoutProtocolVersion: deployment.payoutProtocolVersion,
+      syncedAt,
+    }),
   });
 }
 

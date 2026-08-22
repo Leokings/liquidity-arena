@@ -26,9 +26,18 @@ const METHOD_ACTIONS = Object.freeze({
   create_epoch: 'CREATE',
   resolve_epoch: 'RESOLVE',
   activate_timeout_refund: 'TIMEOUT',
+  retry_prepare_payout: 'RETRY_PREPARE',
+  dispatch_payout: 'DISPATCH',
+  retry_payout: 'RETRY_PAYOUT',
+  confirm_payout: 'CONFIRM',
+  refresh_payout_withdrawal: 'REFRESH',
 });
 
-export const KEEPER_JOURNAL_CHAIN_ID = '61999';
+const ACTION_METHODS = Object.freeze(Object.fromEntries(
+  Object.entries(METHOD_ACTIONS).map(([method, action]) => [action, method]),
+));
+
+export const KEEPER_JOURNAL_CHAIN_ID = '4221';
 export const KEEPER_JOURNAL_LEASE_SECONDS = 900;
 export const KEEPER_JOURNAL_HEARTBEAT_MS = 240_000;
 
@@ -62,30 +71,31 @@ function operationInput(operation) {
     deploymentAlias: operation.deploymentAlias,
     chainId: operation.chainId,
     contractAddress: operation.contractAddress,
+    subjectType: operation.subjectType,
+    subjectId: operation.subjectId,
     method: operation.method,
     args: operation.args,
     valueAtto: operation.valueAtto,
-    epochEndTimestamp: operation.epochEndTimestamp,
   };
 }
 
 export function keeperOperationForAction({ deploymentAlias, contractAddress, action }) {
   const type = String(action?.type || '').toUpperCase();
-  const method = type === 'CREATE'
-    ? 'create_epoch'
-    : (type === 'RESOLVE' ? 'resolve_epoch' : (type === 'TIMEOUT'
-      ? 'activate_timeout_refund'
-      : ''));
+  const method = ACTION_METHODS[type] || '';
   if (!method) fail('KEEPER_JOURNAL_ACTION', `Unsupported keeper action ${type || '(missing)'}.`);
-  const epochEndTimestamp = String(action.epochEndTimestamp ?? '');
+  const subjectType = ['CREATE', 'RESOLVE', 'TIMEOUT'].includes(type) ? 'epoch' : 'payout';
+  const subjectId = subjectType === 'epoch'
+    ? String(action.epochEndTimestamp ?? '')
+    : String(action.payoutId ?? '');
   const canonical = canonicalKeeperOperation({
     deploymentAlias,
     chainId: KEEPER_JOURNAL_CHAIN_ID,
     contractAddress,
+    subjectType,
+    subjectId,
     method,
-    args: [epochEndTimestamp],
+    args: [subjectId],
     valueAtto: '0',
-    epochEndTimestamp,
   });
   return Object.freeze({
     operationId: canonical.operationId,
@@ -98,10 +108,11 @@ export function keeperOperationForAction({ deploymentAlias, contractAddress, act
 export function keeperActionForOperation(operation) {
   const type = METHOD_ACTIONS[String(operation?.method || '')];
   if (!type) fail('KEEPER_JOURNAL_SCHEMA', 'Recovered operation has an unsupported method.');
-  const epochEndTimestamp = Number(operation.epochEndTimestamp);
-  if (!Number.isSafeInteger(epochEndTimestamp)) {
-    fail('KEEPER_JOURNAL_SCHEMA', 'Recovered epoch timestamp is not a safe integer.');
+  if (operation.subjectType === 'payout') {
+    return Object.freeze({ type, payoutId: operation.subjectId });
   }
+  const epochEndTimestamp = Number(operation.subjectId);
+  if (!Number.isSafeInteger(epochEndTimestamp)) fail('KEEPER_JOURNAL_SCHEMA', 'Recovered epoch timestamp is not a safe integer.');
   return Object.freeze({
     type,
     epochEndTimestamp,
@@ -140,7 +151,7 @@ export function validateRecoveredKeeperOperation(operation) {
       || logicalOperationId !== canonical.operationId
       || operationId !== expectedOperationId
       || retryOfOperationId !== expectedRetryOfOperationId
-      || operation.network !== 'studionet'
+      || operation.network !== 'bradbury'
       || signerAddress !== operation.signerAddress
       || !JOURNAL_STATES.has(operation.state)
       || (operation.lifecycleStatus !== null
@@ -207,17 +218,17 @@ export function createAuthoritativeKeeperSession({
     if (health?.status !== 'ready'
         || health?.service !== 'liquidity-arena-keeper-journal'
         || health?.ready !== true
-        || health?.network !== 'studionet'
+        || health?.network !== 'bradbury'
         || health?.chainId !== KEEPER_JOURNAL_CHAIN_ID
         || health?.configuration?.databaseConfigured !== true
         || health?.configuration?.authenticationConfigured !== true
         || health?.configuration?.signerConfigured !== true
         || health?.database?.configured !== true
         || health?.database?.ready !== true
-        || health?.database?.schemaVersion !== 3) {
+        || health?.database?.schemaVersion !== 4) {
       fail(
         'KEEPER_JOURNAL_NOT_READY',
-        'The authoritative keeper journal is not ready on schema version 3; no lease or write is permitted.',
+        'The authoritative keeper journal is not ready on schema version 4; no lease or write is permitted.',
       );
     }
     const response = await client.acquireLease({
@@ -344,7 +355,7 @@ export function createAuthoritativeKeeperSession({
       return client.prepareOperation({
         lease: requireLease(),
         operation,
-        idempotencyKey: key(`prepare-${operation.method}-${operation.epochEndTimestamp}`),
+        idempotencyKey: key(`prepare-${operation.method}-${operation.subjectId}`),
       });
     },
     async bind(operationId, transactionHash) {
@@ -384,7 +395,8 @@ function pending(operation, reason, details = {}) {
     retryOfOperationId: operation.retryOfOperationId,
     deploymentAlias: operation.deploymentAlias,
     method: operation.method,
-    epochEndTimestamp: Number(operation.epochEndTimestamp),
+    subjectType: operation.subjectType,
+    subjectId: operation.subjectId,
     transactionHash: operation.transactionHash,
     state: operation.state,
     lifecycleStatus: operation.lifecycleStatus,
@@ -643,7 +655,8 @@ export async function reconcileAuthoritativeOperation({
     retryOfOperationId: operation.retryOfOperationId,
     transactionHash: operation.transactionHash,
     method: operation.method,
-    epochEndTimestamp: Number(operation.epochEndTimestamp),
+    subjectType: operation.subjectType,
+    subjectId: operation.subjectId,
   });
   return Object.freeze({
     verified: true,

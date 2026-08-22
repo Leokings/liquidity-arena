@@ -77,14 +77,18 @@ test('modal close and async claim focus are generation-safe and restore the exac
   assert.match(appSource, /const modalGeneration = record\.generation;[\s\S]*?record\.generation !== modalGeneration/);
 });
 
-test('claim summary and partial-history recovery have explicit accessible semantics', () => {
+test('V8 payout summary and epoch-scan recovery have explicit accessible semantics', () => {
   assert.match(htmlSource, /id="claim-summary" aria-labelledby="claim-summary-title" hidden/);
   assert.match(htmlSource, /id="claim-summary-actions" role="list"/);
   assert.match(htmlSource, /id="wallet-history-errors" role="region" aria-live="polite" aria-label="Wallet position history status" hidden/);
   assert.match(appSource, /row\.setAttribute\('role', 'listitem'\)/);
   assert.match(appSource, /action\.setAttribute\(\s*'aria-label'/);
   assert.match(appSource, /retry\.dataset\.retryDeployment = deploymentAlias/);
-  assert.match(appSource, /Last verified rows remain visible/);
+  assert.match(appSource, /Previously verified rows remain visible only for recovery navigation/);
+  assert.match(appSource, /readWalletPositionPage\(\{/);
+  assert.match(appSource, /pageSize: 25/);
+  assert.match(appSource, /this\.onchainEpochsScanned = page\.scannedEpochs/);
+  assert.match(appSource, /SCAN \$\{nextCount\} OLDER V8 EPOCH/);
 });
 
 test('claim and retry controls retain touch-sized targets on mobile', () => {
@@ -95,25 +99,44 @@ test('claim and retry controls retain touch-sized targets on mobile', () => {
   assert.match(mobile, /\.wallet-history-errors button \{ min-height: 44px; \}/);
 });
 
-test('claim activity promotes finalized claimed value while retaining quote intent metadata', () => {
+test('claim recovery persists the immutable payout and every stage has an explicit client action', () => {
   const reconciliation = appSource.slice(
     appSource.indexOf('  async _reconcileActivity() {'),
     appSource.indexOf('  _renderActivity(claim = null) {'),
   );
   const claimFlow = appSource.slice(
-    appSource.indexOf('  async claimWager() {'),
+    appSource.indexOf('  async advancePayout({ retry = false } = {}) {'),
     appSource.indexOf('  async unlockEmergencyRefund() {'),
   );
-  assert.match(reconciliation, /minimumValueAtto: claimedAtto/);
-  assert.match(reconciliation, /claimedAtto >= signingQuoteAtto/);
-  assert.match(reconciliation, /amountAtto: claimedAtto\.toString\(\)/);
-  assert.equal(
-    reconciliation.match(/quotedAmountAtto: signingQuoteAtto\?\.toString\(\) \?\? null/g)?.length,
-    3,
-    'every claim recovery outcome must migrate and retain the original signing quote',
-  );
-  assert.match(claimFlow, /quotedAmountAtto: submission\.quotedAmountAtto/);
-  assert.match(claimFlow, /amountAtto: submission\.actualAmountAtto \|\| activity\.amountAtto/);
-  assert.match(claimFlow, /amountAtto: result\.actualAmountAtto/);
-  assert.match(claimFlow, /amountAtto: error\?\.actualAmountAtto \|\| activity\.amountAtto/);
+  assert.match(reconciliation, /const payout = normalizeV8Payout\(await this\.gateway\.readPayout\(quote\.payoutId\)/);
+  assert.match(reconciliation, /verified = payout\.amountAtto === quote\.amountAtto/);
+  assert.match(reconciliation, /this\._persistPayout\(payout\)/);
+  assert.match(reconciliation, /payoutId: payout\.payoutId/);
+  assert.match(claimFlow, /this\.gateway\.claimEpoch/);
+  assert.match(claimFlow, /this\.gateway\.retryPreparePayout/);
+  assert.match(claimFlow, /this\.gateway\.dispatchPayout/);
+  assert.match(claimFlow, /this\.gateway\.retryPayout/);
+  assert.match(claimFlow, /this\.gateway\.confirmPayout/);
+  assert.match(claimFlow, /this\.gateway\.withdrawPayoutVault/);
+  assert.match(claimFlow, /this\.gateway\.inspectPayoutVaultWithdrawal/);
+  assert.match(claimFlow, /this\._persistPayout\(this\.payout, \{\}, \{ required: true \}\)/);
+  assert.match(claimFlow, /this\.payoutStore\.prepareWithdrawal/);
+  assert.match(claimFlow, /this\.payoutStore\.recordWithdrawalAttempt/);
+  assert.match(claimFlow, /Do not submit another withdrawal until this exact hash is reconciled/);
+  assert.match(claimFlow, /\['FAILED', 'DROPPED'\]\.includes\(attemptStatus\)/);
+  assert.match(claimFlow, /submittedHash = null;[\s\S]*?action = 'REFRESH_WITHDRAWAL'/);
+  assert.match(claimFlow, /this\.gateway\.refreshPayoutWithdrawal/);
+  assert.doesNotMatch(claimFlow, /child transfer|childHash|verifyClaimDelivery/i);
+});
+
+test('payout stages and the recipient vault are visible without implying escrow is delivered', () => {
+  assert.match(htmlSource, /id="position-payout-stage"/);
+  assert.match(htmlSource, /id="position-payout-vault"/);
+  assert.match(htmlSource, /id="payout-secondary"/);
+  assert.match(appSource, /VAULT PREPARING/);
+  assert.match(appSource, /ESCROW DISPATCHED/);
+  assert.match(appSource, /RECIPIENT WITHDRAWAL READY/);
+  assert.match(appSource, /WITHDRAWN TO RECIPIENT/);
+  assert.match(stylesSource, /\[data-payout-state="FUNDED_IN_ESCROW"\]/);
+  assert.match(stylesSource, /\[data-payout-state="EOA_WITHDRAWN"\]/);
 });

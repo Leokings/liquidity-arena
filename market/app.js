@@ -9,6 +9,7 @@ import { createActivityStore } from './activity-store.js';
 import { createDeploymentRegistry } from './deployment-registry.js';
 import { GenLayerGateway, assertFinalizedExecution } from './genlayer-client.js';
 import { formatAttoToGen, parseGenToAtto } from './gen-units.js';
+import { createPayoutStore } from './payout-store.js';
 import {
   LiveMarketDriver,
   WINDOW_QUERIES,
@@ -24,25 +25,21 @@ import {
   selectRoundTargets,
 } from './finalized-round-frame.js';
 import {
-  V6_ASSETS,
-  V6_POLICY,
+  V8_ASSETS,
+  V8_POLICY,
   normalizeArenaConfig,
-  normalizeV6Epoch,
+  normalizeV8Epoch,
+  normalizeV8Payout,
   normalizeVerifiedClaimQuote,
-  v6ClaimGate,
-  v6TimeoutGate,
-  v6WagerGate,
-} from './v6-state.js';
+  v8ClaimGate,
+  v8TimeoutGate,
+  v8WagerGate,
+} from './v8-state.js';
 import {
   clearWalletClaimIntentHref,
-  normalizeWalletPositionPage,
-  reconcileWalletPositionSnapshot,
-  WalletPositionRetryError,
+  readWalletPositionPage,
   walletClaimTarget,
   walletClaimIntentFromHref,
-  walletClaimSummary,
-  walletPositionPageWindow,
-  walletPositionPresentation,
 } from './wallet-positions.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -58,19 +55,18 @@ const WINDOW_CONFIG = Object.freeze({
 const DEPLOYMENT_REGISTRY = createDeploymentRegistry(import.meta.env);
 const ACTIVE_DEPLOYMENT = DEPLOYMENT_REGISTRY.active;
 const EXPECTED_CONTRACT_PROTOCOL = ACTIVE_DEPLOYMENT.protocolVersion;
-const TARGET_ARENA_WAGERING_MESSAGE = `Wagering requires the verified active ${EXPECTED_CONTRACT_PROTOCOL} StudioNet deployment.`;
-const TARGET_V6_POLICY = V6_POLICY;
+const TARGET_ARENA_WAGERING_MESSAGE = `Wagering requires the verified active ${EXPECTED_CONTRACT_PROTOCOL} Bradbury deployment.`;
+const TARGET_V8_POLICY = V8_POLICY;
 const ROUND_REFRESH_MS = 15_000;
-const WALLET_HISTORY_READ_ATTEMPTS = 2;
 const NETWORK_PRESENTATIONS = Object.freeze({
-  studionet: Object.freeze({
-    label: 'STUDIONET',
-    name: 'StudioNet',
-    explorerLabel: 'STUDIONET EXPLORER',
-    explorerHome: 'https://explorer-studio.genlayer.com/',
-    explorerTxBase: 'https://explorer-studio.genlayer.com/tx/',
-    requiresFeeReserve: false,
-    finalityNotice: 'StudioNet normally finalizes faster, but success is shown only after FINALIZED contract execution and state verification.',
+  'testnet-bradbury': Object.freeze({
+    label: 'BRADBURY',
+    name: 'Bradbury testnet',
+    explorerLabel: 'BRADBURY EXPLORER',
+    explorerHome: 'https://explorer-bradbury.genlayer.com/',
+    explorerTxBase: 'https://explorer-bradbury.genlayer.com/tx/',
+    requiresFeeReserve: true,
+    finalityNotice: 'Bradbury requires transaction fees. Success is shown only after FINALIZED contract execution and exact state verification.',
   }),
 });
 const UNSUPPORTED_NETWORK_PRESENTATION = Object.freeze({
@@ -82,7 +78,7 @@ const UNSUPPORTED_NETWORK_PRESENTATION = Object.freeze({
   requiresFeeReserve: true,
   finalityNotice: 'Success is shown only after FINALIZED contract execution and state verification.',
 });
-const TERMINAL_ROUND_STATUSES = new Set(['RESOLVED', 'UNDETERMINED', 'TIMED_OUT']);
+const TERMINAL_ROUND_STATUSES = new Set(['RESOLVED', 'TIMED_OUT']);
 const MODAL_FOCUSABLE_SELECTOR = [
   'a[href]',
   'area[href]',
@@ -348,7 +344,7 @@ function eventMessage(event, frame) {
   }
 }
 
-function v6RoundView(epoch, objective, deployment) {
+function v8RoundView(epoch, objective, deployment) {
   const objectiveRecord = objective === 'LOW' ? epoch.low : epoch.high;
   return Object.freeze({
     deploymentAlias: deployment.alias,
@@ -364,7 +360,7 @@ function v6RoundView(epoch, objective, deployment) {
     phase: epoch.phase,
     resultStatus: epoch.resultStatus,
     settlementMode: objectiveRecord.settlementMode,
-    assetIds: V6_ASSETS,
+    assetIds: V8_ASSETS,
     entryOpensTimestamp: epoch.wagerOpensTimestamp,
     entryDeadlineTimestamp: epoch.wagerClosesTimestamp,
     battleStartsTimestamp: epoch.battleStartsTimestamp,
@@ -388,10 +384,10 @@ function v6RoundView(epoch, objective, deployment) {
   });
 }
 
-function v6AssetView(raw, objective) {
+function v8AssetView(raw, objective) {
   if (!raw || typeof raw !== 'object') throw new TypeError('Arena epoch asset is unavailable.');
   const assetId = String(raw.asset_id || '').trim().toUpperCase();
-  if (!V6_ASSETS.includes(assetId)) throw new RangeError('Arena epoch asset is unsupported.');
+  if (!V8_ASSETS.includes(assetId)) throw new RangeError('Arena epoch asset is unsupported.');
   const totalStakeAtto = BigInt(objective === 'LOW' ? raw.low_stake_atto : raw.high_stake_atto);
   return Object.freeze({
     assetId,
@@ -474,8 +470,12 @@ class LiquidityArenaApp {
     this.walletBalanceAtto = null;
     this.entry = null;
     this.claimQuote = null;
+    this.payout = null;
+    this.payoutAction = null;
     this.onchainPositions = [];
     this.onchainPositionCount = 0;
+    this.onchainEpochsScanned = 0;
+    this.onchainHistoryCursor = null;
     this.onchainPositionsByDeployment = new Map();
     this.onchainPositionCountsByDeployment = new Map();
     this.onchainHistoryErrorsByDeployment = new Map();
@@ -483,6 +483,7 @@ class LiquidityArenaApp {
     this.onchainHistoryLoading = false;
     this.onchainHistoryRequestId = 0;
     this.activityStore = createActivityStore();
+    this.payoutStore = createPayoutStore();
     this.activityReconcilePromise = null;
     this.positionLoading = false;
     this.positionReadError = false;
@@ -498,7 +499,7 @@ class LiquidityArenaApp {
         contractAddress: deployment.address,
         deploymentAlias: deployment.alias,
         protocolVersion: deployment.protocolVersion,
-        newWagersEnabled: deployment.newWagersEnabled,
+        newWagersEnabled: deployment.configured,
       }),
     ]));
     this.gateway = this.gateways.get(this.deployment.alias);
@@ -556,7 +557,8 @@ class LiquidityArenaApp {
     });
     $('#wallet-button').addEventListener('click', () => this.connectWallet());
     $('#submit-prediction').addEventListener('click', () => this.submitPrediction());
-    $('#claim-wager').addEventListener('click', () => this.claimWager());
+    $('#claim-wager').addEventListener('click', () => this.advancePayout());
+    $('#payout-secondary')?.addEventListener('click', () => this.advancePayout({ retry: true }));
     $('#claim-reconnect')?.addEventListener('click', async () => {
       await this.connectWallet();
     });
@@ -857,8 +859,9 @@ class LiquidityArenaApp {
     }
     const escrowCopy = $('#network-escrow-copy');
     if (escrowCopy) {
-      const role = this.deployment.newWagersEnabled ? 'active' : 'legacy claim-only';
-      escrowCopy.textContent = `${this.deployment.protocolVersion} is the ${role} deployment on ${presentation.name}. Claims and refunds are pull-based and transfer only after FINALIZED execution.`;
+      escrowCopy.textContent = this.deployment.configured
+        ? `${this.deployment.protocolVersion} is the sole deployment on ${presentation.name}. Claims create immutable EVM vault payouts; only each recipient can withdraw its vault.`
+        : `${this.deployment.protocolVersion} is not configured in this build. All reads and money actions are disabled.`;
     }
   }
 
@@ -870,18 +873,18 @@ class LiquidityArenaApp {
         message: this.deploymentSelectionError,
       };
     }
-    if (!this.deployment.newWagersEnabled) {
+    if (!this.deployment.configured) {
       return {
         allowed: false,
-        code: 'LEGACY_CLAIM_ONLY',
-        message: 'This V6 deployment is claim-only. New wagers are accepted only by the active V7 deployment.',
+        code: 'V8_UNCONFIGURED',
+        message: 'The Bradbury V8 contract address has not been published in this build. Money actions are disabled.',
       };
     }
-    if (this.gateway.network !== 'studionet') {
+    if (this.gateway.network !== 'testnet-bradbury') {
       return {
         allowed: false,
-        code: 'STUDIONET_REQUIRED',
-        message: 'Test-GEN wagers are enabled only on the verified StudioNet deployment.',
+        code: 'BRADBURY_REQUIRED',
+        message: 'Test-GEN wagers are enabled only on verified Bradbury chain 4221.',
       };
     }
     const market = this.frame?.market;
@@ -901,6 +904,13 @@ class LiquidityArenaApp {
     }
     if (!this.gateway.wagerConfigured || !this.contractConfig) {
       return { allowed: false, code: 'CONTRACT_UNAVAILABLE', message: TARGET_ARENA_WAGERING_MESSAGE };
+    }
+    if (!this.contractConfig.payoutsEnabled || !this.contractConfig.newRiskEnabled) {
+      return {
+        allowed: false,
+        code: 'V8_RISK_PAUSED',
+        message: 'V8 payout rails or new-risk admission are paused on-chain.',
+      };
     }
     if (this.roundLoading) return { allowed: false, code: 'ROUND_LOADING', message: 'Verifying the exact-hour epoch.' };
     if (this.roundReadError || !this.round) return { allowed: false, code: 'ROUND_UNAVAILABLE', message: this.modalNotice || 'The exact-hour epoch is unavailable.' };
@@ -987,8 +997,8 @@ class LiquidityArenaApp {
       this.contractConfig = verifiedConfig;
       this.contractConfigsByDeployment.set(this.deployment.alias, verifiedConfig);
       if (roundResult.status === 'rejected') throw roundResult.reason;
-      const epoch = normalizeV6Epoch(roundResult.value);
-      const round = v6RoundView(epoch, this.objectiveSelector, this.deployment);
+      const epoch = normalizeV8Epoch(roundResult.value);
+      const round = v8RoundView(epoch, this.objectiveSelector, this.deployment);
       if (recentEpochsResult.status === 'fulfilled' && recentEpochsResult.value) {
         this.knownEpochEndTimestampsByDeployment.set(
           this.deployment.alias,
@@ -1022,15 +1032,15 @@ class LiquidityArenaApp {
         // already-verified terminal scoreboard is immutable and reused.
       } else if (displayRaw) {
         try {
-          nextDisplayRound = v6RoundView(
-            normalizeV6Epoch(displayRaw),
+          nextDisplayRound = v8RoundView(
+            normalizeV8Epoch(displayRaw),
             this.objectiveSelector,
             this.deployment,
           );
           if (isTerminalRound(nextDisplayRound) && nextDisplayRound.epoch.resultStatus === 'DETERMINED') {
             // When this is also the action epoch, its compact record was read
             // above. Reuse a complete agreeing vector instead of spending five
-            // additional StudioNet calls.
+            // additional Bradbury calls.
             if (canReuseFinalizedRoundVector(
               this.displayRound,
               this.displayRoundAssets,
@@ -1038,10 +1048,10 @@ class LiquidityArenaApp {
             )) {
               nextDisplayAssets = this.displayRoundAssets;
             } else {
-              const rawAssets = await Promise.all(V6_ASSETS.map((assetId) =>
+              const rawAssets = await Promise.all(V8_ASSETS.map((assetId) =>
                 this.gateway.readEpochAsset(targets.displayEpochEndTimestamp, assetId)));
               nextDisplayAssets = Object.freeze(rawAssets.map((asset) =>
-                v6AssetView(asset, this.objectiveSelector)));
+                v8AssetView(asset, this.objectiveSelector)));
             }
           }
         } catch {
@@ -1066,7 +1076,7 @@ class LiquidityArenaApp {
       this.displayRoundAssets = nextDisplayAssets;
       this._refreshDisplayedFrame();
       // Pool, wallet and claim details are visible only inside this modal.
-      // Avoid an otherwise permanent extra StudioNet read every 15 seconds
+      // Avoid an otherwise permanent extra Bradbury read every 15 seconds
       // while the public market view is idle.
       if (!$('#prediction-modal').hidden) {
         try {
@@ -1154,9 +1164,12 @@ class LiquidityArenaApp {
   }
 
   async _loadWalletHistory({ append = false, deploymentAlias = null } = {}) {
+    if (deploymentAlias && deploymentAlias !== 'v8') return;
     if (!this.gateway.connected) {
       this.onchainPositions = [];
       this.onchainPositionCount = 0;
+      this.onchainEpochsScanned = 0;
+      this.onchainHistoryCursor = null;
       this.onchainPositionsByDeployment.clear();
       this.onchainPositionCountsByDeployment.clear();
       this.onchainHistoryErrorsByDeployment.clear();
@@ -1171,98 +1184,126 @@ class LiquidityArenaApp {
     if (this.onchainHistoryAccount !== account) {
       this.onchainPositions = [];
       this.onchainPositionCount = 0;
+      this.onchainEpochsScanned = 0;
+      this.onchainHistoryCursor = null;
       this.onchainPositionsByDeployment.clear();
       this.onchainPositionCountsByDeployment.clear();
       this.onchainHistoryErrorsByDeployment.clear();
       this.onchainHistoryAccount = account;
     }
+    if (append && !this.onchainHistoryCursor) return;
     const historyRequestId = ++this.onchainHistoryRequestId;
     this.onchainHistoryLoading = true;
     this._renderActivity();
-    const requestedAlias = deploymentAlias;
-    const deployments = requestedAlias
-      ? [DEPLOYMENT_REGISTRY.get(requestedAlias)]
-      : DEPLOYMENT_REGISTRY.all;
-    await Promise.all(deployments.map(async (deployment) => {
-      const historyGateway = this.gateways.get(deployment.alias);
-      const previous = this.onchainPositionsByDeployment.get(deployment.alias) || [];
-      const previousCount = this.onchainPositionCountsByDeployment.get(deployment.alias)
-        ?? previous.length;
-      try {
-        let snapshot = null;
-        let appendAttempt = append;
-        for (let attempt = 0; attempt < WALLET_HISTORY_READ_ATTEMPTS; attempt += 1) {
-          const count = await historyGateway.readWalletPositionCount(account);
-          const effectiveAppend = appendAttempt && count === previousCount;
-          const window = walletPositionPageWindow({
-            total: count,
-            loaded: effectiveAppend ? previous.length : 0,
-          });
-          const rawPage = window.limit > 0
-            ? await historyGateway.readWalletPositionPage(account, window.offset, window.limit)
-            : {
-                account,
-                offset: window.offset,
-                next_offset: window.offset,
-                total: count,
-                positions: [],
-              };
-          try {
-            const page = normalizeWalletPositionPage(rawPage, deployment, {
-              account,
-              offset: window.offset,
-              limit: window.limit,
-              expectedTotal: count,
-            });
-            snapshot = reconcileWalletPositionSnapshot({
-              previousPositions: previous,
-              previousCount,
-              nextPage: page,
-              observedCount: count,
-              append: effectiveAppend,
-            });
-            break;
-          } catch (error) {
-            const retryable = error instanceof WalletPositionRetryError || error?.retryable === true;
-            if (!retryable || attempt + 1 >= WALLET_HISTORY_READ_ATTEMPTS) throw error;
-            if (error.refreshNewest) appendAttempt = false;
-          }
-        }
-        if (!snapshot) throw new Error('Wallet position history could not be verified consistently.');
-        if (historyRequestId !== this.onchainHistoryRequestId
-          || !this.gateway.connected || this.gateway.account !== account) return;
-        this.onchainPositionCountsByDeployment.set(deployment.alias, snapshot.count);
-        this.onchainPositionsByDeployment.set(deployment.alias, snapshot.positions);
-        this.onchainHistoryErrorsByDeployment.delete(deployment.alias);
-      } catch (error) {
-        if (historyRequestId !== this.onchainHistoryRequestId
-          || !this.gateway.connected || this.gateway.account !== account) return;
-        const snapshot = reconcileWalletPositionSnapshot({
-          previousPositions: previous,
-          previousCount,
-          error,
+    try {
+      const page = await readWalletPositionPage({
+        gateway: this.gateway,
+        account,
+        cursor: append ? this.onchainHistoryCursor : null,
+        pageSize: 25,
+      });
+      const scannedRows = await Promise.all(page.positions.map(async (position) => {
+        const normalizedQuote = normalizeVerifiedClaimQuote(position.quote, {
+          epochEndTimestamp: position.epochEndTimestamp,
+          objective: position.objective,
+          account,
         });
-        this.onchainPositionCountsByDeployment.set(deployment.alias, snapshot.count);
-        this.onchainPositionsByDeployment.set(deployment.alias, snapshot.positions);
+        if (!normalizedQuote.payoutId) {
+          return Object.freeze({
+            ...normalizedQuote,
+            historyKind: 'POSITION',
+            identity: position.identity,
+          });
+        }
+        const normalizedPayout = normalizeV8Payout(
+          await this.gateway.readPayout(normalizedQuote.payoutId),
+          { payoutId: normalizedQuote.payoutId, recipient: account },
+        );
+        this._persistPayout(normalizedPayout);
+        return Object.freeze({
+          ...normalizedPayout,
+          historyKind: 'PAYOUT',
+          identity: position.identity,
+        });
+      }));
+
+      const durable = this.payoutStore.list({
+        account,
+        contractAddress: this.gateway.contractAddress,
+        chainId: 4221,
+      });
+      let durableRefreshFailed = false;
+      const durableRows = (await Promise.all(durable.map(async (record) => {
+        try {
+          const normalizedPayout = normalizeV8Payout(await this.gateway.readPayout(record.payoutId), {
+            payoutId: record.payoutId,
+            recipient: account,
+          });
+          this._persistPayout(normalizedPayout);
+          return Object.freeze({
+            ...normalizedPayout,
+            historyKind: 'PAYOUT',
+            identity: `${this.gateway.contractAddress.toLowerCase()}:${normalizedPayout.epochEndTimestamp}:${normalizedPayout.objective}`,
+          });
+        } catch {
+          durableRefreshFailed = true;
+          return Object.freeze({
+            payoutId: record.payoutId,
+            recipient: record.account,
+            amountAtto: BigInt(record.amountAtto),
+            epochEndTimestamp: record.epochEndTimestamp,
+            objective: record.objective,
+            settlementMode: 'UNKNOWN',
+            state: record.state,
+            vault: record.vault,
+            historyKind: 'PAYOUT',
+            stale: true,
+            identity: `${record.contractAddress}:${record.epochEndTimestamp}:${record.objective}`,
+          });
+        }
+      }))).filter(Boolean);
+      if (historyRequestId !== this.onchainHistoryRequestId) return;
+      if (!this.gateway.connected || this.gateway.account?.toLowerCase() !== account.toLowerCase()) return;
+
+      const merged = new Map();
+      const priorRows = append ? this.onchainPositions : [];
+      for (const row of [...priorRows, ...scannedRows, ...durableRows]) {
+        const previous = merged.get(row.identity);
+        if (!previous || row.historyKind === 'PAYOUT') merged.set(row.identity, row);
+      }
+      this.onchainPositions = [...merged.values()].sort((left, right) =>
+        right.epochEndTimestamp - left.epochEndTimestamp
+          || left.objective.localeCompare(right.objective));
+      this.onchainPositionCount = page.totalEpochs;
+      this.onchainEpochsScanned = page.scannedEpochs;
+      this.onchainHistoryCursor = page.nextCursor;
+      this.onchainPositionsByDeployment.set('v8', this.onchainPositions);
+      this.onchainPositionCountsByDeployment.set('v8', page.totalEpochs);
+      this.onchainHistoryErrorsByDeployment.clear();
+      if (durableRefreshFailed) {
         this.onchainHistoryErrorsByDeployment.set(
-          deployment.alias,
-          `${deployment.alias.toUpperCase()} position history could not be refreshed. Last verified rows remain visible.`,
+          'v8',
+          'One or more locally journaled V8 payouts could not be refreshed. No action is enabled from stale state.',
         );
       }
-    }));
-    if (historyRequestId !== this.onchainHistoryRequestId) return;
-    if (this.gateway.connected && this.gateway.account === account) this._rebuildWalletHistory();
-    this.onchainHistoryLoading = false;
-    this._renderActivity();
+    } catch {
+      if (historyRequestId === this.onchainHistoryRequestId) {
+        this.onchainHistoryErrorsByDeployment.set(
+          'v8',
+          'V8 epoch and claim-quote history could not be verified. Previously verified rows remain visible only for recovery navigation.',
+        );
+      }
+    } finally {
+      if (historyRequestId === this.onchainHistoryRequestId) {
+        this.onchainHistoryLoading = false;
+        this._renderActivity();
+      }
+    }
   }
 
   _rebuildWalletHistory() {
-    this.onchainPositionCount = [...this.onchainPositionCountsByDeployment.values()]
-      .reduce((sum, count) => sum + count, 0);
-    this.onchainPositions = [...this.onchainPositionsByDeployment.values()]
-      .flat()
-      .sort((left, right) => right.epochEndTimestamp - left.epochEndTimestamp
-        || left.deploymentAlias.localeCompare(right.deploymentAlias));
+    this.onchainPositions = this.onchainPositionsByDeployment.get('v8') || [];
+    this.onchainPositionCount = this.onchainPositionCountsByDeployment.get('v8') || 0;
   }
 
   async _loadPositionState() {
@@ -1301,7 +1342,7 @@ class LiquidityArenaApp {
             this.roundAsset = null;
             this.roundAssetReadFailed = true;
           } else {
-            this.roundAsset = v6AssetView(assetResult.value, round.objective);
+            this.roundAsset = v8AssetView(assetResult.value, round.objective);
             this.roundAssetReadFailed = false;
           }
         } catch {
@@ -1327,15 +1368,24 @@ class LiquidityArenaApp {
         });
         this.entry = quote;
         this.claimQuote = quote;
+        this.payout = quote.payoutId
+          ? normalizeV8Payout(await this.gateway.readPayout(quote.payoutId), {
+              payoutId: quote.payoutId,
+              recipient: account,
+            })
+          : null;
+        if (this.payout) this._persistPayout(this.payout);
       } else {
         this.entry = null;
         this.claimQuote = null;
+        this.payout = null;
       }
       this.positionReadError = false;
     } catch (error) {
       if (positionRequestId !== this.positionRequestId) return;
       this.entry = null;
       this.claimQuote = null;
+      this.payout = null;
       this.positionReadError = true;
       throw error;
     } finally {
@@ -1360,7 +1410,7 @@ class LiquidityArenaApp {
     try {
       const rawAsset = await this.gateway.readEpochAsset(this.round.epochEndTimestamp, asset.contractId);
       if (requestId !== this.roundAssetRequestId) return;
-      this.roundAsset = v6AssetView(rawAsset, this.objectiveSelector);
+      this.roundAsset = v8AssetView(rawAsset, this.objectiveSelector);
       this.roundAssetReadFailed = false;
       this._syncPositionAuxiliaryReadError();
     } catch {
@@ -1377,6 +1427,8 @@ class LiquidityArenaApp {
     this._clearPositionState();
     this.onchainPositions = [];
     this.onchainPositionCount = 0;
+    this.onchainEpochsScanned = 0;
+    this.onchainHistoryCursor = null;
     this.onchainPositionsByDeployment.clear();
     this.onchainPositionCountsByDeployment.clear();
     this.onchainHistoryErrorsByDeployment.clear();
@@ -1553,7 +1605,7 @@ class LiquidityArenaApp {
     } catch (error) {
       return { allowed: false, amount: null, message: error.message };
     }
-    const gate = v6WagerGate({
+    const gate = v8WagerGate({
       epoch: this.round?.epoch,
       entry: this.entry,
       objective: this.objectiveSelector,
@@ -1578,14 +1630,36 @@ class LiquidityArenaApp {
 
   _walletClaimOverview() {
     const connected = Boolean(this.gateway.account);
-    const positions = connected ? this.onchainPositions : [];
-    const summary = walletClaimSummary(positions);
-    const loadedCount = positions.length;
+    const recoverable = connected
+      ? this.onchainPositions.filter((row) => row.historyKind === 'PAYOUT'
+        ? row.state !== 'EOA_WITHDRAWN'
+        : row.eligible === true && row.claimed !== true && !row.payoutId && row.amountAtto > 0n)
+      : [];
+    const currentIdentity = this.claimQuote
+      ? `${this.gateway.contractAddress.toLowerCase()}:${this.claimQuote.epochEndTimestamp}:${this.claimQuote.objective}`
+      : '';
+    const currentEligible = connected && this.claimQuote?.eligible === true
+      && !this.claimQuote.payoutId
+      && !recoverable.some(({ identity }) => identity === currentIdentity)
+      ? [this.claimQuote]
+      : [];
+    const amountAtto = recoverable.reduce((sum, payout) => sum + payout.amountAtto, 0n)
+      + currentEligible.reduce((sum, quote) => sum + quote.amountAtto, 0n);
+    const summary = Object.freeze({
+      count: recoverable.length + currentEligible.length,
+      amountAtto,
+      refundCount: [...recoverable, ...currentEligible]
+        .filter((row) => row.settlementMode?.startsWith('REFUND_')).length,
+      payoutCount: [...recoverable, ...currentEligible]
+        .filter((row) => !row.settlementMode?.startsWith('REFUND_')).length,
+      positions: Object.freeze([...recoverable, ...currentEligible]),
+    });
+    const loadedCount = connected ? this.onchainEpochsScanned : 0;
     const knownCount = connected ? this.onchainPositionCount : 0;
     const failedDeploymentCount = connected
       ? this.onchainHistoryErrorsByDeployment.size
       : 0;
-    const incomplete = connected && knownCount > loadedCount;
+    const incomplete = connected && loadedCount < knownCount;
     const refreshing = connected && this.onchainHistoryLoading;
     const uncertain = failedDeploymentCount > 0 || refreshing;
     const lowerBound = incomplete && !uncertain;
@@ -1648,11 +1722,11 @@ class LiquidityArenaApp {
           ? `CLAIM AT LEAST ${countAndKinds} · ≥${displayGen(summary.amountAtto, 6)}`
           : `CLAIM ${countAndKinds} · ${displayGen(summary.amountAtto, 6)}`;
       availability.textContent = overview.failedDeploymentCount > 0
-        ? 'One or more deployment histories could not be refreshed. These claims are last verified; retry history before treating this as the complete wallet total.'
+        ? 'V8 epoch and quote history could not be refreshed. These rows are last verified; retry before treating this as the complete wallet total.'
         : overview.refreshing
           ? 'Wallet history is refreshing. Displayed claim candidates are last verified and must be refreshed before treating them as currently available.'
           : overview.incomplete
-            ? `Showing ${overview.loadedCount} of ${overview.knownCount} known positions. Open the claim panel to claim these rows or load older positions before treating the aggregate as complete.`
+            ? `Scanned ${overview.loadedCount} of ${overview.knownCount} V8 epochs. Open the claim panel to continue scanning older epochs before treating the aggregate as complete.`
             : 'Verified refunds or payouts are ready. Open the claim panel and choose the exact position.';
       availability.dataset.state = historyNeedsAttention ? 'closed' : 'open';
       button.title = overview.uncertain
@@ -1674,9 +1748,9 @@ class LiquidityArenaApp {
           ? `CHECK ${Math.max(0, overview.knownCount - overview.loadedCount)} OLDER POSITION${overview.knownCount - overview.loadedCount === 1 ? '' : 'S'} FOR CLAIMS`
           : 'CHECKING WALLET CLAIMS';
       availability.textContent = overview.failedDeploymentCount > 0
-        ? 'A deployment history is unavailable, so zero loaded claims does not prove that no refund or payout exists. Open the claim panel and retry.'
+        ? 'V8 history is unavailable, so zero loaded claims does not prove that no refund or payout exists. Open the claim panel and retry.'
         : overview.incomplete
-          ? `Only ${overview.loadedCount} of ${overview.knownCount} known positions are loaded. Open the claim panel and load older rows before concluding there is nothing to claim.`
+          ? `Only ${overview.loadedCount} of ${overview.knownCount} V8 epochs have been scanned. Open the claim panel and scan older epochs before concluding there is nothing to claim.`
           : 'Wallet history is refreshing. Open the claim panel to watch verification progress.';
       availability.dataset.state = 'closed';
       button.title = 'Wallet claim history is incomplete; open to retry or load older positions';
@@ -1711,7 +1785,7 @@ class LiquidityArenaApp {
     $('#prediction-rule-copy').textContent = 'Choose one asset for this objective. Same-asset top-ups are allowed until the immutable wager close; switching assets is not.';
     $('#prediction-legend').textContent = `${this.objectiveSelector} RETURN PICK`;
     $('#how-resolution-title').textContent = `Live leaders are provisional; ${this.deployment.alias.toUpperCase()} settles funds`;
-    $('#how-resolution-copy').textContent = `The live ROUND map uses Binance boundary data for immediate feedback. ${this.deployment.protocolVersion} independently evaluates ${TARGET_V6_POLICY} across five exchanges; only its FINALIZED result controls claims.`;
+    $('#how-resolution-copy').textContent = `The live ROUND map uses Binance boundary data for immediate feedback. ${this.deployment.protocolVersion} independently evaluates ${TARGET_V8_POLICY} across five exchanges; only its FINALIZED result controls payouts.`;
     const displayedEpoch = this.round?.epochEndTimestamp || Math.floor(target.battleEndMs / 1000);
     $('#round-id').textContent = `#${this.round?.roundId || target.epochId}`;
     $('#round-entry-deadline').textContent = formatRoundTime(this.round?.entryDeadlineTimestamp || Math.floor(target.wagerCloseMs / 1000));
@@ -1777,15 +1851,21 @@ class LiquidityArenaApp {
       ? { allowed: false, reason: 'Verifying position.' }
       : this.positionReadError
         ? { allowed: false, reason: 'Position could not be verified.' }
-        : v6ClaimGate(this.claimQuote);
+        : v8ClaimGate(this.claimQuote);
     const position = $('#wallet-position');
     const claimButton = $('#claim-wager');
     const reconnectButton = $('#claim-reconnect');
     const positionRefresh = $('#position-refresh');
+    const payoutSecondary = $('#payout-secondary');
     const unlockButton = $('#unlock-refund');
+    position.dataset.payoutState = this.payout?.state || 'NONE';
     $('#position-choice').textContent = contractAssetLabel(this.entry?.choiceAssetId);
     $('#position-stake').textContent = displayGen(this.entry?.stakeAtto, 6);
     $('#position-claimable').textContent = displayGen(this.claimQuote?.amountAtto, 6);
+    $('#position-payout-stage').textContent = this.payout?.state?.replaceAll('_', ' ') || 'NOT CREATED';
+    $('#position-payout-vault').textContent = this.payout && !/^0x0{40}$/i.test(this.payout.vault)
+      ? `${this.payout.vault.slice(0, 8)}…${this.payout.vault.slice(-6)}`
+      : '—';
     reconnectButton.hidden = !this.pendingClaimIntent || this.gateway.connected;
     reconnectButton.disabled = Boolean(this.walletConnectionPromise);
     reconnectButton.textContent = this.pendingClaimIntent
@@ -1793,29 +1873,77 @@ class LiquidityArenaApp {
       : 'RECONNECT WALLET TO VERIFY & CLAIM';
     positionRefresh.hidden = !this.gateway.connected || !this.positionReadError;
     positionRefresh.disabled = this.positionLoading;
-    claimButton.disabled = this.claimingWager || this.submittingPrediction || this.activatingEmergencyRefund || !claim.allowed;
+    const payoutActionable = this.payout && this.payout.state !== 'EOA_WITHDRAWN';
+    claimButton.disabled = this.claimingWager
+      || this.submittingPrediction
+      || this.activatingEmergencyRefund
+      || (!payoutActionable && !claim.allowed);
+    payoutSecondary.hidden = !this.payout
+      || !['PREPARING', 'DISPATCHED'].includes(this.payout.state);
+    const retryAnchor = this.payout?.state === 'PREPARING'
+      ? this.payout.lastPrepareTimestamp
+      : this.payout?.lastDispatchTimestamp;
+    const retryRemaining = retryAnchor
+      ? Math.max(0, retryAnchor + 3_600 - Math.floor(Date.now() / 1_000))
+      : 0;
+    payoutSecondary.disabled = this.claimingWager
+      || this.submittingPrediction
+      || this.activatingEmergencyRefund
+      || retryRemaining > 0;
+    const retryLabel = this.payout?.state === 'PREPARING'
+      ? 'RETRY VAULT PREPARATION'
+      : 'RETRY ESCROW DISPATCH';
+    payoutSecondary.textContent = retryRemaining > 0
+      ? `${retryLabel} IN ${Math.ceil(retryRemaining / 60)}M`
+      : retryLabel;
     if (this.claimingWager) {
       position.dataset.state = 'pending';
-      $('#position-state').textContent = 'VERIFYING DELIVERY';
-      claimButton.textContent = 'WAITING FOR CLAIM + CHILD TRANSFER…';
+      $('#position-state').textContent = 'VERIFYING PAYOUT STAGE';
+      claimButton.textContent = 'WAITING FOR FINALIZED STATE…';
+    } else if (this.payout?.state === 'PREPARING') {
+      position.dataset.state = 'pending';
+      $('#position-state').textContent = 'VAULT PREPARING';
+      claimButton.textContent = 'DISPATCH TO PREPARED VAULT';
+    } else if (this.payout?.state === 'DISPATCHED') {
+      position.dataset.state = 'pending';
+      $('#position-state').textContent = 'ESCROW DISPATCHED';
+      claimButton.textContent = 'CONFIRM EXACT VAULT CREDIT';
+    } else if (this.payout?.state === 'FUNDED_IN_ESCROW') {
+      position.dataset.state = 'claimable';
+      $('#position-state').textContent = 'RECIPIENT WITHDRAWAL READY';
+      const journal = this.payoutStore.get(this.payout.payoutId);
+      const withdrawal = journal?.withdrawalAttempts?.at(-1) || null;
+      claimButton.textContent = journal?.withdrawalIntent && !withdrawal
+        ? 'WITHDRAWAL LOCKED · VERIFY WALLET HISTORY'
+        : ['SUBMITTED', 'PENDING'].includes(withdrawal?.status)
+        ? 'VERIFY PENDING EVM WITHDRAWAL'
+        : ['FINALIZED', 'SUPERSEDED'].includes(withdrawal?.status)
+          ? 'REFRESH FINAL V8 PAYOUT STATE'
+          : ['FAILED', 'DROPPED'].includes(withdrawal?.status)
+            ? `RETRY ${displayGen(this.payout.amountAtto, 6)} VAULT WITHDRAWAL`
+            : `WITHDRAW ${displayGen(this.payout.amountAtto, 6)} FROM MY EVM VAULT`;
+    } else if (this.payout?.state === 'EOA_WITHDRAWN') {
+      position.dataset.state = 'finalized';
+      $('#position-state').textContent = 'WITHDRAWN TO RECIPIENT';
+      claimButton.textContent = 'PAYOUT COMPLETE';
     } else if (claim.allowed) {
       position.dataset.state = 'claimable';
-      $('#position-state').textContent = this.claimQuote.settlementMode?.startsWith('REFUND_') ? 'REFUND AVAILABLE' : 'PAYOUT AVAILABLE';
-      claimButton.textContent = `${this.claimQuote.settlementMode?.startsWith('REFUND_') ? 'CLAIM REFUND' : 'CLAIM PAYOUT'} · ${displayGen(this.claimQuote.amountAtto, 6)}`;
+      $('#position-state').textContent = this.claimQuote.settlementMode?.startsWith('REFUND_') ? 'REFUND READY TO PREPARE' : 'PAYOUT READY TO PREPARE';
+      claimButton.textContent = `${this.claimQuote.settlementMode?.startsWith('REFUND_') ? 'CREATE REFUND PAYOUT' : 'CREATE PAYOUT'} · ${displayGen(this.claimQuote.amountAtto, 6)}`;
     } else {
       const hasPosition = (this.entry?.stakeAtto || 0n) > 0n;
       position.dataset.state = hasPosition ? 'position' : 'empty';
       $('#position-state').textContent = this.positionLoading
         ? 'VERIFYING'
         : this.entry?.claimed
-          ? 'CLAIMED'
+          ? 'WITHDRAWN'
           : this.gateway.connected
             ? (hasPosition ? 'POSITION RECORDED' : 'NO POSITION')
             : this.pendingClaimIntent ? 'RECONNECT TO CLAIM' : 'CONNECT WALLET';
       claimButton.textContent = claim.reason.toUpperCase();
     }
     const emergency = this.round
-      ? v6TimeoutGate(this.round.epoch, Math.floor(Date.now() / 1000))
+      ? v8TimeoutGate(this.round.epoch, Math.floor(Date.now() / 1000))
       : { allowed: false, reason: 'Epoch is unavailable.' };
     unlockButton.hidden = !this.contractConfig
       || this.round?.status !== 'OPEN'
@@ -1830,6 +1958,30 @@ class LiquidityArenaApp {
         ? 'UNLOCK PRINCIPAL REFUNDS'
         : emergency.reason.toUpperCase();
     this._renderActivity(claim);
+  }
+
+  _persistPayout(payout, hashes = {}, { required = false } = {}) {
+    if (!payout || !this.gateway.account || !this.gateway.contractAddress) {
+      if (required) throw new Error('The payout recovery identity is unavailable.');
+      return null;
+    }
+    try {
+      return this.payoutStore.upsert({
+        payoutId: payout.payoutId,
+        account: payout.recipient,
+        contractAddress: this.gateway.contractAddress,
+        chainId: 4221,
+        epochEndTimestamp: payout.epochEndTimestamp,
+        objective: payout.objective,
+        amountAtto: payout.amountAtto.toString(),
+        state: payout.state,
+        vault: /^0x0{40}$/i.test(payout.vault) ? '' : payout.vault,
+        hashes,
+      });
+    } catch (error) {
+      if (required) throw error;
+      return null;
+    }
   }
 
   _recordActivity(record) {
@@ -1848,39 +2000,39 @@ class LiquidityArenaApp {
 
   async _reconcileActivity() {
     if (this.activityReconcilePromise || !this.gateway.configured) return this.activityReconcilePromise;
-    const terminalFailures = new Set([
-      'CANCELED', 'UNDETERMINED', 'VALIDATORS_TIMEOUT', 'LEADER_TIMEOUT',
-    ]);
-    const records = this.activityStore.list({ limit: 50 }).filter((record) => record.status !== 'FINALIZED'
-      || (record.type === 'CLAIM' && record.deliveryStatus !== 'DELIVERED'));
+    const terminalFailures = new Set(['CANCELED', 'VALIDATORS_TIMEOUT', 'LEADER_TIMEOUT']);
+    const records = this.activityStore.list({ limit: 50 })
+      .filter((record) => record.status !== 'FINALIZED');
     this.activityReconcilePromise = Promise.all(records.map(async (record) => {
-      let deployment;
+      if (record.contractAddress.toLowerCase() !== this.gateway.contractAddress.toLowerCase()) return;
       try {
-        deployment = DEPLOYMENT_REGISTRY.resolveIdentity({
-          alias: record.deploymentAlias,
-          address: record.contractAddress,
-        });
-      } catch {
-        return;
-      }
-      const recordGateway = this.gateways.get(deployment.alias);
-      if (!recordGateway?.configured) return;
-      try {
-        const transaction = await recordGateway.readTransaction(record.hash);
-        const status = String(transaction?.statusName || transaction?.status_name || '').toUpperCase();
-        let executionSucceeded = false;
-        if (status === 'FINALIZED') {
-          try {
-            assertFinalizedExecution(transaction);
-            executionSucceeded = true;
-          } catch {
-            executionSucceeded = false;
+        if (record.domain === 'EVM') {
+          if (!record.payoutId || !this.gateway.connected
+            || record.account !== this.gateway.account.toLowerCase()) return;
+          const rawPayout = await this.gateway.readPayout(record.payoutId);
+          const inspection = await this.gateway.inspectPayoutVaultWithdrawal(record.hash, rawPayout);
+          const attemptStatus = inspection.status === 'VAULT_WITHDRAWN'
+            ? 'SUPERSEDED'
+            : inspection.status;
+          if (['PENDING', 'FAILED', 'DROPPED', 'FINALIZED', 'SUPERSEDED'].includes(attemptStatus)) {
+            this.payoutStore.recordWithdrawalAttempt(record.payoutId, {
+              hash: record.hash,
+              status: attemptStatus,
+            });
           }
+          if (['FINALIZED', 'SUPERSEDED'].includes(attemptStatus)) {
+            this.activityStore.upsert({ ...record, status: 'FINALIZED' });
+          }
+          return;
         }
-        if (status === 'FINALIZED' && executionSucceeded) {
+        const transaction = await this.gateway.readTransaction(record.hash);
+        const status = String(transaction?.statusName || transaction?.status_name || '').toUpperCase();
+        if (status === 'FINALIZED') {
+          assertFinalizedExecution(transaction);
           let verified = false;
+          let verifiedUpdate = {};
           if (record.type === 'WAGER') {
-            const entry = await recordGateway.readEpochEntry(
+            const entry = await this.gateway.readEpochClaimQuote(
               Number(record.roundId),
               record.objective,
               record.account,
@@ -1888,77 +2040,58 @@ class LiquidityArenaApp {
             verified = BigInt(entry?.stake_atto || 0) > 0n
               && String(entry?.choice_asset_id || '').toUpperCase() === record.assetId;
           } else if (record.type === 'CLAIM') {
-            const entry = await recordGateway.readEpochEntry(
-              Number(record.roundId),
-              record.objective,
-              record.account,
+            const quote = normalizeVerifiedClaimQuote(
+              await this.gateway.readEpochClaimQuote(
+                Number(record.roundId),
+                record.objective,
+                record.account,
+              ),
+              {
+                epochEndTimestamp: Number(record.roundId),
+                objective: record.objective,
+                account: record.account,
+              },
             );
-            const claimedAtto = BigInt(
-              entry?.claimed_amount_atto ?? entry?.claimed_atto ?? 0,
-            );
-            const signingQuoteText = record.quotedAmountAtto ?? record.amountAtto;
-            const signingQuoteAtto = signingQuoteText === null
-              ? null
-              : BigInt(signingQuoteText);
-            const parentStateVerified = entry?.claimed === true
-              && claimedAtto > 0n
-              && (signingQuoteAtto === null || claimedAtto >= signingQuoteAtto);
-            if (parentStateVerified) {
-              try {
-                const delivery = await recordGateway.verifyClaimDelivery(record.hash, {
-                  recipient: record.account,
-                  minimumValueAtto: claimedAtto,
-                  parentTransaction: transaction,
-                  expectedChildHash: record.childHash,
-                  discoveryRetries: 0,
-                  finalityRetries: 0,
-                });
-                this.activityStore.upsert({
-                  ...record,
-                  deploymentAlias: deployment.alias,
-                  quotedAmountAtto: signingQuoteAtto?.toString() ?? null,
-                  amountAtto: claimedAtto.toString(),
-                  childHash: delivery.childHash,
-                  deliveryStatus: 'DELIVERED',
-                  status: 'FINALIZED',
-                });
-                return;
-              } catch (error) {
-                this.activityStore.upsert({
-                  ...record,
-                  deploymentAlias: deployment.alias,
-                  quotedAmountAtto: signingQuoteAtto?.toString() ?? null,
-                  amountAtto: claimedAtto.toString(),
-                  childHash: error?.childHash || record.childHash,
-                  deliveryStatus: 'REVIEW',
-                  status: 'REVIEW',
-                });
-                return;
+            if (/^[0-9a-f]{64}$/.test(quote.payoutId)) {
+              const payout = normalizeV8Payout(await this.gateway.readPayout(quote.payoutId), {
+                payoutId: quote.payoutId,
+                recipient: record.account,
+              });
+              verified = payout.amountAtto === quote.amountAtto;
+              if (verified) {
+                this._persistPayout(payout);
+                verifiedUpdate = {
+                  payoutId: payout.payoutId,
+                  amountAtto: payout.amountAtto.toString(),
+                };
               }
             }
-            if (entry?.claimed === true && claimedAtto > 0n) {
-              this.activityStore.upsert({
-                ...record,
-                deploymentAlias: deployment.alias,
-                quotedAmountAtto: signingQuoteAtto?.toString() ?? null,
-                amountAtto: claimedAtto.toString(),
-                deliveryStatus: 'REVIEW',
-                status: 'REVIEW',
-              });
-              return;
-            }
           } else if (record.type === 'TIMEOUT_REFUND') {
-            const epoch = await recordGateway.readEpoch(Number(record.roundId));
+            const epoch = await this.gateway.readEpoch(Number(record.roundId));
             verified = String(epoch?.status || '').toUpperCase() === 'TIMED_OUT'
               && String(epoch?.result_status || '').toUpperCase() === 'TIMEOUT';
+          } else if (record.payoutId) {
+            const payout = normalizeV8Payout(await this.gateway.readPayout(record.payoutId), {
+              payoutId: record.payoutId,
+              recipient: record.account,
+            });
+            const expectedStates = {
+              RETRY_PREPARE: new Set(['PREPARING', 'DISPATCHED', 'FUNDED_IN_ESCROW', 'EOA_WITHDRAWN']),
+              DISPATCH: new Set(['DISPATCHED', 'FUNDED_IN_ESCROW', 'EOA_WITHDRAWN']),
+              RETRY_PAYOUT: new Set(['DISPATCHED', 'FUNDED_IN_ESCROW', 'EOA_WITHDRAWN']),
+              CONFIRM: new Set(['FUNDED_IN_ESCROW', 'EOA_WITHDRAWN']),
+              REFRESH_WITHDRAWAL: new Set(['EOA_WITHDRAWN']),
+            };
+            verified = expectedStates[record.type]?.has(payout.state) === true;
+            if (verified) this._persistPayout(payout);
           }
           this.activityStore.upsert({
             ...record,
-            deploymentAlias: deployment.alias,
+            ...verifiedUpdate,
             status: verified ? 'FINALIZED' : 'REVIEW',
           });
         } else if (status === 'FINALIZED' || terminalFailures.has(status)) {
-          this.activityStore.upsert({ ...record, deploymentAlias: deployment.alias, status: 'REVIEW' });
+          this.activityStore.upsert({ ...record, status: 'REVIEW' });
         }
       } catch {
         // The hash remains visible for manual explorer recovery if RPC reads fail.
@@ -1979,82 +2112,63 @@ class LiquidityArenaApp {
       account: this.gateway.account,
       limit: 12,
     }) : [];
-    const positions = this.gateway.account ? this.onchainPositions : [];
-    const claimOverview = this._walletClaimOverview();
-    const claimable = claimOverview.summary;
+    const rows = this.gateway.account ? this.onchainPositions : [];
+    const recoverable = rows.filter((row) => row.historyKind === 'PAYOUT'
+      ? row.state !== 'EOA_WITHDRAWN'
+      : row.eligible === true && row.claimed !== true && !row.payoutId && row.amountAtto > 0n);
     const loadMore = $('#load-more-positions');
     if (loadMore) {
-      const remaining = Math.max(0, this.onchainPositionCount - positions.length);
-      const nextLoadCount = DEPLOYMENT_REGISTRY.all.reduce((sum, deployment) => {
-        const deploymentPositions = this.onchainPositionsByDeployment.get(deployment.alias) || [];
-        const deploymentCount = this.onchainPositionCountsByDeployment.get(deployment.alias)
-          ?? deploymentPositions.length;
-        return sum + walletPositionPageWindow({
-          total: deploymentCount,
-          loaded: deploymentPositions.length,
-        }).limit;
-      }, 0);
-      loadMore.hidden = !this.gateway.account || remaining === 0;
+      const remainingEpochs = this.onchainHistoryCursor?.nextOffset || 0;
+      const nextCount = Math.min(25, remainingEpochs);
+      loadMore.hidden = !this.gateway.connected || remainingEpochs === 0;
       loadMore.disabled = this.onchainHistoryLoading;
-      loadMore.dataset.loadCount = String(nextLoadCount);
+      loadMore.dataset.loadCount = String(nextCount);
       loadMore.textContent = this.onchainHistoryLoading
-        ? `LOADING UP TO ${nextLoadCount} OLDER POSITION${nextLoadCount === 1 ? '' : 'S'}…`
-        : `LOAD UP TO ${nextLoadCount} OLDER POSITION${nextLoadCount === 1 ? '' : 'S'} · ${remaining} REMAIN`;
+        ? 'SCANNING V8 EPOCHS…'
+        : `SCAN ${nextCount} OLDER V8 EPOCH${nextCount === 1 ? '' : 'S'} · ${remainingEpochs} REMAIN`;
     }
     const claimSummary = $('#claim-summary');
     const claimSummaryActions = $('#claim-summary-actions');
-    claimSummary.hidden = claimable.count === 0;
-    claimSummary.dataset.verification = claimOverview.uncertain
-      ? 'last-verified'
-      : claimOverview.incomplete
-        ? 'partial'
-        : 'verified';
-    $('#claim-summary-total').textContent = claimOverview.uncertain
-      ? `${displayGen(claimable.amountAtto, 6)} · LAST VERIFIED`
-      : `${claimOverview.lowerBound ? '≥' : ''}${displayGen(claimable.amountAtto, 6)}`;
-    const claimKinds = [
-      claimable.refundCount > 0
-        ? `${claimable.refundCount} refund${claimable.refundCount === 1 ? '' : 's'}`
-        : '',
-      claimable.payoutCount > 0
-        ? `${claimable.payoutCount} payout${claimable.payoutCount === 1 ? '' : 's'}`
-        : '',
-    ].filter(Boolean).join(' + ');
-    const claimSummaryCopy = claimable.count === 0
-      ? ''
-      : claimOverview.failedDeploymentCount > 0
-        ? `${claimable.count} position${claimable.count === 1 ? ' was' : 's were'} last verified as claimable (${claimKinds}). Availability may have changed elsewhere; retry failed history, and every opened row gets an exact fresh quote before signing.`
-        : claimOverview.refreshing
-          ? `${claimable.count} last-verified position${claimable.count === 1 ? ' is' : 's are'} shown (${claimKinds}) while wallet history refreshes. Availability may have changed elsewhere; opening one refreshes its exact quote before signing.`
-          : claimOverview.incomplete
-            ? `${claimable.count} loaded position${claimable.count === 1 ? ' is' : 's are'} ready (${claimKinds}). This is a lower bound from ${claimOverview.loadedCount} of ${claimOverview.knownCount} known positions; load older rows for a complete aggregate.`
-            : `${claimable.count} verified on-chain position${claimable.count === 1 ? ' is' : 's are'} ready (${claimKinds}). Each claim still requires your wallet confirmation.`;
-    $('#claim-summary-copy').textContent = claimSummaryCopy;
+    claimSummary.hidden = recoverable.length === 0;
+    claimSummary.dataset.verification = this.onchainHistoryErrorsByDeployment.size ? 'last-verified' : 'verified';
+    $('#claim-summary-total').textContent = displayGen(
+      recoverable.reduce((sum, payout) => sum + payout.amountAtto, 0n),
+      6,
+    );
+    $('#claim-summary-copy').textContent = recoverable.length
+      ? `${recoverable.length} verified V8 position${recoverable.length === 1 ? '' : 's'} require a claim or payout stage. Open one to refresh exact state before signing.`
+      : '';
     claimSummaryActions.replaceChildren();
-    for (const entry of claimable.positions) {
-      const positionDeployment = DEPLOYMENT_REGISTRY.get(entry.deploymentAlias);
-      const presentation = walletPositionPresentation(entry, positionDeployment, location.href);
+    for (const payout of recoverable) {
       const row = document.createElement('div');
       row.setAttribute('role', 'listitem');
       const action = document.createElement('a');
       action.className = 'claim-summary-action';
-      action.href = presentation.href;
-      action.dataset.claimDeployment = positionDeployment.alias;
-      action.dataset.claimEpoch = String(presentation.claimTarget.epochEndTimestamp);
-      action.dataset.claimObjective = presentation.claimTarget.objective;
-      const claimKind = entry.settlementMode.startsWith('REFUND_') ? 'REFUND' : 'PAYOUT';
-      const crossDeployment = positionDeployment.alias !== this.deployment.alias;
-      action.textContent = crossDeployment
-        ? `OPEN ${positionDeployment.alias.toUpperCase()} & RECONNECT TO CLAIM · ${displayGen(entry.amountAtto, 6)}`
-        : `CLAIM ${claimKind} · ${displayGen(entry.amountAtto, 6)}`;
+      const href = new URL(location.href);
+      href.searchParams.delete('contract');
+      href.searchParams.set('deployment', 'v8');
+      href.searchParams.set('feed', 'live');
+      href.searchParams.set('epoch', String(payout.epochEndTimestamp));
+      href.searchParams.set('objective', payout.objective === 'LOW' ? 'lowest' : 'highest');
+      href.searchParams.set('claim', '1');
+      action.href = href.href;
+      action.dataset.claimDeployment = 'v8';
+      action.dataset.claimEpoch = String(payout.epochEndTimestamp);
+      action.dataset.claimObjective = payout.objective;
+      const payoutExists = payout.historyKind === 'PAYOUT';
+      action.textContent = payoutExists
+        ? `RESUME ${payout.state.replaceAll('_', ' ')} · ${displayGen(payout.amountAtto, 6)}`
+        : `CREATE ${payout.settlementMode.startsWith('REFUND_') ? 'REFUND' : 'PAYOUT'} · ${displayGen(payout.amountAtto, 6)}`;
       action.setAttribute(
         'aria-label',
-        crossDeployment
-          ? `Open ${positionDeployment.alias.toUpperCase()} and reconnect to claim ${claimKind.toLowerCase()} of ${displayGen(entry.amountAtto, 6)} for ${contractAssetLabel(entry.choiceAssetId)} ${entry.objective}, round ${entry.epochEndTimestamp}`
-          : `Claim ${claimKind.toLowerCase()} of ${displayGen(entry.amountAtto, 6)} for ${contractAssetLabel(entry.choiceAssetId)} ${entry.objective}, round ${entry.epochEndTimestamp}, ${positionDeployment.alias.toUpperCase()}`,
+        payoutExists
+          ? `Resume V8 payout ${payout.payoutId} for round ${payout.epochEndTimestamp}`
+          : `Open V8 ${payout.objective} position for round ${payout.epochEndTimestamp} and create its payout`,
       );
       const detail = document.createElement('span');
-      detail.textContent = `${positionDeployment.alias.toUpperCase()} · ${contractAssetLabel(entry.choiceAssetId)} ${entry.objective} · ROUND ${entry.epochEndTimestamp}`;
+      detail.textContent = payoutExists
+        ? `V8 · ${payout.objective} · ROUND ${payout.epochEndTimestamp} · ${payout.payoutId.slice(0, 8)}…`
+        : `V8 · ${payout.objective} · ROUND ${payout.epochEndTimestamp} · ${contractAssetLabel(payout.choiceAssetId)}`;
       row.append(action, detail);
       claimSummaryActions.append(row);
     }
@@ -2068,18 +2182,18 @@ class LiquidityArenaApp {
       retry.type = 'button';
       retry.dataset.retryDeployment = deploymentAlias;
       retry.disabled = this.onchainHistoryLoading;
-      retry.textContent = `RETRY ${deploymentAlias.toUpperCase()} HISTORY`;
+      retry.textContent = 'RETRY V8 HISTORY SCAN';
       row.append(copy, retry);
       historyErrors.append(row);
     }
     historyErrors.hidden = this.onchainHistoryErrorsByDeployment.size === 0;
     list.replaceChildren();
-    empty.hidden = records.length > 0 || positions.length > 0;
+    empty.hidden = records.length > 0 || rows.length > 0;
     reminder.hidden = claim?.allowed !== true;
     if (claim?.allowed === true) {
       reminder.textContent = this.claimQuote?.settlementMode?.startsWith('REFUND_')
-        ? 'An on-chain principal refund is ready to claim.'
-        : 'An on-chain payout is ready to claim.';
+        ? 'A principal refund is ready to create as a V8 payout.'
+        : 'A V8 payout is ready to prepare.';
     }
     for (const record of records) {
       let recordDeployment = null;
@@ -2095,10 +2209,7 @@ class LiquidityArenaApp {
       item.dataset.status = record.status.toLowerCase();
       const summary = document.createElement('span');
       const amount = record.amountAtto === null ? '' : ` · ${displayGen(BigInt(record.amountAtto), 6)}`;
-      const delivery = record.type === 'CLAIM' && record.deliveryStatus
-        ? ` · DELIVERY ${record.deliveryStatus}`
-        : '';
-      summary.textContent = `${recordDeployment?.alias.toUpperCase() || 'UNKNOWN DEPLOYMENT'} · ${record.type} · ${record.roundId || 'UNKNOWN ROUND'}${record.assetId ? ` · ${contractAssetLabel(record.assetId)}` : ''}${amount}${delivery}`;
+      summary.textContent = `V8 · ${record.domain} · ${record.type.replaceAll('_', ' ')} · ${record.roundId || 'UNKNOWN ROUND'}${record.assetId ? ` · ${contractAssetLabel(record.assetId)}` : ''}${amount}`;
       const link = document.createElement('a');
       link.href = `${this.networkPresentation.explorerTxBase}${record.hash}`;
       link.target = '_blank';
@@ -2108,15 +2219,6 @@ class LiquidityArenaApp {
       const actions = document.createElement('span');
       actions.className = 'activity-actions';
       actions.append(link);
-      if (record.childHash) {
-        const childLink = document.createElement('a');
-        childLink.href = `${this.networkPresentation.explorerTxBase}${record.childHash}`;
-        childLink.target = '_blank';
-        childLink.rel = 'noopener noreferrer';
-        childLink.textContent = `TRANSFER · ${record.childHash.slice(0, 8)}…${record.childHash.slice(-6)}`;
-        childLink.title = `Open claim transfer ${record.childHash} in the ${this.networkPresentation.name} explorer`;
-        actions.append(childLink);
-      }
       if (record.roundId && recordDeployment) {
         const roundLink = document.createElement('a');
         const roundUrl = new URL(location.href);
@@ -2136,31 +2238,43 @@ class LiquidityArenaApp {
       item.append(summary, actions);
       list.append(item);
     }
-    for (const entry of positions) {
-      const positionDeployment = DEPLOYMENT_REGISTRY.get(entry.deploymentAlias);
-      const presentation = walletPositionPresentation(entry, positionDeployment, location.href);
+    for (const payout of rows) {
+      const payoutExists = payout.historyKind === 'PAYOUT';
+      const actionable = payoutExists
+        ? payout.state !== 'EOA_WITHDRAWN'
+        : payout.eligible === true && payout.claimed !== true && payout.amountAtto > 0n;
       const item = document.createElement('li');
-      item.dataset.status = presentation.dataStatus;
-      const lastVerified = this.onchainHistoryErrorsByDeployment.has(entry.deploymentAlias);
-      item.dataset.verification = lastVerified ? 'last-verified' : 'verified';
+      item.dataset.status = payoutExists && payout.state === 'EOA_WITHDRAWN'
+        ? 'finalized'
+        : actionable ? 'review' : 'finalized';
+      item.dataset.verification = payout.stale ? 'last-verified' : 'verified';
       const summary = document.createElement('span');
-      summary.textContent = `${positionDeployment.alias.toUpperCase()} ${lastVerified ? 'LAST VERIFIED' : 'ON-CHAIN'} · ${entry.objective} · ${contractAssetLabel(entry.choiceAssetId)} · ${displayGen(entry.stakeAtto, 6)} · ${presentation.status}`;
+      summary.textContent = payoutExists
+        ? `V8 PAYOUT · ${payout.objective} · ${displayGen(payout.amountAtto, 6)} · ${payout.state.replaceAll('_', ' ')}`
+        : `V8 POSITION · ${payout.objective} · ${displayGen(payout.stakeAtto, 6)} STAKED · ${payout.eligible ? `${displayGen(payout.amountAtto, 6)} READY` : payout.claimed ? 'WITHDRAWN' : 'NOT CLAIMABLE'}`;
       const actions = document.createElement('span');
       actions.className = 'activity-actions';
       const open = document.createElement('a');
-      open.href = presentation.href;
-      open.textContent = presentation.actionText;
-      open.title = presentation.actionTitle;
-      const claimIntent = walletClaimIntentFromHref(presentation.href);
-      if (claimIntent) {
+      const payoutUrl = new URL(location.href);
+      payoutUrl.searchParams.delete('contract');
+      payoutUrl.searchParams.set('deployment', 'v8');
+      payoutUrl.searchParams.set('feed', 'live');
+      payoutUrl.searchParams.set('epoch', String(payout.epochEndTimestamp));
+      payoutUrl.searchParams.set('objective', payout.objective === 'LOW' ? 'lowest' : 'highest');
+      if (actionable) payoutUrl.searchParams.set('claim', '1');
+      else payoutUrl.searchParams.delete('claim');
+      open.href = payoutUrl.href;
+      open.textContent = actionable
+        ? payoutExists ? 'RESUME PAYOUT' : 'OPEN CLAIM'
+        : 'OPEN EPOCH';
+      open.title = payoutExists
+        ? `Open V8 payout ${payout.payoutId}`
+        : `Open V8 ${payout.objective} position in epoch ${payout.epochEndTimestamp}`;
+      if (actionable) {
         open.className = 'wallet-position-action';
-        open.dataset.claimDeployment = claimIntent.deploymentAlias;
-        open.dataset.claimEpoch = String(claimIntent.epochEndTimestamp);
-        open.dataset.claimObjective = claimIntent.objective;
-        open.setAttribute(
-          'aria-label',
-          `${presentation.actionText.toLowerCase()} ${entry.objective} ${contractAssetLabel(entry.choiceAssetId)} position for round ${entry.epochEndTimestamp}`,
-        );
+        open.dataset.claimDeployment = 'v8';
+        open.dataset.claimEpoch = String(payout.epochEndTimestamp);
+        open.dataset.claimObjective = payout.objective;
       }
       actions.append(open);
       item.append(summary, actions);
@@ -2268,8 +2382,8 @@ class LiquidityArenaApp {
 
     const phaseCopy = {
       [EPOCH_PHASE.EVIDENCE_GRACE]: 'The exact-hour endpoint is closed. Waiting for every completed 1m end candle; no result is final.',
-      [EPOCH_PHASE.AWAITING_RESOLUTION]: `Completed-candle leaders remain provisional until the StudioNet ${this.deployment.alias.toUpperCase()} resolution is FINALIZED.`,
-      [EPOCH_PHASE.WAGERING]: 'The next epoch is accepting verified StudioNet wagers. The previous ROUND map stays visible and resets only at the exact battle boundary.',
+      [EPOCH_PHASE.AWAITING_RESOLUTION]: `Completed-candle leaders remain provisional until the Bradbury ${this.deployment.alias.toUpperCase()} resolution is FINALIZED.`,
+      [EPOCH_PHASE.WAGERING]: 'The next epoch is accepting verified Bradbury wagers. The previous ROUND map stays visible and resets only at the exact battle boundary.',
       [EPOCH_PHASE.BATTLE_LIVE]: 'Territories track signed return from the canonical battle-start candle open. HIGH and LOW leaders are provisional.',
     };
     const explanatoryPhase = operationalPhase === EPOCH_PHASE.WAGERING
@@ -2716,7 +2830,7 @@ class LiquidityArenaApp {
       const account = await this.gateway.connect();
       $('#wallet-label').textContent = account.label;
       $('#wallet-button').title = `${account.walletName ? `${account.walletName} · ` : ''}${account.address}`;
-      this.modalNotice = `Connected to ${account.network} chain ${account.chainId} as ${account.label}. ${this.deployment.newWagersEnabled ? 'Test-GEN wagers and claims' : 'Legacy claims and timeout refunds'} are public and wallet-linked.`;
+      this.modalNotice = `Connected to ${account.network} chain ${account.chainId} as ${account.label}. V8 wagers and payout recovery are public, fee-paying, and wallet-linked.`;
       await this._reconcileActivity();
       await this._loadWalletHistory();
       if (this.round) {
@@ -2793,77 +2907,216 @@ class LiquidityArenaApp {
     }
   }
 
-  async claimWager() {
+  async advancePayout({ retry = false } = {}) {
     if (!this.round || this.claimingWager) return;
-    const gate = v6ClaimGate(this.claimQuote);
-    if (!gate.allowed) {
-      this.modalNotice = gate.reason;
-      this._renderPredictionState();
-      return;
-    }
     const claimTarget = walletClaimTarget(this.round);
     this.claimingWager = true;
     this.modalNotice = null;
     this._renderPredictionState();
-    let activity = {
-      type: 'CLAIM',
-      roundId: String(claimTarget.epochEndTimestamp),
-      assetId: this.entry?.choiceAssetId || null,
-      objective: claimTarget.objective,
-      amountAtto: null,
-      deliveryStatus: 'PENDING',
+    let action = 'CLAIM';
+    let submittedHash = null;
+    let preparedThisAttempt = false;
+    const submitted = (hash, submission = {}) => {
+      submittedHash = hash;
+      if (this.payout && action === 'WITHDRAW_EVM') {
+        this.payoutStore.recordWithdrawalAttempt(this.payout.payoutId, {
+          hash,
+          status: 'SUBMITTED',
+        });
+      }
+      this._recordActivity({
+        hash,
+        type: action,
+        status: 'SUBMITTED',
+        domain: action === 'WITHDRAW_EVM' ? 'EVM' : 'GENLAYER',
+        roundId: String(claimTarget.epochEndTimestamp),
+        objective: claimTarget.objective,
+        assetId: this.entry?.choiceAssetId || null,
+        amountAtto: this.payout?.amountAtto?.toString() || this.claimQuote?.amountAtto?.toString() || null,
+        payoutId: this.payout?.payoutId || null,
+        account: submission.account || this.gateway.account,
+        contractAddress: this.gateway.contractAddress,
+      });
+      if (this.payout && action !== 'WITHDRAW_EVM') {
+        this._persistPayout(this.payout, { [action]: hash });
+      }
     };
     try {
-      const result = await this.gateway.claimEpoch(claimTarget.epochEndTimestamp, claimTarget.objective, {
-        onSubmitted: (hash, submission) => {
-          activity = {
-            ...activity,
-            hash,
-            account: submission.account,
-            contractAddress: submission.contractAddress,
-            quotedAmountAtto: submission.quotedAmountAtto,
-          };
-          this._recordActivity({ ...activity, hash, status: 'SUBMITTED' });
-        },
-        onDeliveryDiscovered: (childHash, submission) => {
-          activity = {
-            ...activity,
-            account: submission.account,
-            contractAddress: submission.contractAddress,
-            quotedAmountAtto: submission.quotedAmountAtto || activity.quotedAmountAtto,
-            amountAtto: submission.actualAmountAtto || activity.amountAtto,
-            childHash,
-            deliveryStatus: 'PENDING',
-          };
-          this._recordActivity({ ...activity, hash: activity.hash, status: 'REVIEW' });
-        },
-      });
-      this._recordActivity({
-        ...activity,
-        hash: result.hash,
-        quotedAmountAtto: result.quotedAmountAtto,
-        amountAtto: result.actualAmountAtto,
-        childHash: result.delivery.childHash,
-        deliveryStatus: 'DELIVERED',
+      let result;
+      if (!this.payout) {
+        const gate = v8ClaimGate(this.claimQuote);
+        if (!gate.allowed) throw new Error(gate.reason);
+        result = await this.gateway.claimEpoch(claimTarget.epochEndTimestamp, claimTarget.objective, {
+          onSubmitted: submitted,
+        });
+        this.payout = normalizeV8Payout(result.payout, {
+          payoutId: result.payoutId,
+          recipient: this.gateway.account,
+        });
+      } else if (this.payout.state === 'PREPARING') {
+        action = retry ? 'RETRY_PREPARE' : 'DISPATCH';
+        result = retry
+          ? await this.gateway.retryPreparePayout(this.payout.payoutId, { onSubmitted: submitted })
+          : await this.gateway.dispatchPayout(this.payout.payoutId, { onSubmitted: submitted });
+        this.payout = normalizeV8Payout(result.payout, {
+          payoutId: this.payout.payoutId,
+          recipient: this.gateway.account,
+        });
+      } else if (this.payout.state === 'DISPATCHED') {
+        action = retry ? 'RETRY_PAYOUT' : 'CONFIRM';
+        result = retry
+          ? await this.gateway.retryPayout(this.payout.payoutId, { onSubmitted: submitted })
+          : await this.gateway.confirmPayout(this.payout.payoutId, { onSubmitted: submitted });
+        this.payout = normalizeV8Payout(result.payout, {
+          payoutId: this.payout.payoutId,
+          recipient: this.gateway.account,
+        });
+      } else if (this.payout.state === 'FUNDED_IN_ESCROW') {
+        action = 'WITHDRAW_EVM';
+        const recoveryBeforeWrite = this.payoutStore.latestWithdrawalAttempt(this.payout.payoutId);
+        try {
+          this._persistPayout(this.payout, {}, { required: true });
+        } catch (error) {
+          if (recoveryBeforeWrite?.hash && !error?.hash) {
+            error.hash = recoveryBeforeWrite.hash;
+            error.withdrawalStatus = recoveryBeforeWrite.status;
+          }
+          throw error;
+        }
+        const rawPayout = {
+          ...this.payout,
+          payout_id: this.payout.payoutId,
+          amount_atto: this.payout.amountAtto,
+          recipient: this.payout.recipient,
+          state: this.payout.state,
+          vault: this.payout.vault,
+        };
+        const journal = this.payoutStore.get(this.payout.payoutId);
+        const latestWithdrawal = journal?.withdrawalAttempts?.at(-1) || null;
+        const inspection = await this.gateway.inspectPayoutVaultWithdrawal(
+          latestWithdrawal?.hash || null,
+          rawPayout,
+        );
+        if (journal?.withdrawalIntent && !latestWithdrawal
+          && inspection.status !== 'VAULT_WITHDRAWN') {
+          throw new Error(
+            'A durable EVM signing lock exists without a recoverable transaction hash. '
+            + 'No duplicate withdrawal will be signed; inspect this wallet\'s Bradbury transaction history.',
+          );
+        }
+        let shouldWithdraw = inspection.status === 'READY';
+        if (latestWithdrawal) {
+          const attemptStatus = inspection.status === 'VAULT_WITHDRAWN'
+            ? (latestWithdrawal.status === 'FINALIZED' ? 'FINALIZED' : 'SUPERSEDED')
+            : inspection.status;
+          if (['PENDING', 'FAILED', 'DROPPED', 'FINALIZED', 'SUPERSEDED'].includes(attemptStatus)) {
+            this.payoutStore.recordWithdrawalAttempt(this.payout.payoutId, {
+              hash: latestWithdrawal.hash,
+              status: attemptStatus,
+            });
+          }
+          if (attemptStatus === 'PENDING') {
+            const pending = new Error('The exact recipient vault withdrawal is still pending on Bradbury.');
+            pending.hash = latestWithdrawal.hash;
+            pending.withdrawalStatus = 'PENDING';
+            throw pending;
+          }
+          shouldWithdraw = ['FAILED', 'DROPPED'].includes(attemptStatus);
+        }
+        if (shouldWithdraw) {
+          submittedHash = null;
+          this.payoutStore.prepareWithdrawal(this.payout.payoutId);
+          preparedThisAttempt = true;
+          const withdrawal = await this.gateway.withdrawPayoutVault(rawPayout, { onSubmitted: submitted });
+          preparedThisAttempt = false;
+          if (!withdrawal.hash) this.payoutStore.releasePreparedWithdrawal(this.payout.payoutId);
+          if (withdrawal.hash) {
+            this.payoutStore.recordWithdrawalAttempt(this.payout.payoutId, {
+              hash: withdrawal.hash,
+              status: 'FINALIZED',
+            });
+            this._recordActivity({
+              hash: withdrawal.hash,
+              type: 'WITHDRAW_EVM',
+              status: 'FINALIZED',
+              domain: 'EVM',
+              roundId: String(claimTarget.epochEndTimestamp),
+              objective: claimTarget.objective,
+              assetId: this.entry?.choiceAssetId || null,
+              amountAtto: this.payout.amountAtto.toString(),
+              payoutId: this.payout.payoutId,
+            });
+          }
+        }
+        // The EVM withdrawal hash is already durably journaled under its own
+        // domain. Never reuse it as the GenLayer refresh transaction identity.
+        submittedHash = null;
+        action = 'REFRESH_WITHDRAWAL';
+        result = await this.gateway.refreshPayoutWithdrawal(this.payout.payoutId, { onSubmitted: submitted });
+        this.payout = normalizeV8Payout(result.payout, {
+          payoutId: this.payout.payoutId,
+          recipient: this.gateway.account,
+        });
+      } else {
+        throw new Error('This payout is already withdrawn and finalized.');
+      }
+
+      this._persistPayout(this.payout, submittedHash ? { [action]: submittedHash } : {});
+      if (submittedHash) this._recordActivity({
+        hash: submittedHash,
+        type: action,
         status: 'FINALIZED',
+        domain: action === 'WITHDRAW_EVM' ? 'EVM' : 'GENLAYER',
+        roundId: String(claimTarget.epochEndTimestamp),
+        objective: claimTarget.objective,
+        assetId: this.entry?.choiceAssetId || null,
+        amountAtto: this.payout.amountAtto.toString(),
+        payoutId: this.payout.payoutId,
       });
-      this._clearClaimIntentRoute();
-      this.modalNotice = `CLAIM + TRANSFER FINALIZED & VERIFIED · ${result.delivery.childHash.slice(0, 10)}…${result.delivery.childHash.slice(-6)}`;
-      this.toast(`Test-GEN claim child transfer finalized and verified on ${this.networkPresentation.name}.`);
-      await this._loadRound({ background: true });
+      this.modalNotice = `${action.replaceAll('_', ' ')} FINALIZED & VERIFIED · ${this.payout.state}`;
+      this.toast(`V8 payout is now ${this.payout.state.replaceAll('_', ' ').toLowerCase()}.`);
+      await this._loadPositionState();
       await this._loadWalletHistory();
+      if (this.payout.state === 'EOA_WITHDRAWN') this._clearClaimIntentRoute();
     } catch (error) {
-      if (error?.hash) this._recordActivity({
-        ...activity,
-        hash: error.hash,
-        quotedAmountAtto: error?.quotedAmountAtto || activity.quotedAmountAtto,
-        amountAtto: error?.actualAmountAtto || activity.amountAtto,
-        childHash: error?.childHash || activity.childHash,
-        deliveryStatus: error?.deliveryStatus || 'REVIEW',
+      if (action === 'WITHDRAW_EVM' && preparedThisAttempt && !submittedHash
+        && error?.evmBroadcastUncertain !== true) {
+        try {
+          this.payoutStore.releasePreparedWithdrawal(this.payout.payoutId);
+        } catch {
+          // A retained PREPARED lock is conservative and prevents a duplicate.
+        }
+      }
+      if (action === 'WITHDRAW_EVM' && error?.hash && error?.withdrawalStatus) {
+        try {
+          this.payoutStore.recordWithdrawalAttempt(this.payout.payoutId, {
+            hash: error.hash,
+            status: error.withdrawalStatus,
+          });
+        } catch {
+          // The activity journal below still retains the submitted hash.
+        }
+      }
+      if (error?.hash || submittedHash) this._recordActivity({
+        hash: error?.hash || submittedHash,
+        type: action,
         status: 'REVIEW',
+        domain: action === 'WITHDRAW_EVM' ? 'EVM' : 'GENLAYER',
+        roundId: String(claimTarget.epochEndTimestamp),
+        objective: claimTarget.objective,
+        assetId: this.entry?.choiceAssetId || null,
+        amountAtto: this.payout?.amountAtto?.toString() || this.claimQuote?.amountAtto?.toString() || null,
+        payoutId: this.payout?.payoutId || null,
       });
-      const transaction = error?.hash ? ` Transaction ${error.hash.slice(0, 10)}… requires manual review.` : '';
-      this.modalNotice = `${error?.message || 'Test-GEN claim failed safely.'}${transaction}`;
+      const recoveryHash = error?.hash || submittedHash;
+      const transaction = recoveryHash
+        ? action === 'WITHDRAW_EVM'
+          ? error?.message?.includes(recoveryHash)
+            ? ' Do not submit another withdrawal until this exact hash is reconciled.'
+            : ` Exact EVM recovery hash: ${recoveryHash}. Do not submit another withdrawal until this hash is reconciled.`
+          : ` Transaction ${recoveryHash.slice(0, 10)}… remains recoverable.`
+        : '';
+      this.modalNotice = `${error?.message || 'V8 payout action failed safely.'}${transaction}`;
       this.toast(this.modalNotice);
     } finally {
       this.claimingWager = false;
@@ -2873,7 +3126,7 @@ class LiquidityArenaApp {
 
   async unlockEmergencyRefund() {
     if (!this.round || this.activatingEmergencyRefund) return;
-    const gate = v6TimeoutGate(this.round.epoch, Math.floor(Date.now() / 1000));
+    const gate = v8TimeoutGate(this.round.epoch, Math.floor(Date.now() / 1000));
     if (!gate.allowed) {
       this.modalNotice = gate.reason;
       this._renderPredictionState();

@@ -35,9 +35,9 @@ function healthyFetch(requests) {
       });
     }
     if (parsed.pathname === '/api/keeper-journal') {
-      return response({ status: 'ready', ready: true, database: { schemaVersion: 3 } });
+      return response({ status: 'ready', ready: true, network: 'bradbury', chainId: '4221', database: { schemaVersion: 4 } });
     }
-    if (parsed.pathname.endsWith('/actions/workflows/studionet-v7-keeper.yml/runs')) {
+    if (parsed.pathname.endsWith('/actions/workflows/bradbury-v8-keeper.yml/runs')) {
       return response({ workflow_runs: [{
         created_at: '2026-08-21T06:00:00.000Z',
         conclusion: 'success',
@@ -86,7 +86,7 @@ test('watchdog fails on a failed workflow event, stale schedule, and degraded hi
       if (parsed.pathname === '/api/history-health') {
         return response({ status: 'degraded', database: { ready: false, integrity: { ready: false } } }, 503);
       }
-      if (parsed.pathname.endsWith('/actions/workflows/studionet-v7-keeper.yml/runs')) {
+      if (parsed.pathname.endsWith('/actions/workflows/bradbury-v8-keeper.yml/runs')) {
         return response({ workflow_runs: [{
           created_at: '2026-08-21T03:00:00.000Z',
           conclusion: 'success',
@@ -117,7 +117,7 @@ test('watchdog stays degraded when the latest scheduled keeper run failed', asyn
     githubToken: 'github-token-value-long-enough',
     fetchImpl: async (url, options) => {
       const parsed = new URL(url);
-      if (parsed.pathname.endsWith('/actions/workflows/studionet-v7-keeper.yml/runs')) {
+      if (parsed.pathname.endsWith('/actions/workflows/bradbury-v8-keeper.yml/runs')) {
         assert.equal(parsed.searchParams.get('status'), 'completed');
         assert.equal(parsed.searchParams.get('branch'), 'main');
         assert.equal(parsed.searchParams.has('event'), false);
@@ -151,7 +151,7 @@ test('watchdog accepts a recent successful Cloudflare workflow dispatch reconcil
     githubToken: 'github-token-value-long-enough',
     fetchImpl: async (url, options) => {
       const parsed = new URL(url);
-      if (parsed.pathname.endsWith('/actions/workflows/studionet-v7-keeper.yml/runs')) {
+      if (parsed.pathname.endsWith('/actions/workflows/bradbury-v8-keeper.yml/runs')) {
         assert.equal(parsed.searchParams.get('branch'), 'main');
         assert.equal(parsed.searchParams.has('event'), false);
         return response({

@@ -1,146 +1,227 @@
-# V8 payout-recovery design
+# V8 escrow-backed payout recovery
 
-## Status and reason for a new deployment
+## Status
 
-This document is a design specification, not deployed code. V7 remains the active StudioNet
-test-token contract and currently reports 2 GEN of player liability across two eligible unclaimed
-refunds. Those refunds remain V7 obligations and must not be copied, marked paid, or retried by an
-off-chain operator.
+V8 is deployed and finalized on Bradbury at
+`0xe6aa95e551f8407b139474ec60c2012e4cc8a6cd`. Its production payout factory is finalized and
+explorer-verified at `0x944FdADd826C2a159c63cB100DB174716ccd1317`, and its one-time binding to
+that exact V8 arena is also finalized. The checked-in manifest remains deliberately `active:false`:
+delivery-reserve funding, payout activation, risk resume, attended canary, and production cutover
+are still pending. An address and finalized binding are not an assertion that payouts or new risk
+are live.
 
-Application-level discovery and routing are a separate concern. Core claim/refund UX from
-[PR #21](https://github.com/Leokings/liquidity-arena/pull/21) merged at
-`2026-08-21T13:47:56Z` as `5ac2c1fcae0a7fc4b3096e71f8adf65d511aa475` and was production-deployed
-through READY/PROMOTED Vercel deployment `dpl_5FdBbP3e76rwgy1EzqyJYofG4Hxx`. Production inspection proved
-the exact V7 HIGH epoch-`1787205600` deep link, resolved/on-chain state, visible claim entry, and
-enabled reconnect-to-claim action. It did not include a user wallet signature, claim transaction,
-or child-transfer proof and therefore does not discharge either refund or mitigate the protocol P1.
+The deployed V7 contract remains immutable and its storage/balance cannot be moved into V8. This is
+a testnet cutover: V7 state and its remaining test-token claims will be abandoned rather than
+migrated or duplicated. The application, history service, and keeper will support only V8 after
+cutover.
 
-The four-file modal focus-containment follow-up was approved by an internal independent Codex diff review and merged in
-[PR #26](https://github.com/Leokings/liquidity-arena/pull/26) at `2026-08-21T14:55:40Z` as
-`881e74895a31cb3cf82c078f4252110306684f30`. Its settled evidence is 7/7 focused claim,
-210/210 market, 434/434 full, and 24/24 Playwright cases (12 journeys across
-`chromium`/`mobile-chromium`, Desktop Chrome/Pixel 7, one worker), plus a 477-module build and audit
-0. Successful GitHub deployment `6023788676` and READY Vercel deployment
-`dpl_4WMe3qaTs8uQVS7hA6FTfFcTjdBr` form the last runtime-changing checkpoint from exact source
-`881e748`; main CI `32494801072` and CodeQL
-`32494801089` passed. An independent read-only Codex desktop/mobile production focus audit passed with
-P0/P1/P2 all zero, but no wallet action or signature was submitted. These UI gates do not establish a
-live signed claim or safe asynchronous-child recovery.
-An evidence-publication successor may move the alias and differ in artifact bytes because the deployment
-registries are serverless build inputs; it does not retroactively alter the last runtime-changing checkpoint.
+## Why an escrow is required
 
-Post-merge operations evidence is healthy but likewise does not change payout semantics: native
-GitHub scheduled current-hour run `32490379141`, recognized and safe-skipped by Cloudflare, VERIFIED
-its exact RESOLVE and CREATE operations; history job
-`96797302128` synchronized 1 deployment/3 epochs/3 snapshots/0 proofs, watchdog run `32490747878`
-succeeded, and Worker version `536e6476-3c4e-4b93-a454-700f55d6cea7` emitted
-`CLOUDFLARE_BACKUP_SKIPPED/current_hour_run_succeeded` on the tick scheduled for
-`2026-08-21T14:37:29Z`, logging at `2026-08-21T14:37:30.115Z`. History integrity
-at that recorded snapshot was 39/39 with zero missing/stale durable rows or snapshots. Later
-documentation validation at `2026-08-21T15:16:17.648Z` observed HTTP 200 ready, journal 3, 40/40/0,
-and zero gaps. Separately, pytest advisory
-[GHSA-6w46-j5rx-g56g](https://github.com/advisories/GHSA-6w46-j5rx-g56g) was fixed by
-[PR #22](https://github.com/Leokings/liquidity-arena/pull/22), merged as
-`e79192eb25294bb59dc0dd31b55dee97085a464f`; the Dependabot alert recorded fixed at
-`2026-08-21T14:38:20Z`.
+V7 applies claim/fee accounting before emitting its external value-transfer message. Off-chain
+receipts can prove a known child credited the exact recipient, but the contract cannot consume that
+receipt and Studio has no payout-ID-level deduplication. A retry creates a different child hash, so
+an absent, delayed, or ambiguous first child is never sufficient evidence for a second direct EOA
+payment.
 
-V7 cannot be repaired in place. `LiquidityArenaV7.py` registers no upgrader and exposes no upgrade
-method; GenLayer contracts without an authorized upgrade path are immutable after construction. See
-the official [GenLayer upgradability documentation](https://docs.genlayer.com/developers/intelligent-contracts/features/upgradability).
+GenLayer documents external EVM messages as finality-only and routed through the contract's ghost.
+That does not make a parent receipt a contract-consumable delivery proof, and a live EVM target may
+still reject or mishandle a call. V8 therefore sends every attempt to an immutable idempotent vault,
+not directly to the claimant. See the official documentation for
+[value transfers](https://docs.genlayer.com/developers/intelligent-contracts/features/value-transfers),
+[EVM interaction](https://docs.genlayer.com/developers/intelligent-contracts/features/interacting-with-evm-contracts),
+and [Studio limitations](https://docs.genlayer.com/developers/intelligent-contracts/tools/genlayer-studio/limitations).
 
-V7 also performs effects before dispatching an independent value-transfer child: `claim()` records
-the wallet as claimed, allocates the payout, and reduces player liability before sending the child.
-Fee withdrawal similarly moves accrued fees to withdrawn accounting before its child. GenLayer
-messages execute independently after the parent finalizes, so parent success alone is not proof that
-the recipient was credited. See the official documentation for
-[messages](https://docs.genlayer.com/developers/intelligent-contracts/features/messages) and
-[value transfers](https://docs.genlayer.com/developers/intelligent-contracts/features/value-transfers).
+## Pinned-runner constraint
 
-The existing monitors therefore remain read-only. A missing, delayed, accepted, timeout,
-undetermined, or otherwise ambiguous child is not retry evidence: the first child could later
-credit, making a second direct payment a double payment. This unresolved recovery boundary is a P1
-protocol limitation, even though the funded V7 canary's healthy parent/child deliveries passed.
+The V8 source remains on the repository's pinned V0.2.16-compatible GenLayer runner. Direct
+inspection and execution found two defects in that runner's generated EVM interface: generated
+views reference a nonexistent proxy field, and value-bearing method calls lose their `value`.
 
-## Required V8 state machine
+V8 avoids those paths deliberately:
 
-V8 should create one immutable payout record per `(contract, epoch, objective, account)` and assign
-it a deterministic `payout_id`:
+- exact factory views use pinned-runner low-level `EthCall`;
+- factory preparation uses a zero-value `EthSend`; and
+- value uses the runner's working pure `emit_transfer` to the deterministic prepared vault.
+
+The factory/vault split is therefore required for this runner. A future V0.3 port may simplify the
+flow to one value-bearing escrow method, but only after a full contract and test migration.
+
+Bradbury also imposes a practical transaction-pubdata ceiling below the original readable V8
+source size. The repository therefore keeps a reviewed readable source and deterministically
+generates `contracts/LiquidityArenaV8.release.py` with Python 3.13 and pinned
+`python-minifier==3.2.0`. The generator proves identical storage layout, constructor, and retained
+public ABI before emitting the deployable artifact. The current artifact is 44,125 bytes (SHA-256
+`160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa`), below the enforced
+45,000-byte source and 45,500-byte outer-calldata caps. A live credential-free Bradbury estimate of
+the exact release transaction succeeded at 35,346,217 gas; any estimate error, SDK fallback, or
+gas-envelope drift fails before signing.
+
+## State machine
 
 ```text
-CLAIMABLE -> RESERVED(attempt 0) -> DISPATCHED(attempt 0)
-DISPATCHED -> DELIVERED                         terminal
-DISPATCHED -> AMBIGUOUS                         no direct retry
-DISPATCHED -> TERMINAL_FAILED -> RESERVED(attempt n + 1)
-AMBIGUOUS  -> DELIVERED                         only on exact credit proof
-AMBIGUOUS  -> TERMINAL_FAILED                   only on exact final failure plus non-credit proof
-AMBIGUOUS  -> RESERVED(attempt n + 1)            escrow-only, idempotent, reserve-funded retry
+CLAIMABLE
+  -> PREPARING
+  -> DISPATCHED
+  -> FUNDED_IN_ESCROW
+  -> EOA_WITHDRAWN
 ```
 
-Entering `RESERVED` must atomically fix:
+`claim(epoch, objective)` is a reservation, not a payment receipt. It atomically fixes the payout
+ID, recipient, amount, stake allocation, rounding remainder, and the payout's bounded reserve
+budget. It then emits an idempotent zero-value factory preparation message.
 
-- payout ID, recipient, amount, objective, stake allocation, and rounding-remainder assignment;
-- the first attempt number and a separately funded delivery-loss reserve requirement;
-- `objective_allocated_atto`, distinct from `objective_delivered_atto`; and
-- a concurrency guard that prevents a second reservation or dispatch for the same payout.
+Factory preparation carries no value and can only repeat the same immutable tuple. After the fixed
+cooldown, `retry_prepare_payout(id)` is therefore permissionless and deliberately has no terminal
+retry cap; dropped preparation messages cannot strand a reserved payout. Value-bearing vault
+dispatches remain capped at three attempts because each ambiguous dispatch can consume reserve.
 
-The amount and recipient never change across attempts. `wallet_claimed` becomes true only after
-exact credited delivery is proven. Player liability decreases only once, at the same proven-delivery
-transition. A deadline by itself must never convert an ambiguous direct-to-EOA child into a retryable
-failure. An ambiguous retry is permitted only when the fixed destination is the idempotent escrow
-described below and the next attempt is fully covered by the delivery-loss reserve.
+`dispatch_payout(id)` is permissionless once the exact deterministic vault is prepared. A retry is
+allowed only for the immutable same payout ID, recipient, amount, and vault, after the deployment-
+fixed cooldown, and only while that payout still has precommitted reserve. The recipient, keeper,
+or owner may request a retry; none can change the proof, destination, amount, cap, or cooldown.
 
-## Idempotent payout escrow
+`confirm_payout(id)` is permissionless and transitions only after an exact synchronous factory view
+proves that the vault credited the immutable payout. Player or fee liability leaves the arena at
+`FUNDED_IN_ESCROW`, because the vault has assumed an enforceable withdrawal obligation. A separate
+`refresh_payout_withdrawal(id)` records `EOA_WITHDRAWN`; wallet `claimed` and fee `withdrawn`
+counters do not advance merely because escrow was funded.
 
-The recommended recoverable design is V8 plus an idempotent EVM payout escrow. GenLayer documents
-network EVM calls under
-[interacting with EVM contracts](https://docs.genlayer.com/developers/intelligent-contracts/features/interacting-with-evm-contracts).
-Every V8 dispatch sends to `PayoutEscrow.deposit(payoutId, recipient)` rather than directly to an
-EOA. The escrow must:
+Retry exhaustion is not a terminal failure. A late original attempt can still fund the vault and
+must remain confirmable.
 
-1. credit each `payout_id` to its fixed recipient at most once;
-2. accept duplicate deposits without adding a second user credit;
-3. place duplicate value in an explicit recoverable-excess bucket rather than reverting and
-   assuming value automatically returns;
-4. expose an exact immutable payout record for reconciliation; and
-5. let the user withdraw the one credited balance through an ordinary atomic EVM transaction.
+## Payout identity
 
-Retries reuse the same payout ID, recipient, and amount. V8 may mark `DELIVERED` only after reading
-the escrow's exact record and proving the credited value. Until the target network and Studio/test
-environment support this interaction with matching semantics, retries must remain disabled. The
-official documentation currently states that Studio does not implement EVM-contract interactions
-beyond value transfers to EOAs, so the escrow design cannot be claimed as Studio-tested today.
+The deterministic payout ID is Keccak-256 over canonical JSON containing:
 
-## Solvency and authorization invariants
+- chain ID;
+- V8 contract address;
+- immutable factory address;
+- payout protocol version;
+- payout kind (`PLAYER` or `FEE`);
+- exact recipient and amount;
+- epoch and objective for a player payout; and
+- a monotonic nonce for a fee payout.
 
-Each dispatch immediately consumes contract balance while the obligation remains outstanding until
-delivery proof. Before every attempt, V8 must enforce:
+Player reservation also increments `objective_allocated_atto` and consumes winning stake exactly
+once. The last reserved winning claimant receives `payout_pool - allocated`, so every claim order
+conserves the integer pool. Allocation is never recomputed during a retry.
+
+## Immutable EVM factory and vault
+
+The factory must be deployed first with immutable binder and reserve-sink addresses. For this
+reviewed rollout the binder is the same dedicated EOA as the V8 owner, and both tools reject a
+mismatch before signing. After the V8 ghost address is known, the binder may bind that arena exactly
+once. Activation verifies the
+exact binding and payout protocol, but those self-reported views are not a trust anchor. The exact
+independently audited, non-proxy factory address must also be compiled into the V8 source for chain
+`4221`. The finalized factory `0x944FdADd826C2a159c63cB100DB174716ccd1317` is frozen into both
+the readable and generated release sources. Its runtime, constructor immutables, protocol, reserve
+sink, source publication, and initial unbound state were independently verified before that source
+anchor was committed. The factory's one-time binding to the finalized V8 ghost is now finalized;
+activation remains blocked until the delivery reserve and every remaining activation gate are
+verified.
+
+Only the bound arena ghost may prepare a payout. The factory deploys one CREATE2 vault from the
+payout ID and permanently binds its arena, recipient, amount, and payout ID. The vault:
+
+1. accepts ordinary `receive()` funding and creates credit only from the bound arena, while forced
+   or preseeded balance remains uncredited excess;
+2. records one user credit only for the first exact amount;
+3. treats a wrong amount or any duplicate as excess without changing the original credit;
+4. exposes immutable payout identity plus monotonic prepared, credited, and withdrawn facts;
+5. lets only the fixed recipient pull the credit through an atomic reentrancy-guarded withdrawal;
+6. preserves the credit if the recipient rejects the withdrawal; and
+7. permits only excess—not claimant principal—to be swept to the immutable reserve sink.
+
+There is no proxy, upgrader, recipient mutation, admin proof override, principal drain, or
+`force_funded` method.
+
+## Reserve accounting
+
+The delivery-loss reserve is funded separately through `fund_delivery_reserve()`. Participant stake
+and accrued fees cannot be relabeled as reserve. V8 has no generic "recognize balance surplus"
+method because an unexplained balance change is not safe proof that an external attempt can no
+longer debit.
+
+The deployment fixes three value attempts per payout. Before accepting a new wager, available
+reserve must cover:
 
 ```text
-post_emit_contract_balance >= all outstanding player liabilities
+3 * (unreserved player liability + accrued unreserved fee liability + new stake)
 ```
 
-Failed attempts may consume only a separately funded delivery-loss reserve—not participant
-principal, accrued fees, or another claimant's obligation. Additional invariants are:
+Reservation moves exactly `amount * 3` from available reserve into that payout's committed budget.
+Each dispatch consumes one amount from the same budget. Until exact escrow funding is proven, the
+original player/fee liability remains intact. After every dispatch:
 
-- one payout ID can credit a claimant at most once;
-- allocation never exceeds the objective payout pool;
-- at most one active direct-to-EOA attempt exists for a payout;
-- no attempt may follow `DELIVERED`;
-- fee availability moves through `available -> reserved -> delivered/withdrawn` and never touches
-  player liability;
-- owner, treasury, or recipient rotation cannot redirect an existing reservation; and
-- there is no owner `force_retry` or `force_delivered` override.
+```text
+contract balance
+  >= player liability
+   + accrued fees
+   + reserved fees
+   + available delivery reserve
+   + remaining committed attempt reserve
+```
 
-## Required evidence before cutover
+On exact escrow funding, unused attempts return to available reserve and the discharged arena
+principal becomes available reserve. Attempts beyond the one successful credit remain reserve
+losses. One payout can never consume another payout's committed budget.
 
-Direct and full-consensus tests must cover reservation duplication, two-winner rounding, immutable
-retry amount, success applied exactly once, duplicate confirmation, retry-after-delivery rejection,
-all ambiguous child states, terminal non-credit proof, reserve exhaustion, fee-path symmetry,
-recipient rotation, randomized transition sequences, and idempotent escrow duplicate deposits.
-Fault injection must demonstrate delayed, failed, duplicated, and eventually delivered children;
-direct mode alone cannot prove child creation or finality.
+Reserve withdrawal is intentionally absent from V8.
 
-V8 requires a fresh deployment. A safe cutover must stop V7 epoch creation, wait for all V7 wagering
-and settlement work to close, retain V7 as a legacy read/resolve/timeout/claim surface, separately
-fund the V8 delivery reserve, and prove the new UI and both scheduler paths before activation. The
-current two V7 refunds remain on V7 until their exact child deliveries are finalized and verified.
+## Network and activation gates
+
+The contract fails closed on every chain except the target EVM-capable GenLayer chain ID `4221`.
+Local Studio (`61127`) and StudioNet (`61999`) cannot activate payouts because Studio does not
+execute the required EVM factory/vault path. Payout activation deliberately leaves new epochs and
+wagers paused. The owner must separately call `resume_new_risk` before `create_epoch` or `enter` can
+succeed, and that explicit resume remains disabled until all of the following are true:
+
+1. the chain is allowlisted;
+2. the constructor factory equals the exact audited address compiled for that chain;
+3. the immutable factory is exactly bound to the V8 ghost;
+4. the factory reports the exact payout protocol;
+5. the delivery reserve covers every unreserved obligation; and
+6. arena accounting is solvent.
+
+Owner or keeper may pause new epochs/wagers without blocking settlement, claims, preparation,
+dispatch reconciliation, confirmation, or EVM withdrawal. Only the owner can resume new risk, and
+resume repeats the factory, reserve, and solvency checks. This split prevents payout activation from
+creating a non-atomic public-risk window while an operator waits for a separate pause transaction.
+
+## Verification and cutover requirements
+
+Repository acceptance requires:
+
+- GenVM lint plus complete V8 timing, market, settlement, and authorization tests;
+- direct payout tests for chain/factory fail-closed activation, domain-separated IDs, duplicate
+  reservation, both two-winner claim orders, player/fee symmetry, simultaneous payouts, reserve exhaustion,
+  exact immutable retry, cooldown/cap, late credit, and funded-versus-withdrawn accounting;
+- Solidity tests for unauthorized preparation/funding, CREATE2 identity, wrong and duplicate
+  funding, excess isolation/recovery, reverting and reentrant recipients, one withdrawal, persistent
+  records, and absence of admin principal drains; and
+- live full-consensus tests on an EVM-capable GenLayer network for ghost sender identity, preparation,
+  message fees, delayed/reordered attempts, duplicate excess, exact confirmation, withdrawal, and
+  fee-path symmetry.
+
+Studio/direct mocks cannot close the final EVM gate. Deployment and binding evidence may be
+published while the manifest stays inactive, but an active production history alias, enabled
+keeper schedule, or public money action must still fail closed until reserve, activation, canary,
+and cutover evidence exists.
+
+Local verification passes GenVM lint/validation, 34 direct V8 tests, 29 Bradbury harness tests
+(included in the 463/463 root Node suite), and 59 EVM tests: nine adversarial factory/vault tests plus
+50 factory deployment/binding-tool tests. The production build emits 477 modules and dependency
+audit reports zero findings. The Solidity compile uses locked `solc 0.8.28` and reports zero errors
+or warnings; the authority/storage/forbidden-source-construct/bytecode-size audit also passes. These
+checks are wired into CI. These figures are local evidence and do not by themselves assert a remote-
+CI run. They prove the local state machine and tooling, not live ghost/EVM parity or finalized
+deployment evidence. The live gate must publish the resulting bytecode and constructor immutables
+and repeat the source/address-anchor review.
+
+The finalized rehearsal, production-factory deployment, source freeze, inactive V8 deployment, and
+one-time factory binding are complete. The remaining safe sequence is: fund the delivery reserve;
+activate payouts with risk paused; apply and verify the append-only migration/global one-active
+constraint; run a separately reviewed attended risk and payout canary; explicitly resume new risk;
+then complete the production app, history-service, and keeper cutover. The manifest must remain
+`active:false` until those gates are closed.

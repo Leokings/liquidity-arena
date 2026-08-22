@@ -1396,7 +1396,7 @@ input:focus-visible {
 .wager-quote,
 .wallet-position dl {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
   margin: 10px 0 0;
   border-top: 1px solid var(--line);
 }
@@ -1419,6 +1419,31 @@ input:focus-visible {
 .wallet-position[data-state="claimable"] {
   border-color: rgba(80, 230, 179, 0.35);
   background: rgba(80, 230, 179, 0.035);
+}
+
+.wallet-position[data-state="finalized"] {
+  border-color: rgba(185, 243, 90, 0.42);
+  background: rgba(185, 243, 90, 0.045);
+}
+
+.wallet-position[data-payout-state="PREPARING"] {
+  border-color: rgba(255, 187, 92, 0.38);
+  background: rgba(255, 187, 92, 0.035);
+}
+
+.wallet-position[data-payout-state="DISPATCHED"] {
+  border-color: rgba(101, 180, 255, 0.42);
+  background: rgba(101, 180, 255, 0.04);
+}
+
+.wallet-position[data-payout-state="FUNDED_IN_ESCROW"] {
+  border-color: rgba(80, 230, 179, 0.55);
+  background: rgba(80, 230, 179, 0.055);
+}
+
+.wallet-position[data-payout-state="EOA_WITHDRAWN"] {
+  border-color: rgba(185, 243, 90, 0.58);
+  background: rgba(185, 243, 90, 0.065);
 }
 
 .claim-wager,

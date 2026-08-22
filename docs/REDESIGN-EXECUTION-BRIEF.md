@@ -51,8 +51,8 @@ A checked box must be backed by reproducible local output or immutable StudioNet
 - [ ] A live StudioNet user-wallet signature, finalized claim transaction, and exact child delivery
   have not been exercised for this deployment.
 - [ ] Active V7 liability remains 2 GEN across two eligible unclaimed refunds.
-- [ ] V7 ambiguous asynchronous-child recovery remains a protocol P1. V7 is immutable; the proposed
-  fresh V8 state machine and idempotent payout escrow are in
+- [ ] V7 ambiguous asynchronous-child recovery remains a protocol P1. V7 is immutable; the
+  implemented but inactive/unbroadcast V8 state machine and idempotent payout escrow are in
   [`V8-PAYOUT-RECOVERY.md`](V8-PAYOUT-RECOVERY.md).
 
 ## 1. Frozen design
@@ -471,6 +471,7 @@ The next safe sequence is:
 3. exercise the deployed claim/refund UX with a live StudioNet user-wallet signature, finalized
    claim transaction, and exact child-delivery verification;
 4. continue public browser/wallet soak with V6 legacy recovery;
-5. decide the V8 payout-recovery boundary before any real-value claim;
+5. complete the V8 finalized deployment, binding, funding, and live-canary gates before any
+   real-value claim;
 6. rehearse rollback without re-enabling V6 writes;
 7. finish operational/external review and submission media.

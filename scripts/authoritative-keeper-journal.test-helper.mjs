@@ -54,10 +54,11 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       chainId: canonical.chainId,
       signerAddress: activeLease.signerAddress,
       contractAddress: canonical.contractAddress,
+      subjectType: canonical.subjectType,
+      subjectId: canonical.subjectId,
       method: canonical.method,
       args: [...canonical.args],
       valueAtto: canonical.valueAtto,
-      epochEndTimestamp: canonical.epochEndTimestamp,
       state: 'PREPARED',
       transactionHash: null,
       lifecycleStatus: null,
@@ -82,14 +83,14 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
         status: 'ready',
         service: 'liquidity-arena-keeper-journal',
         ready: true,
-        network: 'studionet',
-        chainId: '61999',
+        network: 'bradbury',
+        chainId: '4221',
         configuration: {
           databaseConfigured: true,
           authenticationConfigured: true,
           signerConfigured: true,
         },
-        database: { configured: true, ready: true, schemaVersion: 3 },
+        database: { configured: true, ready: true, schemaVersion: 4 },
       };
     },
     async acquireLease(request) {
@@ -139,7 +140,9 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       await hooks.prepareOperation?.(request);
       const canonical = canonicalKeeperOperation(request.operation);
       const latest = attemptsFor(canonical.operationId)[0];
-      if (latest && latest.state !== 'FINALIZED_FAILURE') {
+      const repeatableVerified = latest?.state === 'VERIFIED'
+        && ['retry_prepare_payout', 'retry_payout'].includes(canonical.method);
+      if (latest && latest.state !== 'FINALIZED_FAILURE' && !repeatableVerified) {
         return {
           status: 'ok',
           action: 'PREPARE',
@@ -241,10 +244,11 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       chainId: canonical.chainId,
       signerAddress: signerAddress.toLowerCase(),
       contractAddress: canonical.contractAddress,
+      subjectType: canonical.subjectType,
+      subjectId: canonical.subjectId,
       method: canonical.method,
       args: [...canonical.args],
       valueAtto: canonical.valueAtto,
-      epochEndTimestamp: canonical.epochEndTimestamp,
       state,
       transactionHash: transactionHash?.toLowerCase() ?? null,
       lifecycleStatus,

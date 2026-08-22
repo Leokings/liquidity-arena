@@ -16,15 +16,17 @@ function operationRow(overrides = {}) {
     logical_operation_id: overrides.logical_operation_id || operationId,
     attempt_number: overrides.attempt_number || '1',
     retry_of_operation_id: overrides.retry_of_operation_id || null,
-    deployment_alias: 'v7',
-    network: 'studionet',
-    chain_id: '61999',
+    deployment_alias: 'v8',
+    network: 'bradbury',
+    chain_id: '4221',
     signer_address: SIGNER,
     contract_address: '0xb2ae59ae641f571726ae81e30080f8c2192b15ef',
     method: 'resolve_epoch',
     arguments: ['1800014400'],
     value_atto: '0',
     epoch_end_timestamp: '1800014400',
+    subject_type: 'epoch',
+    subject_id: '1800014400',
     state: 'SUBMITTED',
     transaction_hash: HASH,
     lifecycle_status: 'UNKNOWN',
@@ -61,26 +63,45 @@ function fixture(responses) {
   return { repository, calls };
 }
 
-test('health requires the exact version 3 attempt schema and its version 2 base', async () => {
-  const { repository, calls } = fixture([[
-    {
-      leases_exists: true,
-      operations_exists: true,
-      requests_exists: true,
-      conflicts_exists: true,
-      guard_function_exists: true,
-      guard_trigger_exists: true,
-      logical_attempt_key_exists: true,
-      attempt_columns_exist: true,
-      base_migration_valid: true,
-      migration_valid: true,
-    },
-  ]]);
-  assert.deepEqual(await repository.health(), { configured: true, ready: true, schemaVersion: 3 });
-  assert.match(calls[0].sql, /version = 2[\s\S]*version = 3/);
+function assertBradburyV8Isolation(sql) {
+  assert.match(sql, /deployment_alias = 'v8'/);
+  assert.match(sql, /network = 'bradbury'/);
+  assert.match(sql, /chain_id = 4221/);
+}
+
+function healthySchemaRow(overrides = {}) {
+  return {
+    leases_exists: true,
+    operations_exists: true,
+    requests_exists: true,
+    conflicts_exists: true,
+    guard_function_exists: true,
+    guard_trigger_exists: true,
+    logical_attempt_key_exists: true,
+    attempt_columns_exist: true,
+    subject_columns_exist: true,
+    base_migration_valid: true,
+    attempt_migration_valid: true,
+    migration_valid: true,
+    no_unknown_migrations: true,
+    ...overrides,
+  };
+}
+
+test('health requires the exact version 4 Bradbury subject schema and its v2/v3 prerequisites', async () => {
+  const { repository, calls } = fixture([[healthySchemaRow()]]);
+  assert.deepEqual(await repository.health(), { configured: true, ready: true, schemaVersion: 4 });
+  assert.match(calls[0].sql, /version = 2[\s\S]*version = 3[\s\S]*version = 4/);
   assert.match(calls[0].sql, /logical_operation_id/);
   assert.match(calls[0].sql, /arena_keeper_operations_logical_attempt_key/);
-  assert.equal(calls[0].params.length, 2);
+  assert.match(calls[0].sql, /subject_type[\s\S]*subject_id/);
+  assert.match(calls[0].sql, /NOT EXISTS \([\s\S]*version > 4/);
+  assert.equal(calls[0].params.length, 3);
+});
+
+test('health rejects an otherwise valid database with a migration newer than V4', async () => {
+  const { repository } = fixture([[healthySchemaRow({ no_unknown_migrations: false })]]);
+  assert.deepEqual(await repository.health(), { configured: true, ready: false, schemaVersion: null });
 });
 
 test('lease acquire increments the global fence and adopts every attention record', async () => {
@@ -99,6 +120,7 @@ test('lease acquire increments the global fence and adopts every attention recor
   assert.match(calls[0].sql, /fencing_token = arena_keeper_signer_leases\.fencing_token \+ 1/);
   assert.match(calls[0].sql, /fenced_operations AS/);
   assert.match(calls[0].sql, /STATE_SATISFIED_UNPROVEN/);
+  assertBradburyV8Isolation(calls[0].sql);
   assert.equal(calls[0].options.fetchOptions.signal instanceof AbortSignal, true);
 });
 
@@ -139,6 +161,7 @@ test('hash conflict response is quarantined without overwriting the immutable st
   assert.match(calls[0].sql, /ELSE target\.transaction_hash/);
   assert.match(calls[0].sql, /SUBMISSION_HASH_CONFLICT/);
   assert.match(calls[0].sql, /arena_keeper_operation_conflicts/);
+  assertBradburyV8Isolation(calls[0].sql);
 });
 
 test('transition query permits VERIFIED only from FINALIZED_SUCCESS or idempotent VERIFIED', async () => {
@@ -169,6 +192,7 @@ test('transition query permits VERIFIED only from FINALIZED_SUCCESS or idempoten
   assert.match(calls[0].sql, /executionSucceeded/);
   assert.match(calls[0].sql, /RECEIPT_IDENTITY_AMBIGUOUS/);
   assert.match(calls[0].sql, /quarantine_reason = CASE/);
+  assertBradburyV8Isolation(calls[0].sql);
 });
 
 test('recovery query is keyset-paginated and asks for only limit plus one rows', async () => {
@@ -189,6 +213,7 @@ test('recovery query is keyset-paginated and asks for only limit plus one rows',
   assert.equal(calls[0].params.at(-1), 3);
   assert.match(calls[0].sql, /\(operation\.prepared_at, operation\.operation_id\) >/);
   assert.match(calls[0].sql, /ORDER BY operation\.prepared_at, operation\.operation_id/);
+  assertBradburyV8Isolation(calls[0].sql);
 });
 
 test('database unique conflict and every nonterminal state block a second operation', async () => {
@@ -201,12 +226,13 @@ test('database unique conflict and every nonterminal state block a second operat
       fencingToken: '9',
       operation: {
         operationId: OPERATION_ID,
-        deploymentAlias: 'v7',
+        deploymentAlias: 'v8',
         contractAddress: '0xb2ae59ae641f571726ae81e30080f8c2192b15ef',
+        subjectType: 'epoch',
+        subjectId: '1800014400',
         method: 'resolve_epoch',
         args: ['1800014400'],
         valueAtto: '0',
-        epochEndTimestamp: '1800014400',
         canonicalOperation: '{}',
       },
     }),
@@ -217,6 +243,7 @@ test('database unique conflict and every nonterminal state block a second operat
     2,
     'both PREPARE blocker queries must include STATE_SATISFIED_UNPROVEN',
   );
+  assertBradburyV8Isolation(calls[0].sql);
 });
 
 test('PREPARE grants one-shot broadcast authorization only to the inserted attempt', async () => {
@@ -240,12 +267,13 @@ test('PREPARE grants one-shot broadcast authorization only to the inserted attem
     fencingToken: '9',
     operation: {
       operationId: OPERATION_ID,
-      deploymentAlias: 'v7',
+      deploymentAlias: 'v8',
       contractAddress: '0xb2ae59ae641f571726ae81e30080f8c2192b15ef',
+      subjectType: 'epoch',
+      subjectId: '1800014400',
       method: 'resolve_epoch',
       args: ['1800014400'],
       valueAtto: '0',
-      epochEndTimestamp: '1800014400',
       canonicalOperation: '{}',
     },
   });
@@ -253,7 +281,7 @@ test('PREPARE grants one-shot broadcast authorization only to the inserted attem
   assert.equal(result.canBroadcast, false);
 });
 
-test('PREPARE appends a deterministic next attempt only after exact FINALIZED_FAILURE', async () => {
+test('PREPARE appends after finalized failure or a verified repeatable V8 retry method only', async () => {
   const retryOperationId = keeperAttemptOperationId(OPERATION_ID, '2');
   const preparedRetry = operationRow({
     operation_id: retryOperationId,
@@ -279,12 +307,13 @@ test('PREPARE appends a deterministic next attempt only after exact FINALIZED_FA
     fencingToken: '9',
     operation: {
       operationId: OPERATION_ID,
-      deploymentAlias: 'v7',
+      deploymentAlias: 'v8',
       contractAddress: '0xb2ae59ae641f571726ae81e30080f8c2192b15ef',
+      subjectType: 'epoch',
+      subjectId: '1800014400',
       method: 'resolve_epoch',
       args: ['1800014400'],
       valueAtto: '0',
-      epochEndTimestamp: '1800014400',
       canonicalOperation: '{}',
     },
   });
@@ -295,6 +324,8 @@ test('PREPARE appends a deterministic next attempt only after exact FINALIZED_FA
   assert.equal(result.inserted, true);
   assert.equal(result.canBroadcast, true);
   assert.match(calls[0].sql, /exact_latest\.state = 'FINALIZED_FAILURE'/);
+  assert.match(calls[0].sql, /exact_latest\.state = 'VERIFIED'/);
+  assert.match(calls[0].sql, /exact_latest\.method IN \('retry_prepare_payout', 'retry_payout'\)/);
   assert.match(calls[0].sql, /sha256\(convert_to/);
   assert.match(calls[0].sql, /exact_latest\.state <> 'FINALIZED_FAILURE'/);
   assert.doesNotMatch(calls[0].sql, /exact_latest\.state IN/);

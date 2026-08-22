@@ -1,11 +1,9 @@
 import {
   assertFinalizedExecution,
-  parseRawGenLayerTransactionResponse,
-  verifyRawClaimChildTransaction,
-  verifyRawClaimParentTransaction,
 } from '../market/genlayer-client.js';
 import { decodeGenLayerReceiptCall } from '../market/genlayer-receipt-call.js';
 import { HistoryError } from './errors.mjs';
+import { HISTORY_MAX_SYNC_PAYOUTS } from './config.mjs';
 import { HISTORY_ASSETS, transactionHash } from './schema.mjs';
 
 const FINALIZED = 'FINALIZED';
@@ -21,8 +19,13 @@ const METHOD_KIND = Object.freeze({
   resolve_epoch: 'RESOLVE_EPOCH',
   activate_timeout_refund: 'ACTIVATE_TIMEOUT_REFUND',
   enter: 'WAGER',
-  claim: 'CLAIM',
-  withdraw_accrued_fees: 'FEE_WITHDRAWAL',
+  claim: 'CLAIM_REQUEST',
+  request_fee_payout: 'REQUEST_FEE_PAYOUT',
+  retry_prepare_payout: 'RETRY_PREPARE_PAYOUT',
+  dispatch_payout: 'DISPATCH_PAYOUT',
+  retry_payout: 'RETRY_PAYOUT',
+  confirm_payout: 'CONFIRM_PAYOUT',
+  refresh_payout_withdrawal: 'REFRESH_PAYOUT_WITHDRAWAL',
 });
 
 function fail(code, message, statusCode = 502, cause) {
@@ -38,7 +41,7 @@ function normalizedAddress(value, label) {
 function configuredDeploymentId(deployment) {
   const rpcAddress = String(deployment?.address || '').trim();
   const addressKey = rpcAddress.toLowerCase();
-  const deploymentId = `studionet:${addressKey}`;
+  const deploymentId = `testnet-bradbury:${addressKey}`;
   if (!/^0x[0-9a-f]{40}$/.test(addressKey)
     || deployment?.addressKey !== addressKey
     || deployment?.deploymentId !== deploymentId) {
@@ -49,9 +52,9 @@ function configuredDeploymentId(deployment) {
 
 function singleField(object, names, label, { required = true } = {}) {
   const present = names.filter((name) => Object.hasOwn(object || {}, name));
-  if (present.length > 1) fail('HISTORY_PROOF', `StudioNet proof has ambiguous ${label}.`);
+  if (present.length > 1) fail('HISTORY_PROOF', `Bradbury proof has ambiguous ${label}.`);
   if (present.length === 0) {
-    if (required) fail('HISTORY_PROOF', `StudioNet proof is missing ${label}.`);
+    if (required) fail('HISTORY_PROOF', `Bradbury proof is missing ${label}.`);
     return undefined;
   }
   return object[present[0]];
@@ -60,11 +63,11 @@ function singleField(object, names, label, { required = true } = {}) {
 function matchingAlias(object, names, label, normalize = String, { required = true } = {}) {
   const present = names.filter((name) => Object.hasOwn(object || {}, name));
   if (present.length === 0) {
-    if (required) fail('HISTORY_PROOF', `StudioNet proof is missing ${label}.`);
+    if (required) fail('HISTORY_PROOF', `Bradbury proof is missing ${label}.`);
     return undefined;
   }
   const values = present.map((name) => normalize(object[name]));
-  if (new Set(values).size !== 1) fail('HISTORY_PROOF', `StudioNet proof reports conflicting ${label}.`);
+  if (new Set(values).size !== 1) fail('HISTORY_PROOF', `Bradbury proof reports conflicting ${label}.`);
   return values[0];
 }
 
@@ -83,23 +86,6 @@ function rawFinalized(transaction, label) {
   if (status !== FINALIZED) fail('HISTORY_PROOF', `${label} is not FINALIZED.`);
 }
 
-function receiptFinalized(receipt, label) {
-  // StudioNet receipts expose `status` as a numeric lifecycle code and
-  // `status_name` as its canonical label. They are complementary fields, not
-  // aliases, so only compare the name variants here.
-  const status = matchingAlias(receipt, ['statusName', 'status_name'], `${label} receipt status`, (value) => String(value).toUpperCase());
-  if (status !== FINALIZED) fail('HISTORY_PROOF', `${label} receipt is not FINALIZED.`);
-  const execution = matchingAlias(
-    receipt,
-    ['txExecutionResultName', 'tx_execution_result_name'],
-    `${label} execution result`,
-    (value) => String(value).toUpperCase(),
-    { required: false },
-  );
-  if (execution && execution !== SUCCESS) fail('HISTORY_PROOF', `${label} execution did not succeed.`);
-  return execution || null;
-}
-
 function successfulExecutionReceipt(receipt, label) {
   try {
     assertFinalizedExecution(receipt);
@@ -114,12 +100,29 @@ function successfulExecutionReceipt(receipt, label) {
   }
 }
 
+function parseRawTransactionResponse(text, expectedHash) {
+  let envelope;
+  try {
+    envelope = JSON.parse(text);
+  } catch (error) {
+    fail('HISTORY_RPC_JSON', 'Bradbury transaction response is invalid JSON.', 502, error);
+  }
+  if (!envelope || envelope.jsonrpc !== '2.0' || envelope.id !== 1
+    || Object.hasOwn(envelope, 'error') || !envelope.result
+    || typeof envelope.result !== 'object' || Array.isArray(envelope.result)) {
+    fail('HISTORY_RPC_SCHEMA', 'Bradbury transaction response envelope is invalid.');
+  }
+  const actualHash = String(envelope.result.hash || '').toLowerCase();
+  if (actualHash !== expectedHash) fail('HISTORY_PROOF', 'Bradbury transaction hash does not match its lookup key.');
+  return envelope.result;
+}
+
 function receiptCall(receipt) {
   let decoded;
   try {
     decoded = decodeGenLayerReceiptCall(receipt);
   } catch (error) {
-    fail('HISTORY_PROOF', 'Finalized StudioNet transaction has no exact decoded contract call.', 502, error);
+    fail('HISTORY_PROOF', 'Finalized Bradbury transaction has no exact decoded contract call.', 502, error);
   }
   return Object.freeze({
     method: decoded.method,
@@ -149,7 +152,10 @@ function exactSender(raw) {
 }
 
 function epochFromCall(call) {
-  if (call.method === 'withdraw_accrued_fees') return null;
+  if (new Set([
+    'request_fee_payout', 'retry_prepare_payout', 'dispatch_payout', 'retry_payout',
+    'confirm_payout', 'refresh_payout_withdrawal',
+  ]).has(call.method)) return null;
   const raw = String(call.args[0] ?? '');
   if (!/^\d+$/.test(raw)) fail('HISTORY_PROOF', 'Finalized call has no canonical epoch argument.');
   const epoch = BigInt(raw);
@@ -167,8 +173,7 @@ function validateCallArguments(call, deployment) {
     }
   };
   if (call.method === 'create_epoch') {
-    const expectedLength = deployment.protocolVersion === 'LIQUIDITY_ARENA_V7' ? 1 : 3;
-    if (call.args.length !== expectedLength) fail('HISTORY_PROOF', 'Finalized create_epoch arguments are invalid.');
+    if (call.args.length !== 1) fail('HISTORY_PROOF', 'Finalized create_epoch arguments are invalid.');
     for (const [index, value] of call.args.entries()) {
       if (!/^\d+$/.test(value) || BigInt(value) <= 0n) fail('HISTORY_PROOF', `Finalized create_epoch argument ${index} is invalid.`);
     }
@@ -181,9 +186,16 @@ function validateCallArguments(call, deployment) {
   } else if (call.method === 'claim') {
     if (call.args.length !== 2) fail('HISTORY_PROOF', 'Finalized claim arguments are invalid.');
     objective(call.args[1]);
-  } else if (call.method === 'withdraw_accrued_fees') {
+  } else if (call.method === 'request_fee_payout') {
     if (call.args.length !== 1 || !/^\d+$/.test(call.args[0]) || BigInt(call.args[0]) <= 0n) {
-      fail('HISTORY_PROOF', 'Finalized fee withdrawal arguments are invalid.');
+      fail('HISTORY_PROOF', 'Finalized fee payout request arguments are invalid.');
+    }
+  } else if (new Set([
+    'retry_prepare_payout', 'dispatch_payout', 'retry_payout',
+    'confirm_payout', 'refresh_payout_withdrawal',
+  ]).has(call.method)) {
+    if (call.args.length !== 1 || !/^[0-9a-f]{64}$/.test(call.args[0])) {
+      fail('HISTORY_PROOF', `Finalized ${call.method} payout ID is invalid.`);
     }
   }
   return epoch;
@@ -192,11 +204,11 @@ function validateCallArguments(call, deployment) {
 async function boundedResponseText(response, maximumBytes = MAX_RPC_BYTES) {
   const declared = String(response?.headers?.get?.('content-length') || '');
   if (declared && (!/^\d+$/.test(declared) || Number(declared) > maximumBytes)) {
-    fail('HISTORY_RPC_SIZE', 'StudioNet RPC response is too large.');
+    fail('HISTORY_RPC_SIZE', 'Bradbury RPC response is too large.');
   }
   if (!response?.body?.getReader) {
     const text = await response.text();
-    if (Buffer.byteLength(text, 'utf8') > maximumBytes) fail('HISTORY_RPC_SIZE', 'StudioNet RPC response is too large.');
+    if (Buffer.byteLength(text, 'utf8') > maximumBytes) fail('HISTORY_RPC_SIZE', 'Bradbury RPC response is too large.');
     return text;
   }
   const reader = response.body.getReader();
@@ -210,7 +222,7 @@ async function boundedResponseText(response, maximumBytes = MAX_RPC_BYTES) {
       total += value.byteLength;
       if (total > maximumBytes) {
         await reader.cancel().catch(() => {});
-        fail('HISTORY_RPC_SIZE', 'StudioNet RPC response is too large.');
+        fail('HISTORY_RPC_SIZE', 'Bradbury RPC response is too large.');
       }
       text += decoder.decode(value, { stream: true });
     }
@@ -218,7 +230,7 @@ async function boundedResponseText(response, maximumBytes = MAX_RPC_BYTES) {
     return text;
   } catch (error) {
     if (error instanceof HistoryError) throw error;
-    fail('HISTORY_RPC_ENCODING', 'StudioNet RPC response is not valid UTF-8.', 502, error);
+    fail('HISTORY_RPC_ENCODING', 'Bradbury RPC response is not valid UTF-8.', 502, error);
   } finally {
     reader.releaseLock?.();
   }
@@ -238,7 +250,7 @@ async function mapConcurrent(values, worker, concurrency = MAX_CONCURRENCY) {
   return results;
 }
 
-export function createStudioNetHistoryChain({
+export function createBradburyHistoryChain({
   configuration,
   fetchImpl = globalThis.fetch,
   createClientImpl,
@@ -246,13 +258,13 @@ export function createStudioNetHistoryChain({
   callTimeoutMs = CALL_TIMEOUT_MS,
   requestDeadlineMs = REQUEST_DEADLINE_MS,
 } = {}) {
-  if (!configuration || configuration.chainId !== 61999 || configuration.network !== 'studionet') {
-    throw new TypeError('A StudioNet history chain configuration is required.');
+  if (!configuration || configuration.chainId !== 4_221 || configuration.network !== 'testnet-bradbury') {
+    throw new TypeError('A Bradbury history chain configuration is required.');
   }
   if (typeof fetchImpl !== 'function') throw new TypeError('A fetch implementation is required.');
   const endpoint = new URL(configuration.rpcUrl);
   if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.hash) {
-    throw new TypeError('History StudioNet RPC must be credential-free HTTPS.');
+    throw new TypeError('History Bradbury RPC must be credential-free HTTPS.');
   }
   const byId = new Map(configuration.deployments.map((item) => [configuredDeploymentId(item), item]));
   if (byId.size !== configuration.deployments.length) {
@@ -301,11 +313,11 @@ export function createStudioNetHistoryChain({
         signal: controller.signal,
       });
     } catch (error) {
-      fail('HISTORY_RPC_TRANSPORT', 'StudioNet RPC request failed.', 502, error);
+      fail('HISTORY_RPC_TRANSPORT', 'Bradbury RPC request failed.', 502, error);
     } finally {
       clearTimeout(timer);
     }
-    if (!response?.ok) fail('HISTORY_RPC_HTTP', `StudioNet RPC returned HTTP ${response?.status || 'ERROR'}.`);
+    if (!response?.ok) fail('HISTORY_RPC_HTTP', `Bradbury RPC returned HTTP ${response?.status || 'ERROR'}.`);
     return boundedResponseText(response, maximumBytes);
   }
 
@@ -316,12 +328,12 @@ export function createStudioNetHistoryChain({
     try {
       envelope = JSON.parse(text);
     } catch (error) {
-      fail('HISTORY_RPC_JSON', 'StudioNet chain identity response is invalid JSON.', 502, error);
+      fail('HISTORY_RPC_JSON', 'Bradbury chain identity response is invalid JSON.', 502, error);
     }
     if (envelope?.jsonrpc !== '2.0' || envelope?.id !== 1
-      || String(envelope?.result || '').toLowerCase() !== '0xf22f'
+      || String(envelope?.result || '').toLowerCase() !== '0x107d'
       || Object.hasOwn(envelope, 'error')) {
-      fail('HISTORY_CHAIN_IDENTITY', 'History RPC is not StudioNet chain 0xf22f.');
+      fail('HISTORY_CHAIN_IDENTITY', 'History RPC is not Bradbury chain 0x107d.');
     }
     networkVerified = true;
   }
@@ -329,11 +341,11 @@ export function createStudioNetHistoryChain({
   async function client() {
     clientPromise ||= Promise.resolve().then(async () => {
       if (createClientImpl) return createClientImpl({ endpoint: endpoint.href });
-      const [{ createClient }, { studionet }] = await Promise.all([
+      const [{ createClient }, { testnetBradbury }] = await Promise.all([
         import('genlayer-js'),
         import('genlayer-js/chains'),
       ]);
-      return createClient({ chain: studionet, endpoint: endpoint.href });
+      return createClient({ chain: testnetBradbury, endpoint: endpoint.href });
     });
     return clientPromise;
   }
@@ -353,19 +365,36 @@ export function createStudioNetHistoryChain({
     }), until, `${deployment.alias}.${functionName}`);
   }
 
-  async function readDeployment(deploymentId, { maxEpochs, startOffset }) {
+  async function readSchema(deployment, until) {
+    const sdk = await client();
+    return timed(sdk.getContractSchema(deployment.address), until, `${deployment.alias}.schema`);
+  }
+
+  async function readDeployment(deploymentId, { maxEpochs, startOffset, payoutOffset = 0 }) {
     const until = deadline();
     await verifyNetwork(until);
     const deployment = deploymentById(deploymentId);
-    const [config, assetCatalog, venueCatalog, rawCount] = await Promise.all([
+    const [config, schema, epochHead, payoutHead] = await Promise.all([
       read(deployment, 'get_config', [], until),
-      read(deployment, 'get_asset_catalog', [], until),
-      read(deployment, 'get_venue_catalog', [], until),
-      read(deployment, 'get_epoch_count', [], until),
+      readSchema(deployment, until),
+      read(deployment, 'get_epoch_page', [0, 1], until),
+      read(deployment, 'get_payout_page', [0, 1], until),
     ]);
-    const count = Number(rawCount);
+    const count = Number(epochHead?.total);
     if (!Number.isSafeInteger(count) || count < 0 || count > 1_000_000) {
-      fail('HISTORY_CHAIN_SCHEMA', 'StudioNet epoch count is invalid.');
+      fail('HISTORY_CHAIN_SCHEMA', 'Bradbury epoch count is invalid.');
+    }
+    const payoutCount = Number(payoutHead?.total);
+    if (!Number.isSafeInteger(payoutCount) || payoutCount < 0 || payoutCount > 1_000_000) {
+      fail('HISTORY_CHAIN_SCHEMA', 'Bradbury payout count is invalid.');
+    }
+    const expectedHeadLength = count > 0 ? 1 : 0;
+    const expectedPayoutHeadLength = payoutCount > 0 ? 1 : 0;
+    if (Number(epochHead?.offset) !== 0 || Number(epochHead?.next_offset) !== expectedHeadLength
+      || !Array.isArray(epochHead?.epoch_ids) || epochHead.epoch_ids.length !== expectedHeadLength
+      || Number(payoutHead?.offset) !== 0 || Number(payoutHead?.next_offset) !== expectedPayoutHeadLength
+      || !Array.isArray(payoutHead?.payouts) || payoutHead.payouts.length !== expectedPayoutHeadLength) {
+      fail('HISTORY_CHAIN_SCHEMA', 'Bradbury head pages are inconsistent.');
     }
     const scanOffset = startOffset === null
       ? Math.max(0, count - MAX_EPOCH_INDEX_WINDOW)
@@ -380,17 +409,15 @@ export function createStudioNetHistoryChain({
       const page = await read(deployment, 'get_epoch_page', [scanOffset, scanLimit], until);
       if (!page || Number(page.offset) !== scanOffset || Number(page.next_offset) !== scanOffset + scanLimit
         || Number(page.total) !== count || !Array.isArray(page.epoch_ids) || page.epoch_ids.length !== scanLimit) {
-        fail('HISTORY_CHAIN_SCHEMA', 'StudioNet epoch page is inconsistent.');
+        fail('HISTORY_CHAIN_SCHEMA', 'Bradbury epoch page is inconsistent.');
       }
       ids = page.epoch_ids.map((value) => String(value));
       if (new Set(ids).size !== ids.length || ids.some((value) => !/^\d+$/.test(value))) {
-        fail('HISTORY_CHAIN_SCHEMA', 'StudioNet epoch page contains malformed identifiers.');
+        fail('HISTORY_CHAIN_SCHEMA', 'Bradbury epoch page contains malformed identifiers.');
       }
       if (startOffset === null) {
         // Keep scheduled projection work on epochs whose resolution may already
-        // be published. V7 is deliberately seeded more than a day ahead, so a
-        // raw tail page otherwise contains only future OPEN epochs and never
-        // revisits the hourly epoch that has just become terminal.
+        // be published even when V8 is seeded ahead by the keeper.
         const latestResolvableEpoch = Math.floor(
           ((now() / 1_000) - RESOLUTION_PUBLICATION_DELAY_SECONDS) / 3_600,
         ) * 3_600;
@@ -417,21 +444,49 @@ export function createStudioNetHistoryChain({
         : [];
       return Object.freeze({ epoch, assets });
     });
+    const requestedPayoutOffset = Number(payoutOffset);
+    if (!Number.isSafeInteger(requestedPayoutOffset)
+      || requestedPayoutOffset < 0 || requestedPayoutOffset > 1_000_000) {
+      fail('HISTORY_CHAIN_SCHEMA', 'Bradbury payout cursor is invalid.', 400);
+    }
+    const pageOffset = payoutCount === 0 || requestedPayoutOffset >= payoutCount
+      ? 0
+      : requestedPayoutOffset;
+    const payoutLimit = Math.min(HISTORY_MAX_SYNC_PAYOUTS, payoutCount - pageOffset);
+    let payouts = [];
+    if (payoutLimit > 0) {
+      const page = pageOffset === 0 && payoutLimit === 1
+        ? payoutHead
+        : await read(deployment, 'get_payout_page', [pageOffset, payoutLimit], until);
+      if (!page || Number(page.offset) !== pageOffset
+        || Number(page.next_offset) !== pageOffset + payoutLimit
+        || Number(page.total) !== payoutCount
+        || !Array.isArray(page.payouts) || page.payouts.length !== payoutLimit) {
+        fail('HISTORY_CHAIN_SCHEMA', 'Bradbury payout page is inconsistent.');
+      }
+      payouts = page.payouts;
+    }
     return Object.freeze({
       deployment,
       config,
-      assetCatalog,
-      venueCatalog,
+      schema,
       epochCount: count,
+      payoutCount,
       offset,
       epochs: Object.freeze(epochs),
+      payouts: Object.freeze(payouts),
+      payoutPage: Object.freeze({
+        offset: pageOffset,
+        nextOffset: pageOffset + payoutLimit >= payoutCount ? 0 : pageOffset + payoutLimit,
+        total: payoutCount,
+      }),
     });
   }
 
   async function rawTransaction(hash, until) {
     const normalized = transactionHash(hash, 'proof hash');
     const text = await rpc('eth_getTransactionByHash', [normalized], until);
-    return parseRawGenLayerTransactionResponse(text, normalized);
+    return parseRawTransactionResponse(text, normalized);
   }
 
   async function finalizedReceipt(hash, until) {
@@ -442,51 +497,6 @@ export function createStudioNetHistoryChain({
       interval: 1,
       retries: 0,
     }), until, 'transaction finality proof');
-  }
-
-  async function verifyClaimChild({ rawParent, parentHash, contractAddress, epochEndTimestamp, until }) {
-    const messages = rawParent.messages;
-    if (!Array.isArray(messages) || messages.length !== 1) fail('HISTORY_PROOF', 'Finalized claim must emit exactly one transfer.');
-    const message = messages[0];
-    const recipient = normalizedAddress(singleField(message, ['recipient'], 'claim transfer recipient'), 'claim recipient');
-    const claimant = exactSender(rawParent);
-    if (!claimant || recipient !== claimant) {
-      fail('HISTORY_PROOF', 'Claim transfer recipient does not match the finalized claimant.');
-    }
-    const amountAtto = rawInteger(singleField(message, ['value'], 'claim transfer value'), 'claim transfer value', { positive: true });
-    const children = matchingAlias(
-      rawParent,
-      ['triggered_transactions', 'triggeredTransactions'],
-      'claim child list',
-      (value) => JSON.stringify(value),
-    );
-    const parsedChildren = JSON.parse(children);
-    if (!Array.isArray(parsedChildren) || parsedChildren.length !== 1) fail('HISTORY_PROOF', 'Finalized claim must derive exactly one child transfer.');
-    const childHash = transactionHash(parsedChildren[0], 'claim child hash');
-    verifyRawClaimParentTransaction(rawParent, {
-      hash: parentHash,
-      recipient,
-      amountAtto,
-      childHash,
-    });
-    const [rawChild, childReceipt] = await Promise.all([
-      rawTransaction(childHash, until),
-      finalizedReceipt(childHash, until),
-    ]);
-    receiptFinalized(childReceipt, 'claim child');
-    verifyRawClaimChildTransaction(rawChild, {
-      hash: childHash,
-      parentHash,
-      recipient,
-      amountAtto,
-      contractAddress,
-    });
-    return Object.freeze({
-      epochEndTimestamp,
-      recipient,
-      amountAtto: amountAtto.toString(),
-      childHash,
-    });
   }
 
   async function verifyProof(request) {
@@ -521,8 +531,8 @@ export function createStudioNetHistoryChain({
         valueCredited: null,
         executionResult,
         proofMetadata: Object.freeze({
-          authority: 'GENLAYER_STUDIONET_RPC',
-          chainId: 61999,
+          authority: 'GENLAYER_BRADBURY_RPC',
+          chainId: 4_221,
           independentlyRederivedFromChain: true,
           independentOracle: false,
         }),
@@ -544,16 +554,6 @@ export function createStudioNetHistoryChain({
       || (derivedKind !== 'WAGER' && BigInt(valueAtto) !== 0n)) {
       fail('HISTORY_PROOF', 'Finalized contract call value does not match its method.');
     }
-    let child = null;
-    if (derivedKind === 'CLAIM') {
-      child = await verifyClaimChild({
-        rawParent: raw,
-        parentHash: hash,
-        contractAddress: deployment.address,
-        epochEndTimestamp,
-        until,
-      });
-    }
     return Object.freeze({
       transactionHash: hash,
       deploymentId: deployment.deploymentId,
@@ -565,20 +565,15 @@ export function createStudioNetHistoryChain({
       senderAddress,
       recipientAddress,
       parentTransactionHash: null,
-      childTransactionHashes: Object.freeze(child ? [child.childHash] : []),
-      valueAtto: child?.amountAtto ?? valueAtto,
-      valueCredited: child ? true : null,
+      childTransactionHashes: Object.freeze([]),
+      valueAtto,
+      valueCredited: null,
       executionResult,
       proofMetadata: Object.freeze({
-        authority: 'GENLAYER_STUDIONET_RPC',
-        chainId: 61999,
+        authority: 'GENLAYER_BRADBURY_RPC',
+        chainId: 4_221,
         independentlyRederivedFromChain: true,
         independentOracle: false,
-        ...(child ? {
-          payoutRecipient: child.recipient,
-          payoutChildHash: child.childHash,
-          payoutChildFinalizedAndCredited: true,
-        } : {}),
       }),
     });
   }

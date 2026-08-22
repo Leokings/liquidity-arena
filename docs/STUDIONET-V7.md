@@ -81,7 +81,8 @@ P0/P1/P2 all zero. Pytest advisory
 
 V7 still reports 2 GEN of active player liability across two eligible unclaimed refunds. Because V7
 has no upgrader and applies claim accounting before its independent transfer child, ambiguous-child
-recovery remains a protocol P1. The proposed fresh V8 state machine and idempotent escrow are in
+recovery remains a protocol P1. The implemented but inactive/unbroadcast V8 state machine and
+idempotent escrow are in
 [`V8-PAYOUT-RECOVERY.md`](V8-PAYOUT-RECOVERY.md).
 
 ## Deployed policy

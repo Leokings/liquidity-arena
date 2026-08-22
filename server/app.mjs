@@ -5,7 +5,7 @@ import { isIP } from 'node:net';
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 import { createClient } from 'genlayer-js';
-import { studionet } from 'genlayer-js/chains';
+import { testnetBradbury } from 'genlayer-js/chains';
 
 import {
   configuredBinanceRestBases,
@@ -50,10 +50,10 @@ function canonicalChainRpcUrl(chain) {
 }
 
 const GENLAYER_NETWORKS = Object.freeze({
-  studionet: Object.freeze({
-    chain: studionet,
-    chainId: canonicalChainId(studionet),
-    rpcUrl: canonicalChainRpcUrl(studionet),
+  'testnet-bradbury': Object.freeze({
+    chain: testnetBradbury,
+    chainId: canonicalChainId(testnetBradbury),
+    rpcUrl: canonicalChainRpcUrl(testnetBradbury),
   }),
 });
 
@@ -61,7 +61,7 @@ function configuredGenLayerNetwork(value) {
   const name = String(value || '').trim();
   const descriptor = GENLAYER_NETWORKS[name];
   if (!descriptor) {
-    throw new Error('VITE_GENLAYER_NETWORK must be "studionet".');
+    throw new Error('VITE_GENLAYER_NETWORK must be "testnet-bradbury".');
   }
   return Object.freeze({ name, ...descriptor });
 }
@@ -88,7 +88,7 @@ function contentSecurityPolicy(genLayerRpcUrl) {
 }
 
 const STATIC_CONTENT_SECURITY_POLICY = contentSecurityPolicy(
-  GENLAYER_NETWORKS.studionet.rpcUrl,
+  GENLAYER_NETWORKS['testnet-bradbury'].rpcUrl,
 );
 const DEFAULT_WALLET_ORIGINS = Object.freeze([
   'chrome-extension://nkbihfbeogaeaoehlefnkodbefgpgknn',
@@ -250,16 +250,19 @@ function assertResolvedConfig(config) {
   }
 }
 
-function createDefaultContractReader(config) {
+function createDefaultContractAccess(config) {
   const network = configuredGenLayerNetwork(config.genLayerNetwork);
   const client = createClient({
     chain: network.chain,
     endpoint: config.genLayerRpcUrl,
   });
-  return ({ address, functionName, args }) => client.readContract({
-    address,
-    functionName,
-    args,
+  return Object.freeze({
+    readContract: ({ address, functionName, args }) => client.readContract({
+      address,
+      functionName,
+      args,
+    }),
+    readSchema: (address) => client.getContractSchema(address),
   });
 }
 
@@ -419,6 +422,7 @@ export function createProductionApp({
   webSocketFactory,
   streamHub,
   contractReader,
+  schemaReader,
   logger = console,
 } = {}) {
   assertResolvedConfig(config);
@@ -436,10 +440,14 @@ export function createProductionApp({
       logger?.error?.(`[binance-stream] ${error?.message || 'Unknown stream error'}`);
     },
   });
+  const defaultContractAccess = contractReader && schemaReader
+    ? null
+    : createDefaultContractAccess(config);
   const readiness = createLiquidityArenaReadinessProbe({
     config,
     fetchImpl,
-    readContract: contractReader || createDefaultContractReader(config),
+    readContract: contractReader || defaultContractAccess.readContract,
+    readSchema: schemaReader || defaultContractAccess.readSchema,
   });
   const middlewares = [
     createApiOriginMiddleware(config.walletOrigins || DEFAULT_WALLET_ORIGINS),
@@ -469,7 +477,12 @@ export function createProductionApp({
         status: 'ok',
         service: 'liquidity-arena',
         check: 'liveness',
-        static: { ready: true },
+        static: {
+          ready: true,
+          network: 'testnet-bradbury',
+          chainId: 4_221,
+          deployment: 'v8',
+        },
         binance: {
           configured: binanceStream.hub.configured === true,
           streamRunning: binanceStream.hub.running === true,
@@ -522,6 +535,7 @@ export async function startProductionServer({
   webSocketFactory,
   streamHub,
   contractReader,
+  schemaReader,
   logger = console,
 } = {}) {
   if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) {
@@ -534,6 +548,7 @@ export async function startProductionServer({
     webSocketFactory,
     streamHub,
     contractReader,
+    schemaReader,
     logger,
   });
   const server = createServer((req, res) => {
