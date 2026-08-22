@@ -39,7 +39,7 @@
     "@neondatabase/serverless": "1.1.0",
     "@noble/hashes": "1.8.0",
     "genlayer-js": "1.1.8",
-    "ws": "^7.5.13"
+    "ws": "^8.21.3"
   },
   "overrides": {
     "nanoid": "3.3.18",
