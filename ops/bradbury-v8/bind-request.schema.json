@@ -63,7 +63,7 @@
     "configFingerprint": { "$ref": "#/$defs/sha256" },
     "sourcePath": { "type": "string", "minLength": 1 },
     "sourceSha256": { "$ref": "#/$defs/sha256" },
-    "schemaSha256": { "const": "bc1849b4e0299e0bf257ad6a6e5adb75c824b17136d7f876e10742856a7019d3" },
+    "schemaSha256": { "const": "c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4" },
     "deploymentGenLayerTransactionHash": { "$ref": "#/$defs/hash" },
     "deploymentEvmTransactionHash": { "$ref": "#/$defs/hash" },
     "deploymentEvmReceiptBlockHash": { "$ref": "#/$defs/hash" },

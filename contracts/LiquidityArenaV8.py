@@ -13,12 +13,10 @@ PAYOUT_PROTOCOL_VERSION = "IDEMPOTENT_EVM_VAULT_V1"
 
 STATUS_OPEN = "OPEN"
 STATUS_RESOLVED = "RESOLVED"
-STATUS_UNDETERMINED = "UNDETERMINED"
 STATUS_TIMED_OUT = "TIMED_OUT"
 
 RESULT_PENDING = "PENDING"
 RESULT_DETERMINED = "DETERMINED"
-RESULT_UNDETERMINED = "UNDETERMINED"
 RESULT_TIMEOUT = "TIMEOUT"
 
 OBJECTIVE_HIGH = "HIGH"
@@ -32,21 +30,13 @@ SETTLEMENT_PARIMUTUEL = "PARIMUTUEL"
 SETTLEMENT_REFUND_TIE = "REFUND_TIE"
 SETTLEMENT_REFUND_UNBACKED_WINNER = "REFUND_UNBACKED_WINNER"
 SETTLEMENT_REFUND_NO_LOSING_SIDE = "REFUND_NO_LOSING_SIDE"
-SETTLEMENT_REFUND_UNDETERMINED = "REFUND_UNDETERMINED"
 SETTLEMENT_REFUND_TIMEOUT = "REFUND_TIMEOUT"
 REFUND_SETTLEMENT_MODES = (
     SETTLEMENT_REFUND_TIE,
     SETTLEMENT_REFUND_UNBACKED_WINNER,
     SETTLEMENT_REFUND_NO_LOSING_SIDE,
-    SETTLEMENT_REFUND_UNDETERMINED,
     SETTLEMENT_REFUND_TIMEOUT,
 )
-SUPPORTED_SETTLEMENT_MODES = (
-    SETTLEMENT_PENDING,
-    SETTLEMENT_PARIMUTUEL,
-    *REFUND_SETTLEMENT_MODES,
-)
-
 ERROR_EXPECTED = "[EXPECTED]"
 ERROR_EXTERNAL = "[EXTERNAL]"
 ERROR_TRANSIENT = "[TRANSIENT]"
@@ -62,7 +52,6 @@ KEEPER_MAX_SCHEDULE_AHEAD_SECONDS = 26 * 60 * 60
 ZERO_ADDRESS_TEXT = "0x" + ("0" * 40)
 
 DEFAULT_PLATFORM_FEE_BPS = 200
-MAX_PLATFORM_FEE_BPS = 500
 BPS_DENOMINATOR = 10_000
 
 PRICE_SCALE = 100_000_000
@@ -73,9 +62,6 @@ MIN_QUALIFIED_VENUES = 3
 MAX_SOURCE_BYTES = 512_000
 MAX_PAGE_SIZE = 50
 
-NATIVE_TOKEN_SYMBOL = "GEN"
-NATIVE_TOKEN_DECIMALS = 18
-
 PAYOUT_PREPARING = "PREPARING"
 PAYOUT_DISPATCHED = "DISPATCHED"
 PAYOUT_FUNDED_IN_ESCROW = "FUNDED_IN_ESCROW"
@@ -85,10 +71,10 @@ PAYOUT_KIND_FEE = "FEE"
 PAYOUT_RETRY_DELAY_SECONDS = 60 * 60
 MAX_PAYOUT_ATTEMPTS = 3
 SUPPORTED_ESCROW_CHAIN_IDS = (4_221,)
-# Activation remains deliberately impossible until an independently deployed,
-# bytecode-verified immutable factory is frozen into this source. Constructor
-# input and factory self-reporting alone are not security anchors.
-AUDITED_PAYOUT_FACTORY_4221 = ZERO_ADDRESS_TEXT
+# Activation trusts only the independently deployed, bytecode-verified immutable
+# factory frozen into this source. Constructor input and factory self-reporting
+# alone are not security anchors.
+AUDITED_PAYOUT_FACTORY_4221 = "0x944fdadd826c2a159c63cb100db174716ccd1317"
 
 VENUE_BINANCE = "BINANCE"
 VENUE_OKX = "OKX"
@@ -241,8 +227,15 @@ def _wallet_entry_key(epoch_key: str, objective: str, account: Address) -> str:
     return epoch_key + "|" + objective + "|" + _address_text(account)
 
 
-def _wallet_index_key(account: Address, index: int) -> str:
-    return _address_text(account) + "|" + str(index)
+def _page_bounds(offset: u256, limit: u256, count: int) -> tuple[int, int]:
+    start = int(offset)
+    page_limit = int(limit)
+    if page_limit <= 0 or page_limit > MAX_PAGE_SIZE:
+        _expected("PAGE_LIMIT", "Page limit must be between 1 and 50")
+    if start < 0 or start > count:
+        _expected("PAGE_OFFSET", "Page offset is out of bounds")
+    end = start + page_limit
+    return start, count if end > count else end
 
 
 def _symbol_for(venue: str, asset_id: str) -> str:
@@ -255,15 +248,15 @@ def _symbol_for(venue: str, asset_id: str) -> str:
 
 def _decimal_to_e8(raw) -> int:
     if raw is None or isinstance(raw, bool):
-        _external("PRICE_VALUE", "Candle price is empty or boolean")
+        _external("PRICE_EMPTY", "Candle price is empty or boolean")
     text = str(raw).strip()
     if len(text) == 0 or text.startswith("-") or "e" in text.lower():
-        _external("PRICE_VALUE", "Candle price uses an unsupported representation")
+        _external("PRICE_REPRESENTATION", "Candle price uses an unsupported representation")
     if text.startswith("+"):
         text = text[1:]
     pieces = text.split(".")
     if len(pieces) > 2:
-        _external("PRICE_VALUE", "Candle price is not a decimal")
+        _external("PRICE_DECIMAL", "Candle price is not a decimal")
     whole = pieces[0] if len(pieces[0]) > 0 else "0"
     fraction = pieces[1] if len(pieces) == 2 else ""
     if (
@@ -274,26 +267,26 @@ def _decimal_to_e8(raw) -> int:
             and (not fraction.isascii() or not fraction.isdigit())
         )
     ):
-        _external("PRICE_VALUE", "Candle price is not numeric")
+        _external("PRICE_NUMERIC", "Candle price is not numeric")
     fraction_e8 = (fraction + ("0" * 8))[:8]
     result = int(whole) * PRICE_SCALE + int(fraction_e8 or "0")
     if result <= 0 or result > MAX_PRICE_E8:
-        _external("PRICE_RANGE", "Candle price is outside the supported range")
+        _external("PRICE_DECIMAL_RANGE", "Candle price is outside the supported range")
     return result
 
 
 def _integer_timestamp(raw, code: str) -> int:
     if raw is None or isinstance(raw, bool):
-        _external(code, "Candle timestamp is missing")
+        _external(code + "_MISSING", "Candle timestamp is missing")
     text = str(raw).strip()
     if not text.isascii() or not text.isdigit():
-        _external(code, "Candle timestamp must be a base-10 integer")
+        _external(code + "_FORMAT", "Candle timestamp must be a base-10 integer")
     return int(text)
 
 
 def _return_ppb(start_open_e8: int, end_close_e8: int) -> int:
     if start_open_e8 <= 0 or end_close_e8 <= 0:
-        _external("PRICE_RANGE", "Settlement prices must be positive")
+        _external("RETURN_PRICE_RANGE", "Settlement prices must be positive")
     return ((end_close_e8 - start_open_e8) * RETURN_SCALE) // start_open_e8
 
 
@@ -316,127 +309,73 @@ def _price_pair(start_open, end_close) -> dict:
     }
 
 
-def _parse_binance(payload, battle_start: int, epoch_end: int) -> dict:
-    if not isinstance(payload, list):
-        _external("BINANCE_SCHEMA", "Binance candles must be an array")
-    start_ms = battle_start * 1000
-    end_open_ms = (epoch_end - 60) * 1000
-    start_open = None
-    end_close = None
-    for row in payload:
-        if not isinstance(row, list) or len(row) < 7:
-            _external("BINANCE_SCHEMA", "Binance candle row is malformed")
-        timestamp = _integer_timestamp(row[0], "BINANCE_TIMESTAMP")
-        if timestamp == start_ms:
-            start_open = row[1]
-        if timestamp == end_open_ms:
-            close_timestamp = _integer_timestamp(row[6], "BINANCE_CLOSE_TIMESTAMP")
-            if close_timestamp >= epoch_end * 1000:
-                _external("BINANCE_INCOMPLETE", "Binance closing candle is not complete")
-            end_close = row[4]
-    if start_open is None or end_close is None:
-        _external("BINANCE_CANDLES", "Binance omitted a required exact one-minute candle")
-    return _price_pair(start_open, end_close)
-
-
-def _parse_okx(payload, battle_start: int, epoch_end: int) -> dict:
-    if not isinstance(payload, dict) or str(payload.get("code", "")) != "0":
-        _external("OKX_STATUS", "OKX returned a non-success response")
-    rows = payload.get("data")
+def _parse_venue_payload(
+    venue: str,
+    payload,
+    battle_start: int,
+    epoch_end: int,
+) -> dict:
+    factor = 1000
+    open_index = 1
+    close_index = 4
+    minimum_row_length = 7
+    if venue == VENUE_BINANCE:
+        rows = payload
+    elif venue == VENUE_OKX:
+        if not isinstance(payload, dict) or str(payload.get("code", "")) != "0":
+            _external("OKX_STATUS", "OKX returned a non-success response")
+        rows = payload.get("data")
+        minimum_row_length = 9
+    elif venue == VENUE_BYBIT:
+        if not isinstance(payload, dict) or int(payload.get("retCode", -1)) != 0:
+            _external("BYBIT_STATUS", "Bybit returned a non-success response")
+        result = payload.get("result")
+        rows = result.get("list") if isinstance(result, dict) else None
+    elif venue == VENUE_GATE:
+        rows = payload
+        factor = 1
+        open_index = 5
+        close_index = 2
+        minimum_row_length = 8
+    elif venue == VENUE_KUCOIN:
+        if not isinstance(payload, dict) or str(payload.get("code", "")) != "200000":
+            _external("KUCOIN_STATUS", "KuCoin returned a non-success response")
+        data = payload.get("data")
+        rows = data.get("list") if isinstance(data, dict) else data
+        factor = 1
+    else:
+        _external("VENUE_PARSER", "Unknown immutable candle adapter")
     if not isinstance(rows, list):
-        _external("OKX_SCHEMA", "OKX candle data must be an array")
-    start_ms = battle_start * 1000
-    end_open_ms = (epoch_end - 60) * 1000
+        _external(venue + "_PAYLOAD_SCHEMA", "Candle data must be an array")
+
+    start_timestamp = battle_start * factor
+    end_timestamp = (epoch_end - 60) * factor
     start_open = None
     end_close = None
     for row in rows:
-        if not isinstance(row, list) or len(row) < 9:
-            _external("OKX_SCHEMA", "OKX candle row is malformed")
-        timestamp = _integer_timestamp(row[0], "OKX_TIMESTAMP")
-        confirmed = str(row[8]) == "1"
-        if timestamp == start_ms:
-            if not confirmed:
-                _external("OKX_INCOMPLETE", "OKX opening candle is not complete")
-            start_open = row[1]
-        if timestamp == end_open_ms:
-            if not confirmed:
-                _external("OKX_INCOMPLETE", "OKX closing candle is not complete")
-            end_close = row[4]
+        if not isinstance(row, list) or len(row) < minimum_row_length:
+            _external(venue + "_ROW_SCHEMA", "Candle row is malformed")
+        timestamp = _integer_timestamp(row[0], venue + "_TIMESTAMP")
+        complete = True
+        if venue == VENUE_OKX:
+            complete = str(row[8]) == "1"
+        elif venue == VENUE_GATE:
+            complete = row[7] is True or str(row[7]).lower() == "true"
+        elif venue == VENUE_BINANCE and timestamp == end_timestamp:
+            complete = _integer_timestamp(
+                row[6],
+                "BINANCE_CLOSE_TIMESTAMP",
+            ) < epoch_end * 1000
+        if timestamp == start_timestamp:
+            if not complete:
+                _external(venue + "_OPEN_INCOMPLETE", "Opening candle is not complete")
+            start_open = row[open_index]
+        if timestamp == end_timestamp:
+            if not complete:
+                _external(venue + "_CLOSE_INCOMPLETE", "Closing candle is not complete")
+            end_close = row[close_index]
     if start_open is None or end_close is None:
-        _external("OKX_CANDLES", "OKX omitted a required exact one-minute candle")
-    return _price_pair(start_open, end_close)
-
-
-def _parse_bybit(payload, battle_start: int, epoch_end: int) -> dict:
-    if not isinstance(payload, dict) or int(payload.get("retCode", -1)) != 0:
-        _external("BYBIT_STATUS", "Bybit returned a non-success response")
-    result = payload.get("result")
-    rows = result.get("list") if isinstance(result, dict) else None
-    if not isinstance(rows, list):
-        _external("BYBIT_SCHEMA", "Bybit candle data must be an array")
-    start_ms = battle_start * 1000
-    end_open_ms = (epoch_end - 60) * 1000
-    start_open = None
-    end_close = None
-    for row in rows:
-        if not isinstance(row, list) or len(row) < 7:
-            _external("BYBIT_SCHEMA", "Bybit candle row is malformed")
-        timestamp = _integer_timestamp(row[0], "BYBIT_TIMESTAMP")
-        if timestamp == start_ms:
-            start_open = row[1]
-        if timestamp == end_open_ms:
-            end_close = row[4]
-    if start_open is None or end_close is None:
-        _external("BYBIT_CANDLES", "Bybit omitted a required exact one-minute candle")
-    return _price_pair(start_open, end_close)
-
-
-def _parse_gate(payload, battle_start: int, epoch_end: int) -> dict:
-    if not isinstance(payload, list):
-        _external("GATE_SCHEMA", "Gate candles must be an array")
-    end_open = epoch_end - 60
-    start_open = None
-    end_close = None
-    for row in payload:
-        if not isinstance(row, list) or len(row) < 8:
-            _external("GATE_SCHEMA", "Gate candle row is malformed")
-        timestamp = _integer_timestamp(row[0], "GATE_TIMESTAMP")
-        closed = row[7] is True or str(row[7]).lower() == "true"
-        if timestamp == battle_start:
-            if not closed:
-                _external("GATE_INCOMPLETE", "Gate opening candle is not complete")
-            start_open = row[5]
-        if timestamp == end_open:
-            if not closed:
-                _external("GATE_INCOMPLETE", "Gate closing candle is not complete")
-            end_close = row[2]
-    if start_open is None or end_close is None:
-        _external("GATE_CANDLES", "Gate omitted a required exact one-minute candle")
-    return _price_pair(start_open, end_close)
-
-
-def _parse_kucoin(payload, battle_start: int, epoch_end: int) -> dict:
-    if not isinstance(payload, dict) or str(payload.get("code", "")) != "200000":
-        _external("KUCOIN_STATUS", "KuCoin returned a non-success response")
-    data = payload.get("data")
-    # The current UTA response wraps spot rows in data.list. Early UTA examples
-    # also showed the list directly, so accept both documented wire shapes.
-    rows = data.get("list") if isinstance(data, dict) else data
-    if not isinstance(rows, list):
-        _external("KUCOIN_SCHEMA", "KuCoin candle data must be an array")
-    end_open = epoch_end - 60
-    start_open = None
-    end_close = None
-    for row in rows:
-        if not isinstance(row, list) or len(row) < 7:
-            _external("KUCOIN_SCHEMA", "KuCoin candle row is malformed")
-        timestamp = _integer_timestamp(row[0], "KUCOIN_TIMESTAMP")
-        if timestamp == battle_start:
-            start_open = row[1]
-        if timestamp == end_open:
-            end_close = row[4]
-    if start_open is None or end_close is None:
-        _external("KUCOIN_CANDLES", "KuCoin omitted a required exact one-minute candle")
+        _external(venue + "_CANDLES", "A required exact one-minute candle is missing")
     return _price_pair(start_open, end_close)
 
 
@@ -494,7 +433,7 @@ def _source_url(venue: str, asset_id: str, battle_start: int, epoch_end: int) ->
             + "&endAt="
             + str(epoch_end)
         )
-    _external("VENUE", "Unknown immutable candle adapter")
+    _external("VENUE_SOURCE", "Unknown immutable candle adapter")
 
 
 def _fetch_json(url: str):
@@ -511,25 +450,6 @@ def _fetch_json(url: str):
         _external("SOURCE_JSON", "Candle source returned malformed JSON")
 
 
-def _parse_venue_payload(
-    venue: str,
-    payload,
-    battle_start: int,
-    epoch_end: int,
-) -> dict:
-    if venue == VENUE_BINANCE:
-        return _parse_binance(payload, battle_start, epoch_end)
-    if venue == VENUE_OKX:
-        return _parse_okx(payload, battle_start, epoch_end)
-    if venue == VENUE_BYBIT:
-        return _parse_bybit(payload, battle_start, epoch_end)
-    if venue == VENUE_GATE:
-        return _parse_gate(payload, battle_start, epoch_end)
-    if venue == VENUE_KUCOIN:
-        return _parse_kucoin(payload, battle_start, epoch_end)
-    _external("VENUE", "Unknown immutable candle adapter")
-
-
 def _fetch_venue_result(venue: str, battle_start: int, epoch_end: int):
     asset_results = []
     try:
@@ -537,28 +457,26 @@ def _fetch_venue_result(venue: str, battle_start: int, epoch_end: int):
             payload = _fetch_json(_source_url(venue, asset_id, battle_start, epoch_end))
             prices = _parse_venue_payload(venue, payload, battle_start, epoch_end)
             asset_results.append(
-                {
-                    "asset_id": asset_id,
-                    "start_open_e8": prices["start_open_e8"],
-                    "end_close_e8": prices["end_close_e8"],
-                    "return_ppb": _return_ppb(
+                [
+                    asset_id,
+                    _return_ppb(
                         prices["start_open_e8"],
                         prices["end_close_e8"],
                     ),
-                }
+                ]
             )
     except Exception:
         # A venue is atomic: one missing, malformed, or unavailable asset
         # disqualifies that venue for the entire five-asset result vector.
         return None
-    return {"venue": venue, "assets": asset_results}
+    return [venue, asset_results]
 
 
-def _winner_from_assets(assets: list[dict], objective: str) -> tuple[str, int]:
+def _winner_from_assets(assets: list, objective: str) -> tuple[str, int]:
     winning_return = None
     winners = []
     for item in assets:
-        score = int(item["return_ppb"])
+        score = int(item[1])
         better = (
             winning_return is None
             or (objective == OBJECTIVE_HIGH and score > winning_return)
@@ -566,15 +484,15 @@ def _winner_from_assets(assets: list[dict], objective: str) -> tuple[str, int]:
         )
         if better:
             winning_return = score
-            winners = [item["asset_id"]]
+            winners = [item[0]]
         elif score == winning_return:
-            winners.append(item["asset_id"])
+            winners.append(item[0])
     if winning_return is None:
         _external("RESULT_EMPTY", "Determined result vector cannot be empty")
     return (winners[0] if len(winners) == 1 else WINNER_TIE, winning_return)
 
 
-def _resolve_market(epoch_end: int) -> dict:
+def _resolve_market(epoch_end: int) -> list:
     battle_start = epoch_end - BATTLE_OPEN_OFFSET_SECONDS
     qualified = []
     for venue in APPROVED_VENUES:
@@ -582,7 +500,7 @@ def _resolve_market(epoch_end: int) -> dict:
         if venue_result is not None:
             qualified.append(venue_result)
 
-    qualified_names = [item["venue"] for item in qualified]
+    qualified_names = [item[0] for item in qualified]
     if len(qualified) < MIN_QUALIFIED_VENUES:
         # Source outages and endpoint differences are not reliable evidence of
         # an economic outcome. Keep the epoch OPEN so any caller can retry the
@@ -598,64 +516,26 @@ def _resolve_market(epoch_end: int) -> dict:
         asset_id = APPROVED_ASSETS[asset_index][0]
         venue_returns = []
         for venue_result in qualified:
-            item = venue_result["assets"][asset_index]
-            if item["asset_id"] != asset_id:
-                _external("RESULT_ASSET_ORDER", "Venue asset vector is out of order")
-            venue_returns.append(int(item["return_ppb"]))
+            item = venue_result[1][asset_index]
+            if item[0] != asset_id:
+                _external("VENUE_ASSET_ORDER", "Venue asset vector is out of order")
+            venue_returns.append(int(item[1]))
         assets.append(
-            {
-                "asset_id": asset_id,
-                "return_ppb": _median_returns(venue_returns),
-                "venue_returns_ppb": venue_returns,
-            }
+            [asset_id, _median_returns(venue_returns), venue_returns]
         )
-
-    high_winner, high_return = _winner_from_assets(assets, OBJECTIVE_HIGH)
-    low_winner, low_return = _winner_from_assets(assets, OBJECTIVE_LOW)
-    return {
-        "policy_version": POLICY_VERSION,
-        "status": RESULT_DETERMINED,
-        "epoch_end_timestamp": epoch_end,
-        "qualified_venues": qualified_names,
-        "venue_count": len(qualified_names),
-        "assets": assets,
-        "high_winner_asset_id": high_winner,
-        "high_winner_return_ppb": high_return,
-        "low_winner_asset_id": low_winner,
-        "low_winner_return_ppb": low_return,
-    }
+    return [qualified_names, assets]
 
 
-def _validate_resolution_result(result, epoch_end: int) -> dict:
-    required = {
-        "policy_version",
-        "status",
-        "epoch_end_timestamp",
-        "qualified_venues",
-        "venue_count",
-        "assets",
-        "high_winner_asset_id",
-        "high_winner_return_ppb",
-        "low_winner_asset_id",
-        "low_winner_return_ppb",
-    }
-    if not isinstance(result, dict) or set(result.keys()) != required:
+def _validate_resolution_result(result) -> list:
+    if not isinstance(result, list) or len(result) != 2:
         _external("RESULT_SCHEMA", "Resolution result has invalid fields")
-    if str(result["policy_version"]) != POLICY_VERSION:
-        _external("RESULT_POLICY", "Resolution result uses the wrong policy version")
-    if isinstance(result["epoch_end_timestamp"], bool):
-        _external("RESULT_EPOCH", "Resolution epoch cannot be boolean")
-    try:
-        result_epoch = int(result["epoch_end_timestamp"])
-        venue_count = int(result["venue_count"])
-    except Exception:
-        _external("RESULT_NUMBER", "Resolution numeric field is invalid")
-    if result_epoch != epoch_end:
-        _external("RESULT_EPOCH", "Resolution result targets the wrong epoch")
-
-    venues = result["qualified_venues"]
-    if not isinstance(venues, list) or len(venues) != venue_count:
-        _external("RESULT_VENUES", "Qualified venue count is inconsistent")
+    venues = result[0]
+    if (
+        not isinstance(venues, list)
+        or len(venues) < MIN_QUALIFIED_VENUES
+        or len(venues) > len(APPROVED_VENUES)
+    ):
+        _external("RESULT_VENUE_COUNT", "Qualified venue count is invalid")
     canonical_venues = []
     next_venue_index = 0
     for venue in venues:
@@ -668,118 +548,56 @@ def _validate_resolution_result(result, epoch_end: int) -> dict:
                 found = True
                 break
         if not found:
-            _external("RESULT_VENUES", "Qualified venues are unknown, duplicated, or out of order")
+            _external("RESULT_VENUE_ORDER", "Qualified venues are unknown, duplicated, or out of order")
         canonical_venues.append(venue_text)
-
-    status = str(result["status"])
-    if status == RESULT_UNDETERMINED:
-        if venue_count >= MIN_QUALIFIED_VENUES:
-            _external("RESULT_UNDETERMINED", "Undetermined result has enough qualified venues")
-        if (
-            result["assets"] != []
-            or str(result["high_winner_asset_id"]) != ""
-            or str(result["low_winner_asset_id"]) != ""
-            or int(result["high_winner_return_ppb"]) != 0
-            or int(result["low_winner_return_ppb"]) != 0
-        ):
-            _external("RESULT_UNDETERMINED", "Undetermined result must not declare winners")
-        return {
-            "policy_version": POLICY_VERSION,
-            "status": RESULT_UNDETERMINED,
-            "epoch_end_timestamp": epoch_end,
-            "qualified_venues": canonical_venues,
-            "venue_count": venue_count,
-            "assets": [],
-            "high_winner_asset_id": "",
-            "high_winner_return_ppb": 0,
-            "low_winner_asset_id": "",
-            "low_winner_return_ppb": 0,
-        }
-    if status != RESULT_DETERMINED or venue_count < MIN_QUALIFIED_VENUES:
-        _external("RESULT_STATUS", "Resolution status is invalid")
-
-    raw_assets = result["assets"]
+    raw_assets = result[1]
     if not isinstance(raw_assets, list) or len(raw_assets) != len(APPROVED_ASSETS):
         _external("RESULT_ASSETS", "Determined result must contain the fixed five-asset basket")
     canonical_assets = []
     for index in range(len(APPROVED_ASSETS)):
         raw_item = raw_assets[index]
-        if (
-            not isinstance(raw_item, dict)
-            or set(raw_item.keys())
-            != {"asset_id", "return_ppb", "venue_returns_ppb"}
-        ):
+        if not isinstance(raw_item, list) or len(raw_item) != 3:
             _external("RESULT_ASSET_SCHEMA", "Resolution asset result is malformed")
         expected_asset_id = APPROVED_ASSETS[index][0]
-        if str(raw_item["asset_id"]) != expected_asset_id:
+        if str(raw_item[0]) != expected_asset_id:
             _external("RESULT_ASSET_ORDER", "Resolution assets are out of order")
-        raw_returns = raw_item["venue_returns_ppb"]
-        if not isinstance(raw_returns, list) or len(raw_returns) != venue_count:
+        raw_returns = raw_item[2]
+        if not isinstance(raw_returns, list) or len(raw_returns) != len(venues):
             _external("RESULT_RETURNS", "Venue return vector has the wrong length")
         venue_returns = []
         for raw_return in raw_returns:
             if isinstance(raw_return, bool):
-                _external("RESULT_RETURN", "Venue return cannot be boolean")
+                _external("RESULT_RETURN_BOOL", "Venue return cannot be boolean")
             try:
                 venue_returns.append(int(raw_return))
             except Exception:
-                _external("RESULT_RETURN", "Venue return is invalid")
-        if isinstance(raw_item["return_ppb"], bool):
-            _external("RESULT_RETURN", "Median return cannot be boolean")
+                _external("RESULT_RETURN_VALUE", "Venue return is invalid")
+        if isinstance(raw_item[1], bool):
+            _external("RESULT_MEDIAN_BOOL", "Median return cannot be boolean")
         try:
-            median_return = int(raw_item["return_ppb"])
+            median_return = int(raw_item[1])
         except Exception:
-            _external("RESULT_RETURN", "Median return is invalid")
+            _external("RESULT_MEDIAN_VALUE", "Median return is invalid")
         if median_return != _median_returns(venue_returns):
             _external("RESULT_MEDIAN", "Median return is inconsistent with venue returns")
-        canonical_assets.append(
-            {
-                "asset_id": expected_asset_id,
-                "return_ppb": median_return,
-                "venue_returns_ppb": venue_returns,
-            }
-        )
-
-    expected_high, high_return = _winner_from_assets(canonical_assets, OBJECTIVE_HIGH)
-    expected_low, low_return = _winner_from_assets(canonical_assets, OBJECTIVE_LOW)
-    if (
-        str(result["high_winner_asset_id"]) != expected_high
-        or int(result["high_winner_return_ppb"]) != high_return
-        or str(result["low_winner_asset_id"]) != expected_low
-        or int(result["low_winner_return_ppb"]) != low_return
-    ):
-        _external("RESULT_WINNERS", "Resolution winners are inconsistent with the shared vector")
-    return {
-        "policy_version": POLICY_VERSION,
-        "status": RESULT_DETERMINED,
-        "epoch_end_timestamp": epoch_end,
-        "qualified_venues": canonical_venues,
-        "venue_count": venue_count,
-        "assets": canonical_assets,
-        "high_winner_asset_id": expected_high,
-        "high_winner_return_ppb": high_return,
-        "low_winner_asset_id": expected_low,
-        "low_winner_return_ppb": low_return,
-    }
+        canonical_assets.append([expected_asset_id, median_return, venue_returns])
+    return [canonical_venues, canonical_assets]
 
 
-def _results_equivalent(leader_result: dict, validator_result: dict) -> bool:
-    if leader_result["status"] != validator_result["status"]:
-        return False
-    if leader_result["status"] == RESULT_UNDETERMINED:
-        # Availability can vary between validators. Both independently finding
-        # fewer than three atomic venues is sufficient for the zero-fee refund.
-        return True
-    if (
-        leader_result["high_winner_asset_id"]
-        != validator_result["high_winner_asset_id"]
-        or leader_result["low_winner_asset_id"]
-        != validator_result["low_winner_asset_id"]
-    ):
+def _results_equivalent(leader_result: list, validator_result: list) -> bool:
+    leader_assets = leader_result[1]
+    validator_assets = validator_result[1]
+    if _winner_from_assets(leader_assets, OBJECTIVE_HIGH)[0] != _winner_from_assets(
+        validator_assets,
+        OBJECTIVE_HIGH,
+    )[0] or _winner_from_assets(leader_assets, OBJECTIVE_LOW)[0] != _winner_from_assets(
+        validator_assets,
+        OBJECTIVE_LOW,
+    )[0]:
         return False
     for index in range(len(APPROVED_ASSETS)):
-        leader_return = int(leader_result["assets"][index]["return_ppb"])
-        validator_return = int(validator_result["assets"][index]["return_ppb"])
+        leader_return = int(leader_assets[index][1])
+        validator_return = int(validator_assets[index][1])
         difference = leader_return - validator_return
         if difference < 0:
             difference = -difference
@@ -815,7 +633,6 @@ def _handle_leader_error(leaders_res: gl.vm.Result, leader_fn) -> bool:
 
 class LiquidityArenaV8(gl.Contract):
     owner: Address
-    pending_owner: Address
     keeper: Address
     treasury: Address
     payout_vault_factory: Address
@@ -824,7 +641,6 @@ class LiquidityArenaV8(gl.Contract):
     epoch_min_stake_atto: u256
     epoch_max_stake_per_wallet_atto: u256
     platform_fee_bps: u256
-    epoch_count: u256
     total_player_liability_atto: u256
     accrued_platform_fees_atto: u256
     reserved_platform_fees_atto: u256
@@ -833,13 +649,10 @@ class LiquidityArenaV8(gl.Contract):
     delivery_reserve_atto: u256
     committed_delivery_reserve_atto: u256
     reserved_player_payouts_atto: u256
-    payout_count: u256
     fee_payout_nonce: u256
 
     epoch_ids: DynArray[str]
-    open_epoch_ids: DynArray[str]
     epoch_exists: TreeMap[str, bool]
-    open_epoch_index_plus_one: TreeMap[str, u256]
     epoch_records: TreeMap[str, str]
     epoch_asset_records: TreeMap[str, str]
     objective_records: TreeMap[str, str]
@@ -859,9 +672,6 @@ class LiquidityArenaV8(gl.Contract):
     wallet_claimed_atto: TreeMap[str, u256]
     wallet_escrow_funded_atto: TreeMap[str, u256]
     wallet_payout_id: TreeMap[str, str]
-
-    wallet_position_count: TreeMap[str, u256]
-    wallet_position_refs: TreeMap[str, str]
 
     payout_ids: DynArray[str]
     payout_records: TreeMap[str, str]
@@ -889,7 +699,6 @@ class LiquidityArenaV8(gl.Contract):
         if maximum_wallet_stake < minimum_stake:
             _expected("MAX_WALLET_STAKE", "Wallet cap must be at least the minimum stake")
         self.owner = gl.message.sender_address
-        self.pending_owner = Address(ZERO_ADDRESS_TEXT)
         self.keeper = keeper
         self.treasury = treasury
         self.payout_vault_factory = payout_vault_factory
@@ -898,7 +707,6 @@ class LiquidityArenaV8(gl.Contract):
         self.epoch_min_stake_atto = u256(minimum_stake)
         self.epoch_max_stake_per_wallet_atto = u256(maximum_wallet_stake)
         self.platform_fee_bps = u256(DEFAULT_PLATFORM_FEE_BPS)
-        self.epoch_count = u256(0)
         self.total_player_liability_atto = u256(0)
         self.accrued_platform_fees_atto = u256(0)
         self.reserved_platform_fees_atto = u256(0)
@@ -907,7 +715,6 @@ class LiquidityArenaV8(gl.Contract):
         self.delivery_reserve_atto = u256(0)
         self.committed_delivery_reserve_atto = u256(0)
         self.reserved_player_payouts_atto = u256(0)
-        self.payout_count = u256(0)
         self.fee_payout_nonce = u256(0)
 
     def _require_zero_value(self) -> None:
@@ -1127,23 +934,6 @@ class LiquidityArenaV8(gl.Contract):
     def _objective_record(self, epoch_key: str, objective: str) -> dict:
         return json.loads(self.objective_records[_objective_key(epoch_key, objective)])
 
-    def _track_open_epoch(self, epoch_key: str) -> None:
-        self.open_epoch_ids.append(epoch_key)
-        self.open_epoch_index_plus_one[epoch_key] = u256(len(self.open_epoch_ids))
-
-    def _untrack_open_epoch(self, epoch_key: str) -> None:
-        index_plus_one = int(self.open_epoch_index_plus_one.get(epoch_key, u256(0)))
-        if index_plus_one == 0:
-            return
-        index = index_plus_one - 1
-        last_index = len(self.open_epoch_ids) - 1
-        if index != last_index:
-            last_epoch_key = self.open_epoch_ids[last_index]
-            self.open_epoch_ids[index] = last_epoch_key
-            self.open_epoch_index_plus_one[last_epoch_key] = u256(index + 1)
-        self.open_epoch_ids.pop()
-        self.open_epoch_index_plus_one[epoch_key] = u256(0)
-
     @gl.public.write
     def set_keeper(self, keeper: Address) -> None:
         self._require_zero_value()
@@ -1195,43 +985,6 @@ class LiquidityArenaV8(gl.Contract):
         if amount <= 0:
             _expected("RESERVE_AMOUNT", "Delivery reserve funding must be positive")
         self.delivery_reserve_atto = u256(int(self.delivery_reserve_atto) + amount)
-
-    @gl.public.write
-    def propose_ownership(self, proposed_owner: Address) -> None:
-        self._require_zero_value()
-        self._require_owner()
-        proposed_text = _address_text(proposed_owner)
-        if proposed_text == ZERO_ADDRESS_TEXT:
-            _expected("OWNER_ZERO", "Proposed owner cannot be the zero address")
-        if proposed_owner == self.owner:
-            _expected("OWNER_UNCHANGED", "Proposed owner must differ from the owner")
-        self.pending_owner = proposed_owner
-
-    @gl.public.write
-    def cancel_ownership_transfer(self) -> None:
-        self._require_zero_value()
-        self._require_owner()
-        self.pending_owner = Address(ZERO_ADDRESS_TEXT)
-
-    @gl.public.write
-    def accept_ownership(self) -> None:
-        self._require_zero_value()
-        if (
-            _address_text(self.pending_owner) == ZERO_ADDRESS_TEXT
-            or gl.message.sender_address != self.pending_owner
-        ):
-            _expected("PENDING_OWNER", "Only the pending owner can accept ownership")
-        self.owner = self.pending_owner
-        self.pending_owner = Address(ZERO_ADDRESS_TEXT)
-
-    @gl.public.write
-    def set_platform_fee_bps(self, fee_bps: u256) -> None:
-        self._require_zero_value()
-        self._require_owner()
-        normalized = int(fee_bps)
-        if normalized < 0 or normalized > MAX_PLATFORM_FEE_BPS:
-            _expected("FEE_CAP", "Platform fee cannot exceed five percent")
-        self.platform_fee_bps = u256(normalized)
 
     @gl.public.write
     def create_epoch(
@@ -1332,8 +1085,6 @@ class LiquidityArenaV8(gl.Contract):
             self.objective_paid_atto[objective_key] = u256(0)
             self.objective_unclaimed_winning_stake_atto[objective_key] = u256(0)
         self.epoch_ids.append(key)
-        self.epoch_count = u256(int(self.epoch_count) + 1)
-        self._track_open_epoch(key)
 
     @gl.public.write.payable
     def enter(
@@ -1397,19 +1148,6 @@ class LiquidityArenaV8(gl.Contract):
                 int(self.objective_participant_count.get(objective_key, u256(0)))
                 + 1
             )
-            wallet_text = _address_text(account)
-            position_index = int(
-                self.wallet_position_count.get(wallet_text, u256(0))
-            )
-            self.wallet_position_refs[_wallet_index_key(account, position_index)] = (
-                _canonical_json(
-                    {
-                        "epoch_end_timestamp": int(record["epoch_end_timestamp"]),
-                        "objective": normalized_objective,
-                    }
-                )
-            )
-            self.wallet_position_count[wallet_text] = u256(position_index + 1)
 
     def _set_refund_objective(
         self,
@@ -1519,90 +1257,81 @@ class LiquidityArenaV8(gl.Contract):
         if now >= int(record["timeout_refund_available_timestamp"]):
             _expected("RESOLUTION_TIMEOUT", "Epoch must use the 24-hour timeout refund")
 
-        def leader_fn() -> dict:
+        def leader_fn() -> list:
             return _resolve_market(epoch_end)
 
         def validator_fn(leaders_res: gl.vm.Result) -> bool:
             if not isinstance(leaders_res, gl.vm.Return):
                 return _handle_leader_error(leaders_res, leader_fn)
             try:
-                leader_result = _validate_resolution_result(
-                    leaders_res.calldata,
-                    epoch_end,
-                )
-                validator_result = _validate_resolution_result(
-                    leader_fn(),
-                    epoch_end,
-                )
+                leader_result = _validate_resolution_result(leaders_res.calldata)
+                validator_result = _validate_resolution_result(leader_fn())
                 return _results_equivalent(leader_result, validator_result)
             except Exception:
                 return False
 
         result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
-        canonical = _validate_resolution_result(result, epoch_end)
-        record["result_status"] = canonical["status"]
-        record["qualified_venues"] = canonical["qualified_venues"]
-        record["venue_count"] = canonical["venue_count"]
+        canonical = _validate_resolution_result(result)
+        venues = canonical[0]
+        assets = canonical[1]
+        record["status"] = STATUS_RESOLVED
+        record["result_status"] = RESULT_DETERMINED
+        record["qualified_venues"] = venues
+        record["venue_count"] = len(venues)
         record["resolved_at_timestamp"] = now
-
-        if canonical["status"] == RESULT_UNDETERMINED:
-            record["status"] = STATUS_UNDETERMINED
-            self._set_refund_objective(
-                epoch_key,
-                OBJECTIVE_HIGH,
-                SETTLEMENT_REFUND_UNDETERMINED,
-                "",
-                0,
+        public_assets = []
+        for item in assets:
+            public_item = {
+                "asset_id": item[0],
+                "return_ppb": item[1],
+                "venue_returns_ppb": item[2],
+            }
+            public_assets.append(public_item)
+            asset_record = json.loads(
+                self.epoch_asset_records[_asset_key(epoch_key, item[0])]
             )
-            self._set_refund_objective(
-                epoch_key,
-                OBJECTIVE_LOW,
-                SETTLEMENT_REFUND_UNDETERMINED,
-                "",
-                0,
-            )
-        else:
-            record["status"] = STATUS_RESOLVED
-            for item in canonical["assets"]:
-                asset_record = json.loads(
-                    self.epoch_asset_records[
-                        _asset_key(epoch_key, item["asset_id"])
-                    ]
-                )
-                asset_record["return_ppb"] = item["return_ppb"]
-                asset_record["venue_returns_ppb"] = item["venue_returns_ppb"]
-                self.epoch_asset_records[
-                    _asset_key(epoch_key, item["asset_id"])
-                ] = _canonical_json(asset_record)
-            record["high_winner_asset_id"] = canonical["high_winner_asset_id"]
-            record["high_winner_return_ppb"] = canonical[
-                "high_winner_return_ppb"
-            ]
-            record["low_winner_asset_id"] = canonical["low_winner_asset_id"]
-            record["low_winner_return_ppb"] = canonical[
-                "low_winner_return_ppb"
-            ]
-            high_fee = self._settle_objective(
-                epoch_key,
-                record,
-                OBJECTIVE_HIGH,
-                canonical["high_winner_asset_id"],
-                canonical["high_winner_return_ppb"],
-            )
-            low_fee = self._settle_objective(
-                epoch_key,
-                record,
-                OBJECTIVE_LOW,
-                canonical["low_winner_asset_id"],
-                canonical["low_winner_return_ppb"],
-            )
-            record["platform_fee_accrued_atto"] = high_fee + low_fee
-
+            asset_record["return_ppb"] = item[1]
+            asset_record["venue_returns_ppb"] = item[2]
+            self.epoch_asset_records[
+                _asset_key(epoch_key, item[0])
+            ] = _canonical_json(asset_record)
+        high_winner, high_return = _winner_from_assets(assets, OBJECTIVE_HIGH)
+        low_winner, low_return = _winner_from_assets(assets, OBJECTIVE_LOW)
+        record["high_winner_asset_id"] = high_winner
+        record["high_winner_return_ppb"] = high_return
+        record["low_winner_asset_id"] = low_winner
+        record["low_winner_return_ppb"] = low_return
+        high_fee = self._settle_objective(
+            epoch_key,
+            record,
+            OBJECTIVE_HIGH,
+            high_winner,
+            high_return,
+        )
+        low_fee = self._settle_objective(
+            epoch_key,
+            record,
+            OBJECTIVE_LOW,
+            low_winner,
+            low_return,
+        )
+        record["platform_fee_accrued_atto"] = high_fee + low_fee
+        canonical_result = {
+            "policy_version": POLICY_VERSION,
+            "status": RESULT_DETERMINED,
+            "epoch_end_timestamp": epoch_end,
+            "qualified_venues": venues,
+            "venue_count": len(venues),
+            "assets": public_assets,
+            "high_winner_asset_id": high_winner,
+            "high_winner_return_ppb": high_return,
+            "low_winner_asset_id": low_winner,
+            "low_winner_return_ppb": low_return,
+        }
         record["resolution_digest"] = Keccak256(
-            _canonical_json(canonical).encode("utf-8")
+            _canonical_json(canonical_result).encode("utf-8")
         ).hexdigest()
         self.epoch_records[epoch_key] = _canonical_json(record)
-        self._untrack_open_epoch(epoch_key)
 
     @gl.public.write
     def activate_timeout_refund(self, epoch_end_timestamp: u256) -> None:
@@ -1639,7 +1368,6 @@ class LiquidityArenaV8(gl.Contract):
             ).encode("utf-8")
         ).hexdigest()
         self.epoch_records[epoch_key] = _canonical_json(record)
-        self._untrack_open_epoch(epoch_key)
 
     def _claim_quote(
         self,
@@ -1801,7 +1529,6 @@ class LiquidityArenaV8(gl.Contract):
             )
         self.payout_records[payout_id] = _canonical_json(payout)
         self.payout_ids.append(payout_id)
-        self.payout_count = u256(int(self.payout_count) + 1)
         _evm_factory_prepare(self.payout_vault_factory, payout_id, sender, amount)
 
     @gl.public.write
@@ -1858,7 +1585,6 @@ class LiquidityArenaV8(gl.Contract):
         }
         self.payout_records[payout_id] = _canonical_json(payout)
         self.payout_ids.append(payout_id)
-        self.payout_count = u256(int(self.payout_count) + 1)
         _evm_factory_prepare(
             self.payout_vault_factory,
             payout_id,
@@ -2071,7 +1797,6 @@ class LiquidityArenaV8(gl.Contract):
             "protocol_version": PROTOCOL_VERSION,
             "policy_version": POLICY_VERSION,
             "owner": self.owner,
-            "pending_owner": self.pending_owner,
             "keeper": self.keeper,
             "treasury": self.treasury,
             "payout_vault_factory": self.payout_vault_factory,
@@ -2081,102 +1806,30 @@ class LiquidityArenaV8(gl.Contract):
             "max_payout_attempts": MAX_PAYOUT_ATTEMPTS,
             "prepare_retries_capped": False,
             "payout_retry_delay_seconds": PAYOUT_RETRY_DELAY_SECONDS,
-            "native_token_symbol": NATIVE_TOKEN_SYMBOL,
-            "native_token_decimals": NATIVE_TOKEN_DECIMALS,
             "current_platform_fee_bps": int(self.platform_fee_bps),
-            "default_platform_fee_bps": DEFAULT_PLATFORM_FEE_BPS,
-            "max_platform_fee_bps": MAX_PLATFORM_FEE_BPS,
             "epoch_min_stake_atto": int(self.epoch_min_stake_atto),
             "epoch_max_stake_per_wallet_atto": int(
                 self.epoch_max_stake_per_wallet_atto
             ),
             "minimum_epoch_creation_lead_seconds": MIN_EPOCH_CREATION_LEAD_SECONDS,
             "keeper_max_schedule_ahead_seconds": KEEPER_MAX_SCHEDULE_AHEAD_SECONDS,
-            "owner_max_schedule_ahead_seconds": MAX_SCHEDULE_AHEAD_SECONDS,
             "wager_open_offset_seconds": WAGER_OPEN_OFFSET_SECONDS,
             "battle_open_offset_seconds": BATTLE_OPEN_OFFSET_SECONDS,
             "resolution_publication_delay_seconds": RESOLUTION_PUBLICATION_DELAY_SECONDS,
             "timeout_refund_delay_seconds": TIMEOUT_REFUND_DELAY_SECONDS,
             "minimum_qualified_venues": MIN_QUALIFIED_VENUES,
+            "asset_ids": [item[0] for item in APPROVED_ASSETS],
+            "venues": list(APPROVED_VENUES),
             "validator_return_tolerance_ppb": VALIDATOR_RETURN_TOLERANCE_PPB,
-            "price_scale": PRICE_SCALE,
-            "return_scale": RETURN_SCALE,
-            "four_venue_median_policy": "FLOOR_AVERAGE_OF_MIDDLE_TWO",
-            "rounding_policy": "LAST_WINNING_CLAIMANT_RECEIVES_REMAINDER",
             "supported_objectives": list(SUPPORTED_OBJECTIVES),
-            "supported_settlement_modes": list(SUPPORTED_SETTLEMENT_MODES),
-            "transfer_finality": "FINALIZED",
             "payout_finality": PAYOUT_FUNDED_IN_ESCROW,
             "claimed_semantics": PAYOUT_EOA_WITHDRAWN,
         }
 
     @gl.public.view
-    def get_asset_catalog(self) -> dict:
-        assets = []
-        for asset_id, label in APPROVED_ASSETS:
-            assets.append(
-                {
-                    "asset_id": asset_id,
-                    "label": label,
-                    "quote_asset": "USDT",
-                }
-            )
-        return {"assets": assets}
-
-    @gl.public.view
-    def get_venue_catalog(self) -> dict:
-        return {
-            "venues": list(APPROVED_VENUES),
-            "adapters_immutable": True,
-            "candle_interval": "1m",
-            "start_price_rule": "OPEN_AT_E_MINUS_20_MINUTES",
-            "end_price_rule": "CLOSE_AT_E_MINUS_1_MINUTE",
-        }
-
-    @gl.public.view
-    def get_epoch_count(self) -> u256:
-        return self.epoch_count
-
-    @gl.public.view
-    def get_open_epoch_count(self) -> u256:
-        return u256(len(self.open_epoch_ids))
-
-    @gl.public.view
-    def get_open_epoch_page(self, offset: u256, limit: u256) -> dict:
-        start = int(offset)
-        page_limit = int(limit)
-        if page_limit <= 0 or page_limit > MAX_PAGE_SIZE:
-            _expected("PAGE_LIMIT", "Page limit must be between 1 and 50")
-        count = len(self.open_epoch_ids)
-        if start < 0 or start > count:
-            _expected("PAGE_OFFSET", "Page offset is out of bounds")
-        end = start + page_limit
-        if end > count:
-            end = count
-        ids = []
-        for index in range(start, end):
-            ids.append(self.open_epoch_ids[index])
-        return {"offset": start, "next_offset": end, "total": count, "epoch_ids": ids}
-
-    @gl.public.view
-    def get_epoch_id(self, index: u256) -> str:
-        normalized_index = int(index)
-        if normalized_index < 0 or normalized_index >= len(self.epoch_ids):
-            _expected("EPOCH_INDEX", "Epoch index is out of bounds")
-        return self.epoch_ids[normalized_index]
-
-    @gl.public.view
     def get_epoch_page(self, offset: u256, limit: u256) -> dict:
-        start = int(offset)
-        page_limit = int(limit)
-        if page_limit <= 0 or page_limit > MAX_PAGE_SIZE:
-            _expected("PAGE_LIMIT", "Page limit must be between 1 and 50")
         count = len(self.epoch_ids)
-        if start < 0 or start > count:
-            _expected("PAGE_OFFSET", "Page offset is out of bounds")
-        end = start + page_limit
-        if end > count:
-            end = count
+        start, end = _page_bounds(offset, limit, count)
         ids = []
         for index in range(start, end):
             ids.append(self.epoch_ids[index])
@@ -2265,133 +1918,39 @@ class LiquidityArenaV8(gl.Contract):
         return self._claim_quote(key, normalized_objective, account)
 
     @gl.public.view
-    def get_entry(
-        self,
-        epoch_end_timestamp: u256,
-        objective: str,
-        account: Address,
-    ) -> dict:
-        return self.get_claim_quote(epoch_end_timestamp, objective, account)
-
-    @gl.public.view
-    def get_wallet_position_count(self, account: Address) -> u256:
-        return self.wallet_position_count.get(_address_text(account), u256(0))
-
-    @gl.public.view
-    def get_wallet_position(self, account: Address, index: u256) -> dict:
-        normalized_index = int(index)
-        count = int(self.get_wallet_position_count(account))
-        if normalized_index < 0 or normalized_index >= count:
-            _expected("POSITION_INDEX", "Wallet position index is out of bounds")
-        reference = json.loads(
-            self.wallet_position_refs[_wallet_index_key(account, normalized_index)]
-        )
-        entry = self.get_entry(
-            u256(int(reference["epoch_end_timestamp"])),
-            str(reference["objective"]),
-            account,
-        )
-        entry["position_index"] = normalized_index
-        return entry
-
-    @gl.public.view
-    def get_wallet_position_page(
-        self,
-        account: Address,
-        offset: u256,
-        limit: u256,
-    ) -> dict:
-        start = int(offset)
-        page_limit = int(limit)
-        if page_limit <= 0 or page_limit > MAX_PAGE_SIZE:
-            _expected("PAGE_LIMIT", "Page limit must be between 1 and 50")
-        count = int(self.get_wallet_position_count(account))
-        if start < 0 or start > count:
-            _expected("PAGE_OFFSET", "Page offset is out of bounds")
-        end = start + page_limit
-        if end > count:
-            end = count
-        positions = []
-        for index in range(start, end):
-            positions.append(self.get_wallet_position(account, u256(index)))
-        return {
-            "account": account,
-            "offset": start,
-            "next_offset": end,
-            "total": count,
-            "positions": positions,
-        }
-
-    @gl.public.view
-    def get_fee_state(self) -> dict:
+    def get_delivery_reserve_state(self) -> dict:
         return {
             "treasury": self.treasury,
             "current_platform_fee_bps": int(self.platform_fee_bps),
+            "payout_protocol_version": PAYOUT_PROTOCOL_VERSION,
+            "payouts_enabled": self.payouts_enabled,
+            "new_risk_enabled": self.new_risk_enabled,
+            "player_liability_atto": int(self.total_player_liability_atto),
             "accrued_platform_fees_atto": int(self.accrued_platform_fees_atto),
             "reserved_platform_fees_atto": int(self.reserved_platform_fees_atto),
             "funded_platform_fees_atto": int(self.funded_platform_fees_atto),
             "withdrawn_platform_fees_atto": int(
                 self.withdrawn_platform_fees_atto
             ),
-            "player_liability_atto": int(self.total_player_liability_atto),
-            "reserved_player_payouts_atto": int(
-                self.reserved_player_payouts_atto
-            ),
-        }
-
-    @gl.public.view
-    def get_delivery_reserve_state(self) -> dict:
-        return {
-            "payout_protocol_version": PAYOUT_PROTOCOL_VERSION,
-            "payouts_enabled": self.payouts_enabled,
-            "new_risk_enabled": self.new_risk_enabled,
             "available_reserve_atto": int(self.delivery_reserve_atto),
             "committed_reserve_atto": int(self.committed_delivery_reserve_atto),
             "required_available_reserve_atto": self._required_available_reserve(),
             "reserved_player_payouts_atto": int(
                 self.reserved_player_payouts_atto
             ),
-            "reserved_platform_fees_atto": int(self.reserved_platform_fees_atto),
             "max_payout_attempts": MAX_PAYOUT_ATTEMPTS,
             "prepare_retries_capped": False,
             "retry_delay_seconds": PAYOUT_RETRY_DELAY_SECONDS,
         }
 
     @gl.public.view
-    def get_payout_count(self) -> u256:
-        return self.payout_count
-
-    @gl.public.view
     def get_payout(self, payout_id: str) -> dict:
         return self._get_payout_record(payout_id)
 
     @gl.public.view
-    def get_payout_for_position(
-        self,
-        epoch_end_timestamp: u256,
-        objective: str,
-        account: Address,
-    ) -> dict:
-        epoch_key, _record = self._require_epoch(epoch_end_timestamp)
-        normalized_objective = _clean_objective(objective)
-        wallet_key = _wallet_entry_key(epoch_key, normalized_objective, account)
-        payout_id = self.wallet_payout_id.get(wallet_key, "")
-        if payout_id == "":
-            _expected("PAYOUT_UNKNOWN", "Position has no payout record")
-        return self._get_payout_record(payout_id)
-
-    @gl.public.view
     def get_payout_page(self, offset: u256, limit: u256) -> dict:
-        start = int(offset)
-        page_limit = int(limit)
-        if page_limit <= 0 or page_limit > MAX_PAGE_SIZE:
-            _expected("PAGE_LIMIT", "Page limit must be between 1 and 50")
         count = len(self.payout_ids)
-        if start < 0 or start > count:
-            _expected("PAGE_OFFSET", "Page offset is out of bounds")
-        end = start + page_limit
-        if end > count:
-            end = count
+        start, end = _page_bounds(offset, limit, count)
         payouts = []
         for index in range(start, end):
             payout_id = self.payout_ids[index]
@@ -2402,7 +1961,3 @@ class LiquidityArenaV8(gl.Contract):
             "total": count,
             "payouts": payouts,
         }
-
-    @gl.public.view
-    def get_total_player_liability_atto(self) -> u256:
-        return self.total_player_liability_atto

@@ -54,8 +54,14 @@ export const PAYOUT_PROTOCOL_VERSION = 'IDEMPOTENT_EVM_VAULT_V1';
 export const BIND_REQUEST_SCHEMA = 'liquidity-arena-bradbury-bind-request-v1';
 export const ACTIVATION_TERMINAL_STAGE = 'PAYOUTS_ACTIVE_RISK_PAUSED';
 export const MAX_TRANSACTION_GAS_COST_ATTO = 30_000_000_000_000_000n;
+// Read-only Bradbury probes on 2026-08-22 placed the current transaction
+// pubdata boundary between 53,316 and 53,348 outer calldata bytes. These are
+// deliberately lower, operational ceilings with roughly 15% headroom; they
+// are not assertions about a permanent protocol constant.
+export const MAX_BRADBURY_DEPLOY_SOURCE_BYTES = 45_000;
+export const MAX_BRADBURY_OUTER_CALLDATA_BYTES = 45_500;
 export const ZERO_ADDRESS = `0x${'0'.repeat(40)}`;
-export const SOURCE_PATH = 'contracts/LiquidityArenaV8.py';
+export const SOURCE_PATH = 'contracts/LiquidityArenaV8.release.py';
 export const MAX_OUTPUT_BYTES = 64 * 1024;
 
 const ADDRESS_PATTERN = /^0x[\da-f]{40}$/i;
@@ -140,10 +146,8 @@ export const EXPECTED_V8_SCHEMA = Object.freeze({
     kwparams: {},
   },
   methods: {
-    accept_ownership: schemaMethod(),
     activate_payouts: schemaMethod(),
     activate_timeout_refund: schemaMethod([['epoch_end_timestamp', 'int']]),
-    cancel_ownership_transfer: schemaMethod(),
     claim: schemaMethod([['epoch_end_timestamp', 'int'], ['objective', 'string']]),
     confirm_payout: schemaMethod([['payout_id', 'string']]),
     create_epoch: schemaMethod([['epoch_end_timestamp', 'int']]),
@@ -152,53 +156,26 @@ export const EXPECTED_V8_SCHEMA = Object.freeze({
       ['epoch_end_timestamp', 'int'], ['objective', 'string'], ['asset_id', 'string'],
     ], false, true),
     fund_delivery_reserve: schemaMethod([], false, true),
-    get_asset_catalog: schemaMethod([], true, false, 'dict'),
     get_claim_quote: schemaMethod([
       ['epoch_end_timestamp', 'int'], ['objective', 'string'], ['account', 'address'],
     ], true, false, 'dict'),
     get_config: schemaMethod([], true, false, 'dict'),
     get_delivery_reserve_state: schemaMethod([], true, false, 'dict'),
-    get_entry: schemaMethod([
-      ['epoch_end_timestamp', 'int'], ['objective', 'string'], ['account', 'address'],
-    ], true, false, 'dict'),
     get_epoch: schemaMethod([['epoch_end_timestamp', 'int']], true, false, 'dict'),
     get_epoch_asset: schemaMethod([
       ['epoch_end_timestamp', 'int'], ['asset_id', 'string'],
     ], true, false, 'dict'),
-    get_epoch_count: schemaMethod([], true, false, 'int'),
-    get_epoch_id: schemaMethod([['index', 'int']], true, false, 'string'),
     get_epoch_page: schemaMethod([
       ['offset', 'int'], ['limit', 'int'],
     ], true, false, 'dict'),
-    get_fee_state: schemaMethod([], true, false, 'dict'),
     get_objective: schemaMethod([
       ['epoch_end_timestamp', 'int'], ['objective', 'string'],
     ], true, false, 'dict'),
-    get_open_epoch_count: schemaMethod([], true, false, 'int'),
-    get_open_epoch_page: schemaMethod([
-      ['offset', 'int'], ['limit', 'int'],
-    ], true, false, 'dict'),
     get_payout: schemaMethod([['payout_id', 'string']], true, false, 'dict'),
-    get_payout_count: schemaMethod([], true, false, 'int'),
-    get_payout_for_position: schemaMethod([
-      ['epoch_end_timestamp', 'int'], ['objective', 'string'], ['account', 'address'],
-    ], true, false, 'dict'),
     get_payout_page: schemaMethod([
       ['offset', 'int'], ['limit', 'int'],
     ], true, false, 'dict'),
-    get_total_player_liability_atto: schemaMethod([], true, false, 'int'),
-    get_venue_catalog: schemaMethod([], true, false, 'dict'),
-    get_wallet_position: schemaMethod([
-      ['account', 'address'], ['index', 'int'],
-    ], true, false, 'dict'),
-    get_wallet_position_count: schemaMethod([
-      ['account', 'address'],
-    ], true, false, 'int'),
-    get_wallet_position_page: schemaMethod([
-      ['account', 'address'], ['offset', 'int'], ['limit', 'int'],
-    ], true, false, 'dict'),
     pause_new_risk: schemaMethod(),
-    propose_ownership: schemaMethod([['proposed_owner', 'address']]),
     refresh_payout_withdrawal: schemaMethod([['payout_id', 'string']]),
     request_fee_payout: schemaMethod([['amount_atto', 'int']]),
     resolve_epoch: schemaMethod([['epoch_end_timestamp', 'int']]),
@@ -206,7 +183,6 @@ export const EXPECTED_V8_SCHEMA = Object.freeze({
     retry_payout: schemaMethod([['payout_id', 'string']]),
     retry_prepare_payout: schemaMethod([['payout_id', 'string']]),
     set_keeper: schemaMethod([['keeper', 'address']]),
-    set_platform_fee_bps: schemaMethod([['fee_bps', 'int']]),
   },
 });
 
@@ -472,6 +448,13 @@ export function verifyLocalCandidate(config, { projectRoot = resolve(dirname(fil
   }
   const source = readFileSync(sourcePath, 'utf8');
   if (source.charCodeAt(0) === 0xfeff) fail('V8 source must not contain a UTF-8 BOM');
+  const sourceBytes = Buffer.byteLength(source, 'utf8');
+  if (sourceBytes > MAX_BRADBURY_DEPLOY_SOURCE_BYTES) {
+    fail(
+      `V8 source is ${sourceBytes} UTF-8 bytes; Bradbury deploy artifacts must be at most `
+      + `${MAX_BRADBURY_DEPLOY_SOURCE_BYTES} bytes`,
+    );
+  }
   const sourceHash = sha256(source);
   if (sourceHash !== config.sourceSha256) {
     fail(`local V8 source hash is ${sourceHash}, not configured ${config.sourceSha256}`);
@@ -486,7 +469,7 @@ export function verifyLocalCandidate(config, { projectRoot = resolve(dirname(fil
   if (!SUPPORTED_CHAIN_PATTERN.test(source)) {
     fail('V8 source does not contain the exact Bradbury-only chain allowlist');
   }
-  return Object.freeze({ source, sourcePath, sourceHash });
+  return Object.freeze({ source, sourcePath, sourceHash, sourceBytes });
 }
 
 function networkPreflight() {
@@ -565,16 +548,14 @@ export function assertExactSchema(schema) {
 
 function normalizeConfigReadback(value) {
   const raw = plainObject(value, 'get_config readback');
-  const addresses = new Set(['owner', 'pending_owner', 'keeper', 'treasury', 'payout_vault_factory']);
+  const addresses = new Set(['owner', 'keeper', 'treasury', 'payout_vault_factory']);
   const integers = new Set([
-    'max_payout_attempts', 'payout_retry_delay_seconds', 'native_token_decimals',
-    'current_platform_fee_bps', 'default_platform_fee_bps', 'max_platform_fee_bps',
+    'max_payout_attempts', 'payout_retry_delay_seconds', 'current_platform_fee_bps',
     'epoch_min_stake_atto', 'epoch_max_stake_per_wallet_atto',
     'minimum_epoch_creation_lead_seconds', 'keeper_max_schedule_ahead_seconds',
-    'owner_max_schedule_ahead_seconds', 'wager_open_offset_seconds',
-    'battle_open_offset_seconds', 'resolution_publication_delay_seconds',
-    'timeout_refund_delay_seconds', 'minimum_qualified_venues',
-    'validator_return_tolerance_ppb', 'price_scale', 'return_scale',
+    'wager_open_offset_seconds', 'battle_open_offset_seconds',
+    'resolution_publication_delay_seconds', 'timeout_refund_delay_seconds',
+    'minimum_qualified_venues', 'validator_return_tolerance_ppb',
   ]);
   const normalized = {};
   for (const [key, item] of Object.entries(raw)) {
@@ -590,7 +571,6 @@ export function buildExpectedConfigReadback(config, { payoutsEnabled, newRiskEna
     protocol_version: config.expected.protocolVersion,
     policy_version: config.expected.policyVersion,
     owner: config.expected.ownerAddress,
-    pending_owner: ZERO_ADDRESS,
     keeper: config.expected.keeperAddress,
     treasury: config.expected.treasuryAddress,
     payout_vault_factory: config.expected.payoutFactoryAddress,
@@ -600,32 +580,20 @@ export function buildExpectedConfigReadback(config, { payoutsEnabled, newRiskEna
     max_payout_attempts: '3',
     prepare_retries_capped: false,
     payout_retry_delay_seconds: '3600',
-    native_token_symbol: 'GEN',
-    native_token_decimals: '18',
     current_platform_fee_bps: String(config.expected.platformFeeBps),
-    default_platform_fee_bps: '200',
-    max_platform_fee_bps: '500',
     epoch_min_stake_atto: config.expected.epochMinStakeAtto,
     epoch_max_stake_per_wallet_atto: config.expected.epochMaxStakePerWalletAtto,
     minimum_epoch_creation_lead_seconds: '3600',
     keeper_max_schedule_ahead_seconds: '93600',
-    owner_max_schedule_ahead_seconds: '2678400',
     wager_open_offset_seconds: '2400',
     battle_open_offset_seconds: '1200',
     resolution_publication_delay_seconds: '120',
     timeout_refund_delay_seconds: '86400',
     minimum_qualified_venues: '3',
     validator_return_tolerance_ppb: '100000',
-    price_scale: '100000000',
-    return_scale: '1000000000',
-    four_venue_median_policy: 'FLOOR_AVERAGE_OF_MIDDLE_TWO',
-    rounding_policy: 'LAST_WINNING_CLAIMANT_RECEIVES_REMAINDER',
+    asset_ids: ['BTC', 'ETH', 'BNB', 'SOL', 'XRP'],
+    venues: ['BINANCE', 'OKX', 'BYBIT', 'GATE', 'KUCOIN'],
     supported_objectives: ['HIGH', 'LOW'],
-    supported_settlement_modes: [
-      'PENDING', 'PARIMUTUEL', 'REFUND_TIE', 'REFUND_UNBACKED_WINNER',
-      'REFUND_NO_LOSING_SIDE', 'REFUND_UNDETERMINED', 'REFUND_TIMEOUT',
-    ],
-    transfer_finality: 'FINALIZED',
     payout_finality: 'FUNDED_IN_ESCROW',
     claimed_semantics: 'EOA_WITHDRAWN',
   };
@@ -640,13 +608,16 @@ export function assertExactConfigReadback(value, config, stateFlags) {
 function normalizeReserveReadback(value) {
   const raw = plainObject(value, 'get_delivery_reserve_state readback');
   const integerFields = new Set([
+    'current_platform_fee_bps', 'player_liability_atto',
+    'accrued_platform_fees_atto', 'reserved_platform_fees_atto',
+    'funded_platform_fees_atto', 'withdrawn_platform_fees_atto',
     'available_reserve_atto', 'committed_reserve_atto', 'required_available_reserve_atto',
-    'reserved_player_payouts_atto', 'reserved_platform_fees_atto',
-    'max_payout_attempts', 'retry_delay_seconds',
+    'reserved_player_payouts_atto', 'max_payout_attempts', 'retry_delay_seconds',
   ]);
   const normalized = {};
   for (const [key, item] of Object.entries(raw)) {
-    normalized[key] = integerFields.has(key)
+    if (key === 'treasury') normalized[key] = normalizedAddressLike(item, 'reserve.treasury');
+    else normalized[key] = integerFields.has(key)
       ? normalizedDecimalLike(item, `reserve.${key}`)
       : item;
   }
@@ -673,96 +644,97 @@ export function buildExpectedReserveReadback(config, {
   availableReserveAtto,
 }) {
   return {
+    treasury: config.expected.treasuryAddress,
+    current_platform_fee_bps: String(config.expected.platformFeeBps),
     payout_protocol_version: config.expected.payoutProtocolVersion,
     payouts_enabled: payoutsEnabled,
     new_risk_enabled: newRiskEnabled,
+    player_liability_atto: '0',
+    accrued_platform_fees_atto: '0',
+    reserved_platform_fees_atto: '0',
+    funded_platform_fees_atto: '0',
+    withdrawn_platform_fees_atto: '0',
     available_reserve_atto: String(availableReserveAtto),
     committed_reserve_atto: '0',
     required_available_reserve_atto: '0',
     reserved_player_payouts_atto: '0',
-    reserved_platform_fees_atto: '0',
     max_payout_attempts: '3',
     prepare_retries_capped: false,
     retry_delay_seconds: '3600',
   };
 }
 
-function normalizeFeeReadback(value) {
-  const raw = plainObject(value, 'get_fee_state readback');
-  const normalized = {};
-  for (const [key, item] of Object.entries(raw)) {
-    normalized[key] = key === 'treasury'
-      ? normalizedAddressLike(item, 'get_fee_state.treasury')
-      : normalizedDecimalLike(item, `get_fee_state.${key}`);
+function pageTotal(value, field, itemsField) {
+  const raw = plainObject(value, `${field} readback`);
+  exactObject(
+    Object.keys(raw).sort(),
+    ['offset', 'next_offset', 'total', itemsField].sort(),
+    `${field} fields`,
+  );
+  const offset = normalizedDecimalLike(raw.offset, `${field}.offset`);
+  const nextOffset = normalizedDecimalLike(raw.next_offset, `${field}.next_offset`);
+  const total = normalizedDecimalLike(raw.total, `${field}.total`);
+  if (offset !== '0') fail(`${field}.offset must be zero for accounting readback`);
+  if (!Array.isArray(raw[itemsField])) fail(`${field}.${itemsField} must be an array`);
+  const expectedLength = BigInt(total) === 0n ? 0n : 1n;
+  if (BigInt(raw[itemsField].length) !== expectedLength
+    || BigInt(nextOffset) !== expectedLength) {
+    fail(`${field} does not match the exact one-item accounting page`);
   }
-  return normalized;
+  return total;
 }
 
-export function assertPristineAccounting({ feeState, epochCount, openEpochCount, payoutCount, liability }, config) {
-  exactObject(normalizeFeeReadback(feeState), {
-    treasury: config.expected.treasuryAddress,
-    current_platform_fee_bps: '200',
-    accrued_platform_fees_atto: '0',
-    reserved_platform_fees_atto: '0',
-    funded_platform_fees_atto: '0',
-    withdrawn_platform_fees_atto: '0',
-    player_liability_atto: '0',
-    reserved_player_payouts_atto: '0',
-  }, 'get_fee_state readback');
-  for (const [field, value] of Object.entries({ epochCount, openEpochCount, payoutCount, liability })) {
+export function assertPristineAccounting({ reserveReadback, epochPage, payoutPage }) {
+  const reserve = normalizeReserveReadback(reserveReadback);
+  for (const field of [
+    'player_liability_atto', 'accrued_platform_fees_atto',
+    'reserved_platform_fees_atto', 'funded_platform_fees_atto',
+    'withdrawn_platform_fees_atto', 'committed_reserve_atto',
+    'required_available_reserve_atto', 'reserved_player_payouts_atto',
+  ]) {
+    if (reserve[field] !== '0') fail(`${field} must remain zero in the canary`);
+  }
+  const epochCount = pageTotal(epochPage, 'get_epoch_page', 'epoch_ids');
+  const payoutCount = pageTotal(payoutPage, 'get_payout_page', 'payouts');
+  for (const [field, value] of Object.entries({ epochCount, payoutCount })) {
     if (normalizedDecimalLike(value, field) !== '0') fail(`${field} must remain zero in the canary`);
   }
 }
 
 export async function readAndVerifyDeployment(reader, contractAddress, local, config, expectedState) {
   const address = exactAddress(contractAddress, 'contractAddress');
-  const [code, schema, configReadback, reserveReadback, feeState,
-    epochCount, openEpochCount, payoutCount, liability] = await Promise.all([
+  const [code, schema, configReadback, reserveReadback, epochPage, payoutPage] = await Promise.all([
     reader.code(address),
     reader.schema(address),
     reader.call(address, 'get_config'),
     reader.call(address, 'get_delivery_reserve_state'),
-    reader.call(address, 'get_fee_state'),
-    reader.call(address, 'get_epoch_count'),
-    reader.call(address, 'get_open_epoch_count'),
-    reader.call(address, 'get_payout_count'),
-    reader.call(address, 'get_total_player_liability_atto'),
+    reader.call(address, 'get_epoch_page', [0, 1]),
+    reader.call(address, 'get_payout_page', [0, 1]),
   ]);
   if (code !== local.source) fail('deployed code is not byte-for-byte identical to local reviewed V8 source');
   if (sha256(code) !== config.sourceSha256) fail('deployed code hash does not match sourceSha256');
   assertExactSchema(schema);
   assertExactConfigReadback(configReadback, config, expectedState);
   assertExactReserveReadback(reserveReadback, config, expectedState);
-  assertPristineAccounting({
-    feeState, epochCount, openEpochCount, payoutCount, liability,
-  }, config);
+  assertPristineAccounting({ reserveReadback, epochPage, payoutPage });
   return Object.freeze({ address, config: configReadback, reserve: reserveReadback });
 }
 
 export function assertLiveAccountingIdentity({
   reserveReadback,
-  feeState,
-  epochCount,
-  openEpochCount,
-  payoutCount,
-  liability,
+  epochPage,
+  payoutPage,
 }, config, { newRiskEnabled }) {
   const reserve = normalizeReserveReadback(reserveReadback);
-  const fee = normalizeFeeReadback(feeState);
   const expectedReserveKeys = Object.keys(buildExpectedReserveReadback(config, {
     payoutsEnabled: true,
     newRiskEnabled,
     availableReserveAtto: '0',
   })).sort();
-  const expectedFeeKeys = [
-    'treasury', 'current_platform_fee_bps', 'accrued_platform_fees_atto',
-    'reserved_platform_fees_atto', 'funded_platform_fees_atto',
-    'withdrawn_platform_fees_atto', 'player_liability_atto',
-    'reserved_player_payouts_atto',
-  ].sort();
   exactObject(Object.keys(reserve).sort(), expectedReserveKeys, 'live reserve field identity');
-  exactObject(Object.keys(fee).sort(), expectedFeeKeys, 'live fee field identity');
   exactObject({
+    treasury: reserve.treasury,
+    current_platform_fee_bps: reserve.current_platform_fee_bps,
     payout_protocol_version: reserve.payout_protocol_version,
     payouts_enabled: reserve.payouts_enabled,
     new_risk_enabled: reserve.new_risk_enabled,
@@ -770,6 +742,8 @@ export function assertLiveAccountingIdentity({
     prepare_retries_capped: reserve.prepare_retries_capped,
     retry_delay_seconds: reserve.retry_delay_seconds,
   }, {
+    treasury: config.expected.treasuryAddress,
+    current_platform_fee_bps: String(config.expected.platformFeeBps),
     payout_protocol_version: config.expected.payoutProtocolVersion,
     payouts_enabled: true,
     new_risk_enabled: newRiskEnabled,
@@ -777,29 +751,15 @@ export function assertLiveAccountingIdentity({
     prepare_retries_capped: false,
     retry_delay_seconds: '3600',
   }, 'live reserve policy identity');
-  if (fee.treasury !== config.expected.treasuryAddress
-    || fee.current_platform_fee_bps !== String(config.expected.platformFeeBps)) {
-    fail('live fee role or fee policy differs from the reviewed V8 configuration');
-  }
 
-  const exactEpochCount = normalizedDecimalLike(epochCount, 'live epochCount');
-  const exactOpenEpochCount = normalizedDecimalLike(openEpochCount, 'live openEpochCount');
-  const exactPayoutCount = normalizedDecimalLike(payoutCount, 'live payoutCount');
-  const exactLiability = normalizedDecimalLike(liability, 'live liability');
-  if (BigInt(exactOpenEpochCount) > BigInt(exactEpochCount)) {
-    fail('live open epoch count exceeds total epoch count');
-  }
-  if (fee.player_liability_atto !== exactLiability
-    || reserve.reserved_player_payouts_atto !== fee.reserved_player_payouts_atto
-    || reserve.reserved_platform_fees_atto !== fee.reserved_platform_fees_atto) {
-    fail('live accounting aliases disagree across reserve, fee, and liability readbacks');
-  }
-  const playerLiability = BigInt(exactLiability);
-  const reservedPlayer = BigInt(fee.reserved_player_payouts_atto);
+  const exactEpochCount = pageTotal(epochPage, 'get_epoch_page', 'epoch_ids');
+  const exactPayoutCount = pageTotal(payoutPage, 'get_payout_page', 'payouts');
+  const playerLiability = BigInt(reserve.player_liability_atto);
+  const reservedPlayer = BigInt(reserve.reserved_player_payouts_atto);
   if (reservedPlayer > playerLiability) {
     fail('live reserved player payouts exceed total player liability');
   }
-  const accruedFees = BigInt(fee.accrued_platform_fees_atto);
+  const accruedFees = BigInt(reserve.accrued_platform_fees_atto);
   const requiredAvailable = (playerLiability - reservedPlayer + accruedFees) * 3n;
   if (BigInt(reserve.required_available_reserve_atto) !== requiredAvailable) {
     fail('live required reserve does not match the exact bounded-attempt accounting identity');
@@ -807,17 +767,14 @@ export function assertLiveAccountingIdentity({
   if (BigInt(reserve.available_reserve_atto) < requiredAvailable) {
     fail('live available reserve is below its exact required accounting identity');
   }
-  if (BigInt(fee.withdrawn_platform_fees_atto)
-      > BigInt(fee.funded_platform_fees_atto)) {
+  if (BigInt(reserve.withdrawn_platform_fees_atto)
+      > BigInt(reserve.funded_platform_fees_atto)) {
     fail('live withdrawn platform fees exceed funded platform fees');
   }
   const identity = Object.freeze({
     reserve: Object.freeze(reserve),
-    fee: Object.freeze(fee),
     epochCount: exactEpochCount,
-    openEpochCount: exactOpenEpochCount,
     payoutCount: exactPayoutCount,
-    liability: exactLiability,
   });
   return Object.freeze({
     ...identity,
@@ -826,29 +783,24 @@ export function assertLiveAccountingIdentity({
 }
 
 const PAUSE_ACCOUNTING_FIELDS = Object.freeze([
-  'reserve', 'fee', 'epochCount', 'openEpochCount', 'payoutCount', 'liability', 'sha256',
+  'reserve', 'epochCount', 'payoutCount', 'sha256',
 ]);
 
 export function normalizePauseAccountingIdentity(value, field = 'pause accounting identity') {
   const raw = plainObject(value, field);
   exactObject(Object.keys(raw).sort(), [...PAUSE_ACCOUNTING_FIELDS].sort(), `${field} fields`);
   const reserve = normalizeReserveReadback(raw.reserve);
-  const fee = normalizeFeeReadback(raw.fee);
   const expectedReserveKeys = [
+    'treasury', 'current_platform_fee_bps',
     'payout_protocol_version', 'payouts_enabled', 'new_risk_enabled',
+    'player_liability_atto', 'accrued_platform_fees_atto',
+    'reserved_platform_fees_atto', 'funded_platform_fees_atto',
+    'withdrawn_platform_fees_atto',
     'available_reserve_atto', 'committed_reserve_atto',
     'required_available_reserve_atto', 'reserved_player_payouts_atto',
-    'reserved_platform_fees_atto', 'max_payout_attempts',
-    'prepare_retries_capped', 'retry_delay_seconds',
-  ].sort();
-  const expectedFeeKeys = [
-    'treasury', 'current_platform_fee_bps', 'accrued_platform_fees_atto',
-    'reserved_platform_fees_atto', 'funded_platform_fees_atto',
-    'withdrawn_platform_fees_atto', 'player_liability_atto',
-    'reserved_player_payouts_atto',
+    'max_payout_attempts', 'prepare_retries_capped', 'retry_delay_seconds',
   ].sort();
   exactObject(Object.keys(reserve).sort(), expectedReserveKeys, `${field} reserve fields`);
-  exactObject(Object.keys(fee).sort(), expectedFeeKeys, `${field} fee fields`);
   if (typeof reserve.payouts_enabled !== 'boolean'
     || typeof reserve.new_risk_enabled !== 'boolean'
     || typeof reserve.prepare_retries_capped !== 'boolean') {
@@ -856,11 +808,8 @@ export function normalizePauseAccountingIdentity(value, field = 'pause accountin
   }
   const identity = Object.freeze({
     reserve: Object.freeze(reserve),
-    fee: Object.freeze(fee),
     epochCount: normalizedDecimalLike(raw.epochCount, `${field}.epochCount`),
-    openEpochCount: normalizedDecimalLike(raw.openEpochCount, `${field}.openEpochCount`),
     payoutCount: normalizedDecimalLike(raw.payoutCount, `${field}.payoutCount`),
-    liability: normalizedDecimalLike(raw.liability, `${field}.liability`),
   });
   const identitySha256 = sha256(stableStringify(identity));
   const suppliedSha256 = requiredText(raw.sha256, `${field}.sha256`).toLowerCase();
@@ -894,15 +843,13 @@ export function assertPauseAccountingContinuity(beforeValue, afterValue) {
   }
   const immutablePolicy = (identity) => ({
     reserve: {
+      treasury: identity.reserve.treasury,
+      current_platform_fee_bps: identity.reserve.current_platform_fee_bps,
       payout_protocol_version: identity.reserve.payout_protocol_version,
       payouts_enabled: identity.reserve.payouts_enabled,
       max_payout_attempts: identity.reserve.max_payout_attempts,
       prepare_retries_capped: identity.reserve.prepare_retries_capped,
       retry_delay_seconds: identity.reserve.retry_delay_seconds,
-    },
-    fee: {
-      treasury: identity.fee.treasury,
-      current_platform_fee_bps: identity.fee.current_platform_fee_bps,
     },
   });
   exactObject(
@@ -921,17 +868,13 @@ export async function readAndVerifyPauseState(
   { newRiskEnabled },
 ) {
   const address = exactAddress(contractAddress, 'pause contractAddress');
-  const [code, schema, configReadback, reserveReadback, feeState,
-    epochCount, openEpochCount, payoutCount, liability] = await Promise.all([
+  const [code, schema, configReadback, reserveReadback, epochPage, payoutPage] = await Promise.all([
     reader.code(address),
     reader.schema(address),
     reader.call(address, 'get_config'),
     reader.call(address, 'get_delivery_reserve_state'),
-    reader.call(address, 'get_fee_state'),
-    reader.call(address, 'get_epoch_count'),
-    reader.call(address, 'get_open_epoch_count'),
-    reader.call(address, 'get_payout_count'),
-    reader.call(address, 'get_total_player_liability_atto'),
+    reader.call(address, 'get_epoch_page', [0, 1]),
+    reader.call(address, 'get_payout_page', [0, 1]),
   ]);
   if (code !== local.source) fail('pause target code is not byte-for-byte identical to reviewed V8');
   if (sha256(code) !== config.sourceSha256) fail('pause target code hash differs from sourceSha256');
@@ -942,11 +885,8 @@ export async function readAndVerifyPauseState(
   });
   const accounting = assertLiveAccountingIdentity({
     reserveReadback,
-    feeState,
-    epochCount,
-    openEpochCount,
-    payoutCount,
-    liability,
+    epochPage,
+    payoutPage,
   }, config, { newRiskEnabled });
   return Object.freeze({ address, config: configReadback, accounting });
 }
@@ -1127,6 +1067,100 @@ function nonnegativeTransactionQuantity(value, field) {
   }
 }
 
+function exactTransactionRequestGas(transactionRequest) {
+  const supplied = [
+    ['gas', transactionRequest?.gas],
+    ['gasLimit', transactionRequest?.gasLimit],
+  ].filter(([, value]) => value !== undefined && value !== null);
+  if (supplied.length === 0) fail('fresh-sign transaction gas is missing');
+  const parsed = supplied.map(([field, value]) => nonnegativeTransactionQuantity(
+    value,
+    `fresh-sign ${field}`,
+  ));
+  if (parsed.some((value) => value !== parsed[0])) {
+    fail('fresh-sign gas and gasLimit conflict');
+  }
+  return parsed[0];
+}
+
+function evmQuantity(value) {
+  return `0x${value.toString(16)}`;
+}
+
+/**
+ * Re-estimates the exact SDK-built outer transaction immediately before the
+ * account/nonce gate. genlayer-js 1.1.8 catches every estimate error and
+ * substitutes 200,000 gas, so a successful independent estimate and exact
+ * equality with the SDK request are mandatory before any signature.
+ */
+export async function assertExactBradburyGasEstimate({
+  reader,
+  ownerAddress,
+  transactionRequest,
+  config,
+  expectedValueAtto,
+}) {
+  if (typeof reader?.evmRequest !== 'function') {
+    fail('fresh signing requires an independent Bradbury eth_estimateGas gate');
+  }
+  const owner = normalizedAddressLike(ownerAddress, 'gas-estimate owner');
+  const recipient = normalizedAddressLike(
+    transactionRequest?.to,
+    'gas-estimate recipient',
+  );
+  if (recipient !== BRADBURY_CONSENSUS_ADDRESS) {
+    fail('gas-estimate recipient is not the exact Bradbury consensus contract');
+  }
+  const data = String(transactionRequest?.data ?? '').toLowerCase();
+  if (!/^0x[\da-f]+$/.test(data) || data.length % 2 !== 0) {
+    fail('gas-estimate calldata is malformed');
+  }
+  const calldataBytes = (data.length - 2) / 2;
+  if (calldataBytes > MAX_BRADBURY_OUTER_CALLDATA_BYTES) {
+    fail(
+      `outer Bradbury calldata is ${calldataBytes} bytes; the operational ceiling is `
+      + `${MAX_BRADBURY_OUTER_CALLDATA_BYTES} bytes`,
+    );
+  }
+  const value = nonnegativeTransactionQuantity(
+    transactionRequest?.value ?? 0n,
+    'gas-estimate value',
+  );
+  const expectedValue = nonnegativeTransactionQuantity(
+    expectedValueAtto,
+    'planned gas-estimate value',
+  );
+  if (value !== expectedValue) fail('gas-estimate value differs from the exact operation plan');
+
+  let rawEstimate;
+  try {
+    rawEstimate = await reader.evmRequest('eth_estimateGas', [{
+      from: owner,
+      to: recipient,
+      data,
+      value: evmQuantity(value),
+    }]);
+  } catch {
+    fail('independent Bradbury eth_estimateGas failed; the SDK 200,000 fallback is prohibited');
+  }
+  const estimate = BigInt(exactEvmQuantity(rawEstimate, 'Bradbury gas estimate'));
+  if (estimate <= 0n) fail('Bradbury gas estimate must be positive');
+  if (estimate > BigInt(config.operator.maxEvmGasLimit)) {
+    fail('Bradbury gas estimate exceeds operator.maxEvmGasLimit');
+  }
+  const sdkGas = exactTransactionRequestGas(transactionRequest);
+  if (sdkGas !== estimate) {
+    fail(
+      'SDK-requested gas does not exactly match the independent Bradbury estimate; '
+      + 'the 200,000 fallback or estimation drift is prohibited',
+    );
+  }
+  return Object.freeze({
+    gas: estimate.toString(),
+    calldataBytes,
+  });
+}
+
 export async function assertFreshSignerAccountPreflight({
   reader,
   ownerAddress,
@@ -1165,10 +1199,7 @@ export async function assertFreshSignerAccountPreflight({
   if (requestedNonce !== pendingNonce) {
     fail('fresh-sign transaction nonce does not equal the quiescent Bradbury owner nonce');
   }
-  const gasLimit = nonnegativeTransactionQuantity(
-    transactionRequest?.gasLimit,
-    'fresh-sign gas limit',
-  );
+  const gasLimit = exactTransactionRequestGas(transactionRequest);
   const gasPrice = nonnegativeTransactionQuantity(
     transactionRequest?.gasPrice,
     'fresh-sign gas price',
@@ -1210,6 +1241,7 @@ export async function signAfterFreshAccountPreflight({
   ...preflightInput
 }) {
   if (typeof signImpl !== 'function') fail('fresh signing implementation is unavailable');
+  const gasEstimate = await assertExactBradburyGasEstimate(preflightInput);
   const accountPreflight = await assertFreshSignerAccountPreflight(preflightInput);
   // Intentionally no asynchronous operation is inserted between the final
   // onchain account gate and the signer call.
@@ -1217,7 +1249,7 @@ export async function signAfterFreshAccountPreflight({
     preflightInput.transactionRequest,
     signOptions,
   );
-  return Object.freeze({ signedEvmTransaction, accountPreflight });
+  return Object.freeze({ signedEvmTransaction, accountPreflight, gasEstimate });
 }
 
 function decodeConsensusTransactionData(value) {
@@ -1283,6 +1315,13 @@ export function assertExactPlannedConsensusCalldata(data, {
   if (!/^0x[\da-f]+$/.test(encoded) || encoded.length % 2 !== 0) {
     fail('outer consensus calldata is malformed');
   }
+  const outerCalldataBytes = (encoded.length - 2) / 2;
+  if (outerCalldataBytes > MAX_BRADBURY_OUTER_CALLDATA_BYTES) {
+    fail(
+      `outer Bradbury calldata is ${outerCalldataBytes} bytes; the operational ceiling is `
+      + `${MAX_BRADBURY_OUTER_CALLDATA_BYTES} bytes`,
+    );
+  }
   let parsed;
   try {
     parsed = ADD_TRANSACTION_V6_INTERFACE.parseTransaction({ data: encoded });
@@ -1328,6 +1367,13 @@ export function assertExactPlannedConsensusCalldata(data, {
   }
   const elements = decodeConsensusTransactionData(transactionData);
   if (action === 'deploy') {
+    const sourceBytes = Buffer.byteLength(local?.source ?? '', 'utf8');
+    if (sourceBytes > MAX_BRADBURY_DEPLOY_SOURCE_BYTES) {
+      fail(
+        `planned V8 source is ${sourceBytes} UTF-8 bytes; the Bradbury ceiling is `
+        + `${MAX_BRADBURY_DEPLOY_SOURCE_BYTES} bytes`,
+      );
+    }
     if (elements.length !== 3 || elements[2] !== '0x00') {
       fail('planned deployment payload is not exact full consensus');
     }

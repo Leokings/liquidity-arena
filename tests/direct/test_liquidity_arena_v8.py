@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -11,7 +12,12 @@ from eth_utils import keccak
 from gltest.direct.sdk_loader import setup_sdk_paths
 
 
-CONTRACT_PATH = Path("contracts/LiquidityArenaV8.py")
+CONTRACT_PATH = Path(
+    os.environ.get(
+        "LIQUIDITY_ARENA_V8_CONTRACT_PATH",
+        "contracts/LiquidityArenaV8.release.py",
+    )
+)
 
 CREATED_ISO = "2030-01-01T00:00:00Z"
 EPOCH_END_ISO = "2030-01-01T01:00:00Z"
@@ -175,8 +181,8 @@ def deploy_arena(
         MAX_STAKE,
         as_address(FACTORY_ADDRESS),
     )
-    # Production activation is intentionally frozen until a real audited
-    # factory address is compiled into V8. Direct mode anchors only this mock.
+    # Direct mode substitutes the immutable mock for the frozen production
+    # factory while retaining the exact release state machine.
     contract_module = sys.modules[contract._instance.__class__.__module__]
     contract_module.AUDITED_PAYOUT_FACTORY_4221 = FACTORY_ADDRESS.lower()
     factory = MockPayoutFactory()
@@ -202,6 +208,48 @@ def deploy_arena(
 def payout_for_position(contract, account, objective):
     quote = contract.get_claim_quote(EPOCH_END, objective, as_address(account))
     return quote["payout_id"], quote
+
+
+def reserve_state(contract):
+    return contract.get_delivery_reserve_state()
+
+
+def fee_state(contract):
+    return reserve_state(contract)
+
+
+def player_liability(contract):
+    return reserve_state(contract)["player_liability_atto"]
+
+
+def accounted_balance(contract):
+    state = reserve_state(contract)
+    return sum(
+        state[key]
+        for key in (
+            "player_liability_atto",
+            "accrued_platform_fees_atto",
+            "reserved_platform_fees_atto",
+            "available_reserve_atto",
+            "committed_reserve_atto",
+        )
+    )
+
+
+def epoch_page(contract):
+    return contract.get_epoch_page(0, 50)
+
+
+def open_epoch_ids(contract):
+    return [
+        epoch_id
+        for epoch_id in epoch_page(contract)["epoch_ids"]
+        if contract.get_epoch(int(epoch_id))["status"] == "OPEN"
+    ]
+
+
+def payout_count(contract):
+    return contract.get_payout_page(0, 50)["total"]
 
 
 def fund_payout(direct_vm, contract, account, objective):
@@ -432,13 +480,10 @@ def test_v8_pins_runner_and_exposes_fixed_policy(
     assert config["keeper_max_schedule_ahead_seconds"] == 26 * 3_600
     assert config["policy_version"] == "CRYPTO_SPOT_1M_MEDIAN_V1"
     assert config["current_platform_fee_bps"] == 200
-    assert config["max_platform_fee_bps"] == 500
     assert config["resolution_publication_delay_seconds"] == 120
     assert config["timeout_refund_delay_seconds"] == 86_400
-    assert config["four_venue_median_policy"] == "FLOOR_AVERAGE_OF_MIDDLE_TWO"
-    assert config["transfer_finality"] == "FINALIZED"
-    assert [item["asset_id"] for item in contract.get_asset_catalog()["assets"]] == list(ASSETS)
-    assert contract.get_venue_catalog()["venues"] == list(VENUES)
+    assert config["asset_ids"] == list(ASSETS)
+    assert config["venues"] == list(VENUES)
 
 
 def test_zero_treasury_is_rejected(
@@ -554,10 +599,6 @@ def test_keeper_is_limited_rotatable_and_revocable(
     assert epoch["min_stake_atto"] == MIN_STAKE
     assert epoch["max_stake_per_wallet_atto"] == MAX_STAKE
     with direct_vm.expect_revert("ONLY_OWNER"):
-        contract.set_platform_fee_bps(300)
-    with direct_vm.expect_revert("ONLY_OWNER"):
-        contract.propose_ownership(as_address(direct_charlie))
-    with direct_vm.expect_revert("ONLY_OWNER"):
         contract.set_keeper(as_address(direct_alice))
     with direct_vm.expect_revert("FEE_OPERATOR"):
         contract.request_fee_payout(1)
@@ -606,44 +647,19 @@ def test_keeper_schedule_horizon_and_notice_are_exact(
         contract.create_epoch(SECOND_EPOCH_END - 3_600)
 
 
-def test_two_step_owner_rotation_and_cancellation(
+def test_owner_and_fee_are_fixed_release_policy(
     direct_vm,
     direct_deploy,
     direct_owner,
-    direct_alice,
-    direct_bob,
     direct_charlie,
 ):
     contract = deploy_arena(direct_vm, direct_deploy, direct_owner, direct_charlie)
-    from genlayer.py.types import Address
-    direct_vm.sender = as_address(direct_owner)
-    with direct_vm.expect_revert("OWNER_ZERO"):
-        contract.propose_ownership(Address(bytes(20)))
-    with direct_vm.expect_revert("OWNER_UNCHANGED"):
-        contract.propose_ownership(as_address(direct_owner))
-
-    contract.propose_ownership(as_address(direct_alice))
-    direct_vm.sender = as_address(direct_bob)
-    with direct_vm.expect_revert("PENDING_OWNER"):
-        contract.accept_ownership()
-    direct_vm.sender = as_address(direct_owner)
-    contract.cancel_ownership_transfer()
-    direct_vm.sender = as_address(direct_alice)
-    with direct_vm.expect_revert("PENDING_OWNER"):
-        contract.accept_ownership()
-
-    direct_vm.sender = as_address(direct_owner)
-    contract.propose_ownership(as_address(direct_alice))
-    direct_vm.sender = as_address(direct_alice)
-    contract.accept_ownership()
     config = contract.get_config()
-    assert str(config["owner"]).lower() == str(as_address(direct_alice)).lower()
-    assert str(config["pending_owner"]).lower() == "0x" + ("0" * 40)
-    direct_vm.sender = as_address(direct_owner)
-    with direct_vm.expect_revert("ONLY_OWNER"):
-        contract.set_platform_fee_bps(300)
-    direct_vm.sender = as_address(direct_alice)
-    contract.set_platform_fee_bps(300)
+    assert str(config["owner"]).lower() == str(as_address(direct_owner)).lower()
+    assert config["current_platform_fee_bps"] == 200
+    assert not hasattr(contract._instance, "propose_ownership")
+    assert not hasattr(contract._instance, "accept_ownership")
+    assert not hasattr(contract._instance, "set_platform_fee_bps")
 
 
 def test_admin_and_epoch_management_reject_native_value(
@@ -659,20 +675,7 @@ def test_admin_and_epoch_management_reject_native_value(
     with direct_vm.expect_revert("VALUE_NOT_ACCEPTED"):
         contract.set_keeper(as_address(direct_alice))
     with direct_vm.expect_revert("VALUE_NOT_ACCEPTED"):
-        contract.propose_ownership(as_address(direct_alice))
-    with direct_vm.expect_revert("VALUE_NOT_ACCEPTED"):
-        contract.cancel_ownership_transfer()
-    with direct_vm.expect_revert("VALUE_NOT_ACCEPTED"):
-        contract.set_platform_fee_bps(300)
-    with direct_vm.expect_revert("VALUE_NOT_ACCEPTED"):
         contract.create_epoch(EPOCH_END)
-
-    direct_vm.value = 0
-    contract.propose_ownership(as_address(direct_alice))
-    direct_vm.sender = as_address(direct_alice)
-    direct_vm.value = 1
-    with direct_vm.expect_revert("VALUE_NOT_ACCEPTED"):
-        contract.accept_ownership()
     direct_vm.value = 0
 
 
@@ -687,10 +690,7 @@ def test_exact_hour_schedule_and_all_phase_boundaries(
         contract.create_epoch(EPOCH_END + 1)
     create_epoch(contract)
     summary = contract.get_epoch(EPOCH_END)
-    assert contract.get_open_epoch_count() == 1
-    open_page = contract.get_open_epoch_page(0, 50)
-    assert open_page["total"] == 1
-    assert open_page["epoch_ids"] == [str(EPOCH_END)]
+    assert open_epoch_ids(contract) == [str(EPOCH_END)]
     assert summary["wager_opens_timestamp"] == EPOCH_END - 2_400
     assert summary["wager_closes_timestamp"] == EPOCH_END - 1_200
     assert summary["battle_starts_timestamp"] == EPOCH_END - 1_200
@@ -718,7 +718,7 @@ def test_exact_hour_schedule_and_all_phase_boundaries(
     assert contract.get_epoch(EPOCH_END)["phase"] == "TIMEOUT_AVAILABLE"
 
 
-def test_epoch_creation_requires_notice_and_snapshots_fee_with_hard_cap(
+def test_epoch_creation_requires_notice_and_snapshots_fixed_fee(
     direct_vm,
     direct_deploy,
     direct_owner,
@@ -727,12 +727,9 @@ def test_epoch_creation_requires_notice_and_snapshots_fee_with_hard_cap(
     contract = deploy_arena(direct_vm, direct_deploy, direct_owner, direct_charlie)
     create_epoch(contract)
     direct_vm.sender = as_address(direct_owner)
-    contract.set_platform_fee_bps(500)
     contract.create_epoch(SECOND_EPOCH_END)
     assert contract.get_epoch(EPOCH_END)["platform_fee_bps_snapshot"] == 200
-    assert contract.get_epoch(SECOND_EPOCH_END)["platform_fee_bps_snapshot"] == 500
-    with direct_vm.expect_revert("FEE_CAP"):
-        contract.set_platform_fee_bps(501)
+    assert contract.get_epoch(SECOND_EPOCH_END)["platform_fee_bps_snapshot"] == 200
 
     direct_vm.warp(WAGER_OPEN_ISO)
     with direct_vm.expect_revert("EPOCH_NOTICE"):
@@ -757,27 +754,20 @@ def test_entries_are_per_objective_top_up_only_and_recoverable_on_chain(
     place_wager(direct_vm, contract, direct_alice, "LOW", "ETH", 70)
     place_wager(direct_vm, contract, direct_bob, "HIGH", "SOL", 25)
 
-    assert contract.get_entry(EPOCH_END, "HIGH", as_address(direct_alice))["stake_atto"] == 150
-    assert contract.get_entry(EPOCH_END, "LOW", as_address(direct_alice))["stake_atto"] == 70
-    assert contract.get_total_player_liability_atto() == 245
-    assert contract.get_wallet_position_count(as_address(direct_alice)) == 2
-    page = contract.get_wallet_position_page(as_address(direct_alice), 0, 10)
-    assert page["total"] == 2
-    assert [(item["objective"], item["choice_asset_id"]) for item in page["positions"]] == [
-        ("HIGH", "BTC"),
-        ("LOW", "ETH"),
-    ]
-    assert contract.get_epoch_count() == 1
-    assert contract.get_epoch_id(0) == str(EPOCH_END)
-    assert contract.get_epoch_page(0, 10)["epoch_ids"] == [str(EPOCH_END)]
+    high = contract.get_claim_quote(EPOCH_END, "HIGH", as_address(direct_alice))
+    low = contract.get_claim_quote(EPOCH_END, "LOW", as_address(direct_alice))
+    assert (high["stake_atto"], high["choice_asset_id"]) == (150, "BTC")
+    assert (low["stake_atto"], low["choice_asset_id"]) == (70, "ETH")
+    assert player_liability(contract) == 245
+    page = contract.get_epoch_page(0, 10)
+    assert page["total"] == 1
+    assert page["epoch_ids"] == [str(EPOCH_END)]
 
     direct_vm.sender = as_address(direct_alice)
     direct_vm.value = 10
     with direct_vm.expect_revert("ONE_ASSET_PER_OBJECTIVE"):
         contract.enter(EPOCH_END, "HIGH", "ETH")
     direct_vm.value = 0
-    with direct_vm.expect_revert("PAGE_LIMIT"):
-        contract.get_wallet_position_page(as_address(direct_alice), 0, 51)
 
     direct_vm.warp(WAGER_CLOSE_ISO)
     direct_vm.sender = as_address(direct_bob)
@@ -818,8 +808,8 @@ def test_two_percent_losing_pool_fee_exact_claims_and_fee_solvency(
     assert high["payout_pool_atto"] == 992
     assert low["platform_fee_atto"] == 14
     assert low["payout_pool_atto"] == 986
-    assert contract.get_total_player_liability_atto() == 1_978
-    assert contract.get_fee_state()["accrued_platform_fees_atto"] == 22
+    assert player_liability(contract) == 1_978
+    assert fee_state(contract)["accrued_platform_fees_atto"] == 22
 
     alice = as_address(direct_alice)
     bob = as_address(direct_bob)
@@ -851,7 +841,7 @@ def test_two_percent_losing_pool_fee_exact_claims_and_fee_solvency(
     direct_vm.sender = bob
     contract.claim(EPOCH_END, "LOW")
     bob_payout_id, _ = fund_payout(direct_vm, contract, bob, "LOW")
-    assert contract.get_total_player_liability_atto() == 0
+    assert player_liability(contract) == 0
     assert contract.get_payout(alice_payout_id)["state"] == "EOA_WITHDRAWN"
     assert contract.get_payout(charlie_payout_id)["state"] == "FUNDED_IN_ESCROW"
     assert contract.get_payout(bob_payout_id)["state"] == "FUNDED_IN_ESCROW"
@@ -883,10 +873,10 @@ def test_two_percent_losing_pool_fee_exact_claims_and_fee_solvency(
     ]
     contract._test_payout_factory.credit(fee_payout_id)
     contract.confirm_payout(fee_payout_id)
-    fee_state = contract.get_fee_state()
-    assert fee_state["accrued_platform_fees_atto"] == 0
-    assert fee_state["funded_platform_fees_atto"] == 22
-    assert fee_state["withdrawn_platform_fees_atto"] == 0
+    fees = fee_state(contract)
+    assert fees["accrued_platform_fees_atto"] == 0
+    assert fees["funded_platform_fees_atto"] == 22
+    assert fees["withdrawn_platform_fees_atto"] == 0
     assert contract.get_config()["claimed_semantics"] == "EOA_WITHDRAWN"
     assert contract.get_config()["prepare_retries_capped"] is False
     assert contract.get_delivery_reserve_state()["committed_reserve_atto"] == 0
@@ -896,7 +886,7 @@ def test_two_percent_losing_pool_fee_exact_claims_and_fee_solvency(
     )
     contract._test_payout_factory.mark_withdrawn(fee_payout_id)
     contract.refresh_payout_withdrawal(fee_payout_id)
-    assert contract.get_fee_state()["withdrawn_platform_fees_atto"] == 22
+    assert fee_state(contract)["withdrawn_platform_fees_atto"] == 22
     assert contract.get_payout(fee_payout_id)["state"] == "EOA_WITHDRAWN"
     contract.refresh_payout_withdrawal(fee_payout_id)
 
@@ -926,7 +916,7 @@ def test_tie_and_unbacked_winner_refund_principal_with_zero_fee(
     assert low["winner_asset_id"] == "XRP"
     assert low["settlement_mode"] == "REFUND_UNBACKED_WINNER"
     assert low["platform_fee_atto"] == 0
-    assert contract.get_fee_state()["accrued_platform_fees_atto"] == 0
+    assert fee_state(contract)["accrued_platform_fees_atto"] == 0
 
     direct_vm.sender = as_address(direct_alice)
     direct_vm.value = 0
@@ -938,7 +928,7 @@ def test_tie_and_unbacked_winner_refund_principal_with_zero_fee(
     direct_vm.sender = as_address(direct_bob)
     contract.claim(EPOCH_END, "HIGH")
     fund_payout(direct_vm, contract, direct_bob, "HIGH")
-    assert contract.get_total_player_liability_atto() == 0
+    assert player_liability(contract) == 0
 
 
 def test_no_losing_side_refunds_instead_of_charging_fee(
@@ -984,7 +974,7 @@ def test_fewer_than_three_atomic_venues_remains_open_for_retry(
     assert epoch["result_status"] == "PENDING"
     assert contract.get_objective(EPOCH_END, "HIGH")["settlement_mode"] == "PENDING"
     assert contract.get_objective(EPOCH_END, "LOW")["settlement_mode"] == "PENDING"
-    assert contract.get_fee_state()["accrued_platform_fees_atto"] == 0
+    assert fee_state(contract)["accrued_platform_fees_atto"] == 0
     assert contract.get_claim_quote(EPOCH_END, "HIGH", as_address(direct_alice))["amount_atto"] == 0
     assert contract.get_claim_quote(EPOCH_END, "LOW", as_address(direct_bob))["amount_atto"] == 0
 
@@ -1016,6 +1006,7 @@ def test_four_venue_median_and_all_public_parser_fixtures(
     epoch = contract.get_epoch(EPOCH_END)
     assert epoch["venue_count"] == 4
     assert epoch["qualified_venues"] == ["BINANCE", "OKX", "BYBIT", "GATE"]
+    canonical_assets = []
     for asset_id in ASSETS:
         asset = contract.get_epoch_asset(EPOCH_END, asset_id)
         assert asset["return_ppb"] == 50_000_000
@@ -1025,8 +1016,34 @@ def test_four_venue_median_and_all_public_parser_fixtures(
             70_000_000,
             90_000_000,
         ]
+        canonical_assets.append(
+            {
+                "asset_id": asset_id,
+                "return_ppb": 50_000_000,
+                "venue_returns_ppb": [10_000_000, 30_000_000, 70_000_000, 90_000_000],
+            }
+        )
     assert epoch["high_winner_asset_id"] == "TIE"
     assert epoch["low_winner_asset_id"] == "TIE"
+    canonical_result = {
+        "policy_version": "CRYPTO_SPOT_1M_MEDIAN_V1",
+        "status": "DETERMINED",
+        "epoch_end_timestamp": EPOCH_END,
+        "qualified_venues": ["BINANCE", "OKX", "BYBIT", "GATE"],
+        "venue_count": 4,
+        "assets": canonical_assets,
+        "high_winner_asset_id": "TIE",
+        "high_winner_return_ppb": 50_000_000,
+        "low_winner_asset_id": "TIE",
+        "low_winner_return_ppb": 50_000_000,
+    }
+    canonical_bytes = json.dumps(
+        canonical_result,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    assert epoch["resolution_digest"] == keccak(canonical_bytes).hex()
 
 
 def test_exact_candle_timestamp_is_required_for_venue_qualification(
@@ -1070,14 +1087,14 @@ def test_timeout_and_result_paths_are_mutually_exclusive_and_zero_fee(
     assert epoch["status"] == "TIMED_OUT"
     assert epoch["result_status"] == "TIMEOUT"
     assert contract.get_objective(EPOCH_END, "HIGH")["settlement_mode"] == "REFUND_TIMEOUT"
-    assert contract.get_fee_state()["accrued_platform_fees_atto"] == 0
-    assert contract.get_open_epoch_count() == 0
+    assert fee_state(contract)["accrued_platform_fees_atto"] == 0
+    assert open_epoch_ids(contract) == []
     with direct_vm.expect_revert("EPOCH_NOT_OPEN"):
         contract.resolve_epoch(EPOCH_END)
     direct_vm.sender = as_address(direct_alice)
     contract.claim(EPOCH_END, "HIGH")
     fund_payout(direct_vm, contract, direct_alice, "HIGH")
-    assert contract.get_total_player_liability_atto() == 0
+    assert player_liability(contract) == 0
 
 
 def test_resolved_epoch_cannot_later_enter_timeout(
@@ -1089,7 +1106,7 @@ def test_resolved_epoch_cannot_later_enter_timeout(
     contract = deploy_arena(direct_vm, direct_deploy, direct_owner, direct_charlie)
     create_epoch(contract)
     resolve(direct_vm, contract, default_market())
-    assert contract.get_open_epoch_count() == 0
+    assert open_epoch_ids(contract) == []
     direct_vm.warp(TIMEOUT_AVAILABLE_ISO)
     with direct_vm.expect_revert("EPOCH_NOT_OPEN"):
         contract.activate_timeout_refund(EPOCH_END)
@@ -1108,7 +1125,7 @@ def test_global_history_pages_are_bounded(
     with direct_vm.expect_revert("PAGE_LIMIT"):
         contract.get_epoch_page(0, bad_limit)
     with direct_vm.expect_revert("PAGE_LIMIT"):
-        contract.get_open_epoch_page(0, bad_limit)
+        contract.get_payout_page(0, bad_limit)
 
 
 def test_activation_fails_closed_by_chain_binding_and_factory_protocol(
@@ -1233,7 +1250,7 @@ def test_new_wager_requires_full_bounded_attempt_reserve(
     direct_vm.value = 100
     with direct_vm.expect_revert("PAYOUT_RESERVE_CAPACITY"):
         contract.enter(EPOCH_END, "HIGH", "BTC")
-    assert contract.get_total_player_liability_atto() == 0
+    assert player_liability(contract) == 0
     assert contract.get_delivery_reserve_state()["available_reserve_atto"] == 299
 
 
@@ -1296,7 +1313,7 @@ def test_payout_identity_is_amount_and_factory_domain_separated_and_immutable(
     assert payout["reserve_remaining_atto"] == 300
     with direct_vm.expect_revert("PAYOUT_EXISTS"):
         contract.claim(EPOCH_END, "HIGH")
-    assert contract.get_payout_count() == 1
+    assert payout_count(contract) == 1
 
 
 def test_retry_is_exact_capped_and_late_credit_remains_confirmable(
@@ -1331,7 +1348,7 @@ def test_retry_is_exact_capped_and_late_credit_remains_confirmable(
         (payout_id, 100),
         (payout_id, 100),
     ]
-    assert contract.get_total_player_liability_atto() == 100
+    assert player_liability(contract) == 100
 
     contract._test_payout_factory.credit(payout_id)
     contract.confirm_payout(payout_id)
@@ -1339,7 +1356,7 @@ def test_retry_is_exact_capped_and_late_credit_remains_confirmable(
     assert payout["state"] == "FUNDED_IN_ESCROW"
     assert payout["attempt_count"] == 3
     assert payout["reserve_remaining_atto"] == 0
-    assert contract.get_total_player_liability_atto() == 0
+    assert player_liability(contract) == 0
     with direct_vm.expect_revert("PAYOUT_NOT_DISPATCHED"):
         contract.confirm_payout(payout_id)
 
@@ -1444,8 +1461,8 @@ def test_interleaved_player_and_fee_payouts_preserve_aggregate_reserve_invariant
     place_wager(direct_vm, contract, direct_alice, "HIGH", "BTC", 100)
     place_wager(direct_vm, contract, direct_bob, "HIGH", "ETH", 100)
     resolve(direct_vm, contract, default_market())
-    assert contract.get_total_player_liability_atto() == 198
-    assert contract.get_fee_state()["accrued_platform_fees_atto"] == 2
+    assert player_liability(contract) == 198
+    assert fee_state(contract)["accrued_platform_fees_atto"] == 2
 
     reserve_start = contract.get_delivery_reserve_state()["available_reserve_atto"]
     direct_vm.sender = as_address(direct_alice)
@@ -1481,15 +1498,15 @@ def test_interleaved_player_and_fee_payouts_preserve_aggregate_reserve_invariant
     assert reserve["reserved_platform_fees_atto"] == 0
     assert reserve["committed_reserve_atto"] == 0
     assert reserve["available_reserve_atto"] == reserve_start - 2
-    assert contract.get_total_player_liability_atto() == 0
-    fees = contract.get_fee_state()
+    assert player_liability(contract) == 0
+    fees = fee_state(contract)
     assert fees["accrued_platform_fees_atto"] == 0
     assert fees["reserved_platform_fees_atto"] == 0
     assert fees["funded_platform_fees_atto"] == 2
     assert fees["withdrawn_platform_fees_atto"] == 2
     assert contract.get_payout(player_id)["state"] == "FUNDED_IN_ESCROW"
     assert contract.get_payout(fee_id)["state"] == "EOA_WITHDRAWN"
-    assert int(contract.balance) == contract._accounted_balance_atto()
+    assert int(contract.balance) == accounted_balance(contract)
 
 
 def test_two_simultaneous_payouts_have_isolated_attempt_budgets(
@@ -1532,12 +1549,12 @@ def test_two_simultaneous_payouts_have_isolated_attempt_budgets(
     assert reserve["available_reserve_atto"] == 300
     assert reserve["committed_reserve_atto"] == 300
     assert contract.get_payout(bob_id)["reserve_remaining_atto"] == 300
-    assert contract.get_total_player_liability_atto() == 100
+    assert player_liability(contract) == 100
 
     contract.dispatch_payout(bob_id)
     contract._test_payout_factory.credit(bob_id)
     contract.confirm_payout(bob_id)
-    assert contract.get_total_player_liability_atto() == 0
+    assert player_liability(contract) == 0
     assert contract.get_delivery_reserve_state()["available_reserve_atto"] == 600
 
 
@@ -1587,4 +1604,4 @@ def test_every_two_winner_claim_order_allocates_exact_rounding_remainder(
     contract.dispatch_payout(second_id)
     contract._test_payout_factory.credit(second_id)
     contract.confirm_payout(second_id)
-    assert contract.get_total_player_liability_atto() == 0
+    assert player_liability(contract) == 0

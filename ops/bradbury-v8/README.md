@@ -1,14 +1,13 @@
 # Bradbury V8 inactive-deployment canary
 
-This harness deploys and certifies an **inactive** Liquidity Arena V8 candidate on GenLayer
-Bradbury. It never edits an application route, deployment registry, database, keeper schedule, or
-V7 state. There is deliberately no cutover command.
+This harness deploys and certifies an initially **inactive** Liquidity Arena V8 candidate on
+GenLayer Bradbury. It never edits an application route, deployment registry, database, or keeper
+schedule. There is deliberately no cutover command.
 
-The current `LiquidityArenaV8.py` release candidate still freezes the chain-4221 factory
-anchor to the zero address. As a result, every deployment action currently fails before signing.
-That is intentional. First deploy and independently verify the immutable EVM factory with the
-supported Bradbury zkSync toolchain, freeze that exact non-proxy address into the V8 source, and
-repeat the contract/source review. Do not replace the anchor merely to make this harness pass.
+`LiquidityArenaV8.release.py` is the deterministic deployment artifact and freezes the independently
+deployed and verified chain-4221 factory
+`0x944FdADd826C2a159c63cB100DB174716ccd1317`. Any change to that non-proxy address requires a new
+factory deployment, bytecode/source verification, source review, and exact source-hash update.
 
 ## What is enforced
 
@@ -17,17 +16,17 @@ repeat the contract/source review. Do not replace the anchor merely to make this
   read or change the process-global GenLayer CLI network.
 - The configuration must explicitly fix the owner account and address, keeper, treasury, EVM
   factory, factory binder, reserve sink, factory runtime bytecode hash, full V8 source hash,
-  exhaustive 43-method schema hash, stake limits, and initial delivery reserve.
+  exhaustive 25-method schema hash, stake limits, and initial delivery reserve.
 - For this reviewed rollout, the V8 owner and one-time factory binder must be the same dedicated EOA;
   configuration validation rejects a mismatch before any signature or deployment.
 - The local source must hash exactly and contain one literal `AUDITED_PAYOUT_FACTORY_4221` equal to
-  the configured factory. The zero-address candidate cannot be broadcast.
+  the configured factory. A zero-address candidate cannot be broadcast.
 - Deployment is full consensus. The exact source and five constructor arguments must appear in a
   successful `FINALIZED` receipt, and its sender and resulting nonzero contract address must be
   exact. Merely reaching `ACCEPTED` or `FINALIZED` is not execution success.
-- Deployed code must be byte-for-byte equal to the reviewed local source. Schema, `get_config`,
-  delivery-reserve state, fee state, and all fresh-deployment counters are exact readbacks; unknown
-  fields fail closed.
+- Deployed code must be byte-for-byte equal to the reviewed release artifact. Schema, `get_config`,
+  the merged delivery-reserve/fee/liability state, and the totals returned by the one-item epoch and
+  payout pages are exact readbacks; unknown fields fail closed.
 - Only after the successful finalized deployment receipt, exact source/constructor/owner proof, and
   all deployment readbacks pass, the harness atomically creates a non-secret
   `liquidity-arena-bradbury-bind-request-v1` file beside operational state. Its published strict
@@ -52,8 +51,8 @@ repeat the contract/source review. Do not replace the anchor merely to make this
 - Fresh deployment, funding, and activation gates require pristine zero accounting. Emergency-pause
   preflight, postcondition, status, and reconciliation deliberately use a separate live-state proof:
   code/schema/config remain exact, payouts remain enabled, new risk must become disabled, nonzero
-  epoch/payout/liability state is allowed, and duplicated reserve/fee/liability fields, the bounded
-  three-attempt reserve formula, capacity, counter ordering, and funded/withdrawn fee identities
+  epoch/payout/liability state is allowed, and the consolidated reserve/fee/liability fields, the
+  bounded three-attempt reserve formula, capacity, page totals, and funded/withdrawn fee identities
   must agree. Before signing, the exact canonical pre-pause accounting snapshot is stored in the
   durable `PAUSE_PREPARED` operation and the signer child independently re-reads and matches it.
   Post-finality and reconciliation require the exact risk-enabled-to-disabled transition and the
@@ -93,18 +92,28 @@ replayable transaction bytes cannot be redirected outside the protected root.
 Before signing, the outer Bradbury `addTransaction` v6 calldata is canonical-reencoded and compared
 byte-for-byte. Its literal 5-validator/3-rotation policy, sender, recipient, one-hour validity,
 source or method, typed constructor arguments, empty call arguments, and `leaderOnly=false` must all
-match. The signed legacy envelope must reproduce those bytes and stay under the explicit gas-limit
-and gas-price caps in the configuration. Their configured product and every signed envelope are
-also subject to a non-configurable 0.03 GEN maximum gas-cost ceiling. Recovery redoes the same check
-before any raw replay.
+match. The deploy source is capped at 45,000 UTF-8 bytes and every outer transaction at 45,500
+calldata bytes. Those operational limits retain roughly 15% headroom below the narrowest boundary
+observed by read-only Bradbury probes on 2026-08-22; they are deliberately conservative and are not
+treated as permanent protocol constants. An oversized source is a release failure, not permission
+to send the SDK's fallback transaction.
+
+Immediately before the account/nonce gate, the signer independently calls Bradbury
+`eth_estimateGas` for the exact SDK-built sender, consensus recipient, calldata, and value. Any RPC
+error is fatal. The result must be positive, no greater than `operator.maxEvmGasLimit`, and exactly
+equal the SDK-requested gas. This specifically prevents `genlayer-js` 1.1.8 from signing after its
+silent 200,000-gas fallback. The signed legacy envelope must reproduce those bytes and stay under
+the explicit gas-limit and gas-price caps in the configuration. Their configured product and every
+signed envelope are also subject to a non-configurable 0.03 GEN maximum gas-cost ceiling. Recovery
+redoes the same check before any raw replay.
 
 Immediately before every fresh signature, the signer reads the dedicated owner's Bradbury EVM
 transaction counts at both `latest` and `pending` plus its pending balance. It signs zero bytes unless
 `latest == pending ==` the SDK-requested nonce and the pending balance covers the exact transaction
 value plus `gasLimit * gasPrice`. Both equal nonce observations, the balance, and the maximum cost are
 bound into durable SIGNED evidence. Exact-raw recovery never performs a fresh signature and therefore
-does not substitute a new nonce. The example's 30,000,000 gas-limit and 1 gwei gas-price caps meet the
-0.03 GEN ceiling exactly.
+does not substitute a new nonce. The example's 50,000,000 gas-limit and 0.6 gwei gas-price caps meet
+the 0.03 GEN ceiling exactly; the independent estimate still has to fit that cap.
 
 After EVM submission, the harness requires the receipt for that exact deterministic EVM hash to be
 successful and mined by Bradbury's exact consensus contract. It accepts exactly one
@@ -142,8 +151,9 @@ blindly.
 ## Usage
 
 Copy both examples to ignored `*.local.json` files and replace every address/hash with independently
-reviewed Bradbury evidence. Recompute `sourceSha256` after the factory anchor is frozen. The schema
-hash changes only if the public ABI changes.
+reviewed Bradbury evidence. Rebuild and review `LiquidityArenaV8.release.py`, then recompute
+`sourceSha256`, after any canonical contract change. The schema hash changes only if the public ABI
+changes.
 
 After deploy succeeds, pass the generated `<statePath>.bind-request.json` to the separately reviewed
 EVM factory utility's production bind mode. That bind mode—not this harness—produces the subsequent

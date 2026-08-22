@@ -17,6 +17,8 @@ import {
   BRADBURY_CONSENSUS_ADDRESS,
   BIND_REQUEST_SCHEMA,
   ACTIVATION_TERMINAL_STAGE,
+  MAX_BRADBURY_DEPLOY_SOURCE_BYTES,
+  MAX_BRADBURY_OUTER_CALLDATA_BYTES,
   MAX_TRANSACTION_GAS_COST_ATTO,
   NEW_TRANSACTION_TOPIC,
   EXPECTED_V8_SCHEMA,
@@ -99,7 +101,7 @@ function rawConfig(overrides = {}) {
     version: 1,
     network: BRADBURY_ALIAS,
     chainId: BRADBURY_CHAIN_ID,
-    sourcePath: 'contracts/LiquidityArenaV8.py',
+    sourcePath: 'contracts/LiquidityArenaV8.release.py',
     sourceSha256: SOURCE_HASH,
     schemaSha256: EXPECTED_V8_SCHEMA_SHA256,
     ownerAccountName: 'bradbury-owner',
@@ -140,38 +142,41 @@ function liveAccountingIdentity(config, {
   availableReserveAtto = '1000',
   committedReserveAtto = '600',
   epochCount = 4,
-  openEpochCount = 2,
   payoutCount = 3,
 } = {}) {
   return assertLiveAccountingIdentity({
     reserveReadback: {
+      treasury: config.expected.treasuryAddress,
+      current_platform_fee_bps: 200,
       payout_protocol_version: PAYOUT_PROTOCOL_VERSION,
       payouts_enabled: true,
       new_risk_enabled: newRiskEnabled,
-      available_reserve_atto: availableReserveAtto,
-      committed_reserve_atto: committedReserveAtto,
-      required_available_reserve_atto: '210',
-      reserved_player_payouts_atto: '40',
-      reserved_platform_fees_atto: '20',
-      max_payout_attempts: 3,
-      prepare_retries_capped: false,
-      retry_delay_seconds: 3600,
-    },
-    feeState: {
-      treasury: config.expected.treasuryAddress,
-      current_platform_fee_bps: 200,
+      player_liability_atto: '100',
       accrued_platform_fees_atto: '10',
       reserved_platform_fees_atto: '20',
       funded_platform_fees_atto: '30',
       withdrawn_platform_fees_atto: '5',
-      player_liability_atto: '100',
+      available_reserve_atto: availableReserveAtto,
+      committed_reserve_atto: committedReserveAtto,
+      required_available_reserve_atto: '210',
       reserved_player_payouts_atto: '40',
+      max_payout_attempts: 3,
+      prepare_retries_capped: false,
+      retry_delay_seconds: 3600,
     },
-    epochCount,
-    openEpochCount,
-    payoutCount,
-    liability: 100,
+    epochPage: accountingPage('epoch_ids', epochCount),
+    payoutPage: accountingPage('payouts', payoutCount),
   }, config, { newRiskEnabled });
+}
+
+function accountingPage(itemsField, total) {
+  const count = BigInt(total);
+  return {
+    offset: 0,
+    next_offset: count === 0n ? 0 : 1,
+    total,
+    [itemsField]: count === 0n ? [] : [itemsField === 'epoch_ids' ? '1' : {}],
+  };
 }
 
 function pauseReadbackReader(config, source, accounting, extra = {}) {
@@ -181,11 +186,8 @@ function pauseReadbackReader(config, source, accounting, extra = {}) {
       newRiskEnabled: accounting.reserve.new_risk_enabled,
     }),
     get_delivery_reserve_state: accounting.reserve,
-    get_fee_state: accounting.fee,
-    get_epoch_count: accounting.epochCount,
-    get_open_epoch_count: accounting.openEpochCount,
-    get_payout_count: accounting.payoutCount,
-    get_total_player_liability_atto: accounting.liability,
+    get_epoch_page: accountingPage('epoch_ids', accounting.epochCount),
+    get_payout_page: accountingPage('payouts', accounting.payoutCount),
   };
   return {
     code: async () => source,
@@ -405,12 +407,27 @@ test('fresh signing requires a quiescent exact nonce and sufficient pending bala
   const maximumCost = gasLimit * gasPrice;
   const transactionRequest = {
     nonce: 7,
-    gasLimit,
+    gas: gasLimit,
     gasPrice,
     value: 0n,
+    to: BRADBURY_CONSENSUS_ADDRESS,
+    data: '0x1234',
   };
-  const readerFor = ({ latest = '0x7', pending = '0x7', balance = maximumCost } = {}) => ({
+  const readerFor = ({
+    latest = '0x7', pending = '0x7', balance = maximumCost,
+    estimate = gasLimit, estimateError = false,
+  } = {}) => ({
     evmRequest: async (method, params) => {
+      if (method === 'eth_estimateGas') {
+        assert.deepEqual(params, [{
+          from: OWNER,
+          to: BRADBURY_CONSENSUS_ADDRESS,
+          data: transactionRequest.data,
+          value: '0x0',
+        }]);
+        if (estimateError) throw new Error('BlockPubdataLimitReached');
+        return `0x${BigInt(estimate).toString(16)}`;
+      }
       assert.equal(params[0], OWNER);
       if (method === 'eth_getTransactionCount' && params[1] === 'latest') return latest;
       if (method === 'eth_getTransactionCount' && params[1] === 'pending') return pending;
@@ -435,11 +452,15 @@ test('fresh signing requires a quiescent exact nonce and sufficient pending bala
   assert.equal(exact.accountPreflight.ownerNonceLatestAtSign, '7');
   assert.equal(exact.accountPreflight.ownerNoncePendingAtSign, '7');
   assert.equal(exact.accountPreflight.maximumTransactionCostAtSign, maximumCost.toString());
+  assert.deepEqual(exact.gasEstimate, { gas: gasLimit.toString(), calldataBytes: 2 });
 
   for (const [label, reader, request, pattern] of [
+    ['Bradbury estimate failure', readerFor({ estimateError: true }), transactionRequest, /200,000 fallback is prohibited/i],
+    ['SDK fallback/drift', readerFor({ estimate: gasLimit - 1n }), transactionRequest, /does not exactly match/i],
     ['pending owner transaction', readerFor({ pending: '0x8' }), transactionRequest, /pending EVM transaction/i],
     ['SDK nonce drift', readerFor(), { ...transactionRequest, nonce: 8 }, /nonce does not equal/i],
     ['insufficient balance', readerFor({ balance: maximumCost - 1n }), transactionRequest, /balance cannot cover/i],
+    ['conflicting gas aliases', readerFor(), { ...transactionRequest, gasLimit: gasLimit + 1n }, /gas and gasLimit conflict/i],
   ]) {
     signs = 0;
     await assert.rejects(() => signAfterFreshAccountPreflight({
@@ -508,7 +529,7 @@ test('activation enables payout rails while risk stays paused and no resume comm
   assert.doesNotMatch(help, /harness\.mjs resume/i);
 
   const source = readFileSync(
-    new URL('../../contracts/LiquidityArenaV8.py', import.meta.url),
+    new URL('../../contracts/LiquidityArenaV8.release.py', import.meta.url),
   );
   const example = JSON.parse(readFileSync(
     new URL('./config.example.json', import.meta.url),
@@ -516,12 +537,12 @@ test('activation enables payout rails while risk stays paused and no resume comm
   ));
   assert.equal(sha256(source), example.sourceSha256);
   const activation = source.toString('utf8').match(
-    /def activate_payouts\(self\).*?(?=\n    @gl\.public\.write)/s,
+    /def activate_payouts\(self\).*?(?=\n\s*@gl\.public\.write)/s,
   )?.[0];
   assert.ok(activation, 'activate_payouts source block');
-  assert.match(activation, /self\.payouts_enabled = True/);
-  assert.match(activation, /self\.new_risk_enabled = False/);
-  assert.doesNotMatch(activation, /self\.new_risk_enabled = True/);
+  assert.match(activation, /self\.payouts_enabled=True/);
+  assert.match(activation, /self\.new_risk_enabled=False/);
+  assert.doesNotMatch(activation, /self\.new_risk_enabled=True/);
 });
 
 test('finalized deployment bind request is strict, sanitized, and atomically create-once', () => {
@@ -683,12 +704,20 @@ test('local source gate requires the exact configured hash, Bradbury allowlist, 
   const root = mkdtempSync(join(tmpdir(), 'bradbury-v8-source-'));
   mkdirSync(join(root, 'contracts'));
   const source = `SUPPORTED_ESCROW_CHAIN_IDS = (4_221,)\nAUDITED_PAYOUT_FACTORY_4221 = "${FACTORY}"\n`;
-  writeFileSync(join(root, 'contracts', 'LiquidityArenaV8.py'), source);
+  writeFileSync(join(root, 'contracts', 'LiquidityArenaV8.release.py'), source);
   const config = normalizeConfig(rawConfig({ sourceSha256: sha256(source) }));
   assert.equal(verifyLocalCandidate(config, { projectRoot: root }).source, source);
 
+  const oversized = `${source}${'#'.repeat(MAX_BRADBURY_DEPLOY_SOURCE_BYTES)}`;
+  writeFileSync(join(root, 'contracts', 'LiquidityArenaV8.release.py'), oversized);
+  const oversizedConfig = normalizeConfig(rawConfig({ sourceSha256: sha256(oversized) }));
+  assert.throws(
+    () => verifyLocalCandidate(oversizedConfig, { projectRoot: root }),
+    /Bradbury deploy artifacts must be at most 45000 bytes/i,
+  );
+
   const zeroAnchor = source.replace(`"${FACTORY}"`, 'ZERO_ADDRESS_TEXT');
-  writeFileSync(join(root, 'contracts', 'LiquidityArenaV8.py'), zeroAnchor);
+  writeFileSync(join(root, 'contracts', 'LiquidityArenaV8.release.py'), zeroAnchor);
   const zeroConfig = normalizeConfig(rawConfig({ sourceSha256: sha256(zeroAnchor) }));
   assert.throws(
     () => verifyLocalCandidate(zeroConfig, { projectRoot: root }),
@@ -697,7 +726,7 @@ test('local source gate requires the exact configured hash, Bradbury allowlist, 
 });
 
 test('schema readback is exhaustive and rejects an added, removed, or changed method', () => {
-  assert.equal(Object.keys(EXPECTED_V8_SCHEMA.methods).length, 43);
+  assert.equal(Object.keys(EXPECTED_V8_SCHEMA.methods).length, 25);
   assert.doesNotThrow(() => assertExactSchema(structuredClone(EXPECTED_V8_SCHEMA)));
   const added = structuredClone(EXPECTED_V8_SCHEMA);
   added.methods.force_funded = { params: [], kwparams: {}, readonly: false, ret: 'null', payable: false };
@@ -722,6 +751,31 @@ test('pre-sign gate proves exact addTransaction source, method, and full-consens
   assert.doesNotThrow(() => assertExactPlannedConsensusCalldata(exactDeploy, {
     action: 'deploy', config, state: { contractAddress: null }, local, nowSeconds: 1_000,
   }));
+  assert.ok((exactDeploy.length - 2) / 2 < MAX_BRADBURY_OUTER_CALLDATA_BYTES);
+
+  const sourceCeilingOverflow = 'x'.repeat(MAX_BRADBURY_DEPLOY_SOURCE_BYTES + 1);
+  const sourceCeilingData = outerAddTransaction({
+    action: 'deploy', config, source: sourceCeilingOverflow,
+  });
+  assert.throws(() => assertExactPlannedConsensusCalldata(sourceCeilingData, {
+    action: 'deploy',
+    config,
+    state: { contractAddress: null },
+    local: { source: sourceCeilingOverflow },
+    nowSeconds: 1_000,
+  }), /planned V8 source.*Bradbury ceiling/i);
+
+  const calldataCeilingOverflow = 'x'.repeat(MAX_BRADBURY_OUTER_CALLDATA_BYTES);
+  const calldataCeilingData = outerAddTransaction({
+    action: 'deploy', config, source: calldataCeilingOverflow,
+  });
+  assert.throws(() => assertExactPlannedConsensusCalldata(calldataCeilingData, {
+    action: 'deploy',
+    config,
+    state: { contractAddress: null },
+    local: { source: calldataCeilingOverflow },
+    nowSeconds: 1_000,
+  }), /outer Bradbury calldata.*operational ceiling/i);
 
   const mutations = [
     outerAddTransaction({
@@ -928,35 +982,28 @@ test('get_config and reserve readbacks reject every mismatch and unknown field',
 test('pause readback accepts live canary accounting but enforces every cross-view identity', async () => {
   const config = normalizeConfig(rawConfig());
   const reserveReadback = {
+    treasury: TREASURY,
+    current_platform_fee_bps: 200,
     payout_protocol_version: PAYOUT_PROTOCOL_VERSION,
     payouts_enabled: true,
     new_risk_enabled: false,
-    available_reserve_atto: '1000',
-    committed_reserve_atto: '600',
-    required_available_reserve_atto: '210',
-    reserved_player_payouts_atto: '40',
-    reserved_platform_fees_atto: '20',
-    max_payout_attempts: 3,
-    prepare_retries_capped: false,
-    retry_delay_seconds: 3600,
-  };
-  const feeState = {
-    treasury: TREASURY,
-    current_platform_fee_bps: 200,
+    player_liability_atto: '100',
     accrued_platform_fees_atto: '10',
     reserved_platform_fees_atto: '20',
     funded_platform_fees_atto: '30',
     withdrawn_platform_fees_atto: '5',
-    player_liability_atto: '100',
+    available_reserve_atto: '1000',
+    committed_reserve_atto: '600',
+    required_available_reserve_atto: '210',
     reserved_player_payouts_atto: '40',
+    max_payout_attempts: 3,
+    prepare_retries_capped: false,
+    retry_delay_seconds: 3600,
   };
   const live = {
     reserveReadback,
-    feeState,
-    epochCount: 4,
-    openEpochCount: 2,
-    payoutCount: 3,
-    liability: 100,
+    epochPage: accountingPage('epoch_ids', 4),
+    payoutPage: accountingPage('payouts', 3),
   };
   const exact = assertLiveAccountingIdentity(live, config, { newRiskEnabled: false });
   assert.equal(exact.epochCount, '4');
@@ -1002,10 +1049,14 @@ test('pause readback accepts live canary accounting but enforces every cross-vie
   );
 
   for (const [label, changed, pattern] of [
-    ['reserved alias', {
+    ['reserved player liability', {
       ...live,
-      reserveReadback: { ...reserveReadback, reserved_player_payouts_atto: '41' },
-    }, /accounting aliases disagree/i],
+      reserveReadback: {
+        ...reserveReadback,
+        player_liability_atto: '39',
+        reserved_player_payouts_atto: '40',
+      },
+    }, /reserved player payouts exceed/i],
     ['required identity', {
       ...live,
       reserveReadback: { ...reserveReadback, required_available_reserve_atto: '211' },
@@ -1014,10 +1065,9 @@ test('pause readback accepts live canary accounting but enforces every cross-vie
       ...live,
       reserveReadback: { ...reserveReadback, available_reserve_atto: '209' },
     }, /available reserve.*below/i],
-    ['open count', { ...live, openEpochCount: 5 }, /open epoch count exceeds/i],
     ['fee withdrawal', {
       ...live,
-      feeState: { ...feeState, withdrawn_platform_fees_atto: '31' },
+      reserveReadback: { ...reserveReadback, withdrawn_platform_fees_atto: '31' },
     }, /withdrawn platform fees exceed/i],
     ['unknown reserve', {
       ...live,
@@ -1039,11 +1089,8 @@ test('pause readback accepts live canary accounting but enforces every cross-vie
       newRiskEnabled: false,
     }),
     get_delivery_reserve_state: reserveReadback,
-    get_fee_state: feeState,
-    get_epoch_count: 4,
-    get_open_epoch_count: 2,
-    get_payout_count: 3,
-    get_total_player_liability_atto: 100,
+    get_epoch_page: accountingPage('epoch_ids', 4),
+    get_payout_page: accountingPage('payouts', 3),
   };
   const verified = await readAndVerifyPauseState({
     code: async () => source,
@@ -1052,7 +1099,7 @@ test('pause readback accepts live canary accounting but enforces every cross-vie
   }, CONTRACT, { source }, pauseConfig, { newRiskEnabled: false });
   assert.equal(verified.address, CONTRACT);
   assert.equal(verified.accounting.epochCount, '4');
-  assert.equal(verified.accounting.liability, '100');
+  assert.equal(verified.accounting.reserve.player_liability_atto, '100');
 });
 
 test('signed raw EVM transaction and exact event binding are durable before SUBMITTED is legal', async () => {

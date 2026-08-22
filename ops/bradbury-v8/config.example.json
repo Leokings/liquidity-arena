@@ -2,9 +2,9 @@
   "version": 1,
   "network": "testnet-bradbury",
   "chainId": 4221,
-  "sourcePath": "contracts/LiquidityArenaV8.py",
-  "sourceSha256": "39299592c65a902c57ac41ff67f64f451ac9d94941969ffa62081ad7b7af0584",
-  "schemaSha256": "bc1849b4e0299e0bf257ad6a6e5adb75c824b17136d7f876e10742856a7019d3",
+  "sourcePath": "contracts/LiquidityArenaV8.release.py",
+  "sourceSha256": "160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa",
+  "schemaSha256": "c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4",
   "ownerAccountName": "REPLACE_WITH_EXACT_BRADBURY_OWNER_ACCOUNT",
   "expected": {
     "ownerAddress": "0x1111111111111111111111111111111111111111",
@@ -27,7 +27,7 @@
   "operator": {
     "finalityRetries": 900,
     "finalityIntervalMs": 5000,
-    "maxEvmGasLimit": "30000000",
-    "maxEvmGasPriceWei": "1000000000"
+    "maxEvmGasLimit": "50000000",
+    "maxEvmGasPriceWei": "600000000"
   }
 }

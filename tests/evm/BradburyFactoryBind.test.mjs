@@ -129,7 +129,7 @@ function validBindRequest(overrides = {}) {
     network: BIND_NETWORK,
     chainId: 4221,
     configFingerprint: "11".repeat(32),
-    sourcePath: "contracts/LiquidityArenaV8.py",
+    sourcePath: "contracts/LiquidityArenaV8.release.py",
     sourceSha256: "12".repeat(32),
     schemaSha256: EXPECTED_V8_SCHEMA_SHA256,
     deploymentGenLayerTransactionHash: GENLAYER_HASH,
@@ -174,7 +174,7 @@ function harnessConfig() {
     version: 1,
     network: BIND_NETWORK,
     chainId: 4221,
-    sourcePath: "contracts/LiquidityArenaV8.py",
+    sourcePath: "contracts/LiquidityArenaV8.release.py",
     sourceSha256: "12".repeat(32),
     schemaSha256: EXPECTED_V8_SCHEMA_SHA256,
     ownerAccountName: "bradbury-owner",
@@ -213,7 +213,7 @@ function rawHarnessConfigForSource(sourceSha256, roles = {}) {
     version: 1,
     network: BIND_NETWORK,
     chainId: 4221,
-    sourcePath: "contracts/LiquidityArenaV8.py",
+    sourcePath: "contracts/LiquidityArenaV8.release.py",
     sourceSha256,
     schemaSha256: EXPECTED_V8_SCHEMA_SHA256,
     ownerAccountName: "bradbury-owner",
@@ -287,7 +287,7 @@ function v8ValidationFixture(t, roles = {}) {
   ].join("\n");
   fs.mkdirSync(path.join(projectRoot, "contracts"));
   fs.writeFileSync(
-    path.join(projectRoot, "contracts", "LiquidityArenaV8.py"),
+    path.join(projectRoot, "contracts", "LiquidityArenaV8.release.py"),
     source,
     "utf8",
   );
@@ -360,24 +360,12 @@ function v8ValidationFixture(t, roles = {}) {
           availableReserveAtto: "0",
         });
       }
-      if (method === "get_fee_state") {
-        return {
-          treasury: TREASURY,
-          current_platform_fee_bps: "200",
-          accrued_platform_fees_atto: "0",
-          reserved_platform_fees_atto: "0",
-          funded_platform_fees_atto: "0",
-          withdrawn_platform_fees_atto: "0",
-          player_liability_atto: "0",
-          reserved_player_payouts_atto: "0",
-        };
+      if (method === "get_epoch_page") {
+        return { offset: "0", next_offset: "0", total: "0", epoch_ids: [] };
       }
-      if ([
-        "get_epoch_count",
-        "get_open_epoch_count",
-        "get_payout_count",
-        "get_total_player_liability_atto",
-      ].includes(method)) return "0";
+      if (method === "get_payout_page") {
+        return { offset: "0", next_offset: "0", total: "0", payouts: [] };
+      }
       throw new Error(`unexpected V8 read ${method}`);
     },
   };
