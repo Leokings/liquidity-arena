@@ -281,7 +281,7 @@ function v8ValidationFixture(t, roles = {}) {
   const arenaAddress = roles.arenaAddress ?? ARENA;
   const runtimeSha256 = roles.runtimeSha256 ?? RUNTIME_SHA256;
   const source = [
-    "SUPPORTED_ESCROW_CHAIN_IDS = (4_221,)",
+    "AUDITED_PAYOUT_FACTORY_CHAIN_ID = 4_221",
     `AUDITED_PAYOUT_FACTORY_4221 = "${factoryAddress}"`,
     "",
   ].join("\n");

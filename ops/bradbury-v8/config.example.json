@@ -3,7 +3,7 @@
   "network": "testnet-bradbury",
   "chainId": 4221,
   "sourcePath": "contracts/LiquidityArenaV8.release.py",
-  "sourceSha256": "160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa",
+  "sourceSha256": "1e7545f8f0fd121d64f3565675ac8f541d0ba8274abbde60db0dd02d7d777db5",
   "schemaSha256": "c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4",
   "ownerAccountName": "REPLACE_WITH_EXACT_BRADBURY_OWNER_ACCOUNT",
   "expected": {

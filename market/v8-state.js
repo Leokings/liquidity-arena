@@ -1,7 +1,7 @@
 export const V8_PROTOCOL = 'LIQUIDITY_ARENA_V8';
 export const V8_POLICY = 'CRYPTO_SPOT_1M_MEDIAN_V1';
 export const V8_PAYOUT_PROTOCOL = 'IDEMPOTENT_EVM_VAULT_V1';
-export const V8_PAYOUT_FACTORY = '0x944fdadd826c2a159c63cb100db174716ccd1317';
+export const V8_PAYOUT_FACTORY = '0xc812709d267372ad7e06807bf0a4d451ed263a30';
 export const V8_ASSETS = Object.freeze(['BTC', 'ETH', 'BNB', 'SOL', 'XRP']);
 export const V8_VENUES = Object.freeze(['BINANCE', 'OKX', 'BYBIT', 'GATE', 'KUCOIN']);
 export const V8_OBJECTIVES = Object.freeze(['HIGH', 'LOW']);

@@ -17,6 +17,7 @@ import {
   BRADBURY_CONSENSUS_ADDRESS,
   BIND_REQUEST_SCHEMA,
   ACTIVATION_TERMINAL_STAGE,
+  RISK_ACTIVE_STAGE,
   MAX_BRADBURY_DEPLOY_SOURCE_BYTES,
   MAX_BRADBURY_OUTER_CALLDATA_BYTES,
   MAX_TRANSACTION_GAS_COST_ATTO,
@@ -27,18 +28,23 @@ import {
   V8_POLICY_VERSION,
   V8_PROTOCOL_VERSION,
   assertExactCallReceipt,
+  assertExactFailedCallReceipt,
   assertExactConfigReadback,
   assertExactDeploymentReceipt,
   assertExactEvmSubmissionReceipt,
   assertExactPauseAccountingIdentity,
+  assertExactResumeAccountingIdentity,
   assertExactPlannedConsensusCalldata,
   assertExactReserveReadback,
   assertExactSchema,
   assertExactSignedEvmEnvelope,
   assertSuccessfulFinalizedReceipt,
   assertFreshSignerAccountPreflight,
+  assertFailedResumeAccountingContinuity,
   assertLiveAccountingIdentity,
   assertPauseAccountingContinuity,
+  assertResumePreparedOrigin,
+  assertResumeAccountingContinuity,
   assertProtectedOperationalPath,
   activationTerminalReadback,
   acquireOwnerLock,
@@ -46,7 +52,9 @@ import {
   buildExpectedConfigReadback,
   buildExpectedReserveReadback,
   bindRequestPathFor,
+  closeCleanPreparedResumeFromPausedReadback,
   ensureBindRequestArtifact,
+  finalizeReconciledOperation,
   loadState,
   newState,
   normalizeConfig,
@@ -55,14 +63,17 @@ import {
   prepareOperation,
   reconcileEvmSubmission,
   readAndVerifyPauseState,
+  readAndVerifyResumePreSignState,
   recordEvmReceiptEvidence,
   recordSignedOperation,
   recordSubmittedOperation,
   resolveKeychainSecretWithFallback,
+  resumeAction,
   sha256,
   signAfterFreshAccountPreflight,
   stateLockPathFor,
   statePathFor,
+  statusAction,
   helpText,
   validateBindRequestArtifact,
   verifyLocalCandidate,
@@ -243,7 +254,7 @@ function evmSubmissionReceipt(evmTransactionHash, overrides = {}) {
   };
 }
 
-async function signedReplayFixture(value = 0n, validUntilOverride) {
+async function signedReplayFixture(value = 0n, validUntilOverride, action = 'pause') {
   const local = { source: 'reviewed-v8-source\n' };
   const config = normalizeConfig(rawConfig({
     sourceSha256: sha256(local.source),
@@ -253,7 +264,6 @@ async function signedReplayFixture(value = 0n, validUntilOverride) {
     },
     operator: { finalityRetries: 2, finalityIntervalMs: 100 },
   }));
-  const action = 'pause';
   const state = { contractAddress: CONTRACT };
   const nowSeconds = Math.floor(Date.now() / 1_000);
   const data = outerAddTransaction({
@@ -274,7 +284,9 @@ async function signedReplayFixture(value = 0n, validUntilOverride) {
     value,
     data,
   });
-  const pauseAccountingIdentity = liveAccountingIdentity(config, { newRiskEnabled: true });
+  const accountingIdentity = liveAccountingIdentity(config, {
+    newRiskEnabled: action !== 'resume',
+  });
   return {
     config,
     action,
@@ -291,7 +303,12 @@ async function signedReplayFixture(value = 0n, validUntilOverride) {
       ownerPendingBalanceAtSign: '10000000000000000000',
       maximumTransactionCostAtSign: (value + 200_000n).toString(),
       consensusCalldataSha256: sha256(Buffer.from(data.slice(2), 'hex')),
-      pauseAccountingIdentity,
+      ...(action === 'resume'
+        ? {
+          resumeAccountingIdentity: accountingIdentity,
+          preparedFromStage: ACTIVATION_TERMINAL_STAGE,
+        }
+        : { pauseAccountingIdentity: accountingIdentity }),
       transactionHash: null,
     },
   };
@@ -320,6 +337,7 @@ function plannedInnerData(action, config, source, overrides = {}) {
     fund: 'fund_delivery_reserve',
     activate: 'activate_payouts',
     pause: 'pause_new_risk',
+    resume: 'resume_new_risk',
   }[action];
   return genlayerAbi.transactions.serialize([
     genlayerAbi.calldata.encode(genlayerAbi.calldata.makeCalldataObject(method, [], undefined)),
@@ -415,9 +433,10 @@ test('fresh signing requires a quiescent exact nonce and sufficient pending bala
   };
   const readerFor = ({
     latest = '0x7', pending = '0x7', balance = maximumCost,
-    estimate = gasLimit, estimateError = false,
+    estimate = gasLimit, estimateError = false, onRequest = () => {},
   } = {}) => ({
     evmRequest: async (method, params) => {
+      onRequest(method, params);
       if (method === 'eth_estimateGas') {
         assert.deepEqual(params, [{
           from: OWNER,
@@ -439,13 +458,15 @@ test('fresh signing requires a quiescent exact nonce and sufficient pending bala
   });
 
   let signs = 0;
+  const ordering = [];
   const exact = await signAfterFreshAccountPreflight({
-    reader: readerFor(),
+    reader: readerFor({ onRequest: (method) => ordering.push(method) }),
     ownerAddress: OWNER,
     transactionRequest,
     config,
     expectedValueAtto: '0',
-    signImpl: async () => { signs += 1; return '0xsigned'; },
+    beforeFreshAccountPreflight: async () => { ordering.push('resume-snapshot'); },
+    signImpl: async () => { ordering.push('sign'); signs += 1; return '0xsigned'; },
   });
   assert.equal(signs, 1);
   assert.equal(exact.accountPreflight.senderNonce, '7');
@@ -453,6 +474,14 @@ test('fresh signing requires a quiescent exact nonce and sufficient pending bala
   assert.equal(exact.accountPreflight.ownerNoncePendingAtSign, '7');
   assert.equal(exact.accountPreflight.maximumTransactionCostAtSign, maximumCost.toString());
   assert.deepEqual(exact.gasEstimate, { gas: gasLimit.toString(), calldataBytes: 2 });
+  assert.deepEqual(ordering, [
+    'eth_estimateGas',
+    'resume-snapshot',
+    'eth_getTransactionCount',
+    'eth_getTransactionCount',
+    'eth_getBalance',
+    'sign',
+  ]);
 
   for (const [label, reader, request, pattern] of [
     ['Bradbury estimate failure', readerFor({ estimateError: true }), transactionRequest, /200,000 fallback is prohibited/i],
@@ -515,9 +544,10 @@ test('signed envelope independently enforces the hard 0.03 GEN gas ceiling', asy
   }, unsafeCaps), /fee caps/i);
 });
 
-test('activation enables payout rails while risk stays paused and no resume command exists', () => {
+test('activation keeps risk paused until the explicit durable resume action', () => {
   const config = normalizeConfig(rawConfig());
   assert.equal(ACTIVATION_TERMINAL_STAGE, 'PAYOUTS_ACTIVE_RISK_PAUSED');
+  assert.equal(RISK_ACTIVE_STAGE, 'RISK_ACTIVE');
   assert.deepEqual(activationTerminalReadback(config), {
     payoutsEnabled: true,
     newRiskEnabled: false,
@@ -526,7 +556,8 @@ test('activation enables payout rails while risk stays paused and no resume comm
   const help = helpText();
   assert.match(help, /harness\.mjs activate --config/i);
   assert.doesNotMatch(help, /activate-pause/i);
-  assert.doesNotMatch(help, /harness\.mjs resume/i);
+  assert.match(help, /harness\.mjs resume --config/i);
+  assert.match(help, /owner-only.*PAYOUTS_ACTIVE_RISK_PAUSED/i);
 
   const source = readFileSync(
     new URL('../../contracts/LiquidityArenaV8.release.py', import.meta.url),
@@ -543,6 +574,12 @@ test('activation enables payout rails while risk stays paused and no resume comm
   assert.match(activation, /self\.payouts_enabled=True/);
   assert.match(activation, /self\.new_risk_enabled=False/);
   assert.doesNotMatch(activation, /self\.new_risk_enabled=True/);
+  const resume = source.toString('utf8').match(
+    /def resume_new_risk\(self\).*?(?=\n\s*@gl\.public\.write)/s,
+  )?.[0];
+  assert.ok(resume, 'resume_new_risk source block');
+  assert.match(resume, /self\._aX\(\)/);
+  assert.match(resume, /self\.new_risk_enabled=True/);
 });
 
 test('finalized deployment bind request is strict, sanitized, and atomically create-once', () => {
@@ -700,10 +737,10 @@ test('delegated bind proof is independently reverified from finalized Bradbury E
   );
 });
 
-test('local source gate requires the exact configured hash, Bradbury allowlist, and literal factory anchor', () => {
+test('local source gate requires the exact configured hash, payout-factory chain, and literal factory anchor', () => {
   const root = mkdtempSync(join(tmpdir(), 'bradbury-v8-source-'));
   mkdirSync(join(root, 'contracts'));
-  const source = `SUPPORTED_ESCROW_CHAIN_IDS = (4_221,)\nAUDITED_PAYOUT_FACTORY_4221 = "${FACTORY}"\n`;
+  const source = `AUDITED_PAYOUT_FACTORY_CHAIN_ID = 4_221\nAUDITED_PAYOUT_FACTORY_4221 = "${FACTORY}"\n`;
   writeFileSync(join(root, 'contracts', 'LiquidityArenaV8.release.py'), source);
   const config = normalizeConfig(rawConfig({ sourceSha256: sha256(source) }));
   assert.equal(verifyLocalCandidate(config, { projectRoot: root }).source, source);
@@ -747,6 +784,10 @@ test('pre-sign gate proves exact addTransaction source, method, and full-consens
   assert.doesNotThrow(() => assertExactPlannedConsensusCalldata(exactPause, {
     action: 'pause', config, state, local, nowSeconds: 1_000,
   }));
+  const exactResume = outerAddTransaction({ action: 'resume', config, source: local.source });
+  assert.doesNotThrow(() => assertExactPlannedConsensusCalldata(exactResume, {
+    action: 'resume', config, state, local, nowSeconds: 1_000,
+  }));
   const exactDeploy = outerAddTransaction({ action: 'deploy', config, source: local.source });
   assert.doesNotThrow(() => assertExactPlannedConsensusCalldata(exactDeploy, {
     action: 'deploy', config, state: { contractAddress: null }, local, nowSeconds: 1_000,
@@ -785,6 +826,9 @@ test('pre-sign gate proves exact addTransaction source, method, and full-consens
       action: 'pause', config, source: local.source, overrides: { leaderOnly: true },
     }),
     outerAddTransaction({
+      action: 'resume', config, source: local.source, overrides: { method: 'pause_new_risk' },
+    }),
+    outerAddTransaction({
       action: 'deploy', config, source: local.source, overrides: { source: `${local.source}#` },
     }),
     `${exactPause.slice(0, -1)}${exactPause.endsWith('0') ? '1' : '0'}`,
@@ -796,9 +840,12 @@ test('pre-sign gate proves exact addTransaction source, method, and full-consens
     action: 'pause', config, state, local, nowSeconds: 1_000,
   }), /transaction bytes differ/i);
   assert.throws(() => assertExactPlannedConsensusCalldata(mutations[2], {
-    action: 'deploy', config, state: { contractAddress: null }, local, nowSeconds: 1_000,
+    action: 'resume', config, state, local, nowSeconds: 1_000,
   }), /transaction bytes differ/i);
   assert.throws(() => assertExactPlannedConsensusCalldata(mutations[3], {
+    action: 'deploy', config, state: { contractAddress: null }, local, nowSeconds: 1_000,
+  }), /transaction bytes differ/i);
+  assert.throws(() => assertExactPlannedConsensusCalldata(mutations[4], {
     action: 'pause', config, state, local, nowSeconds: 1_000,
   }), /canonical exact-byte|validity window|transaction bytes differ/i);
 });
@@ -832,6 +879,42 @@ test('write receipt requires exact signer, recipient, method, arguments, and val
     args: [],
     valueAtto: '0',
   }));
+  assert.doesNotThrow(() => assertExactCallReceipt(finalizedReceipt({
+    txDataDecoded: {
+      type: 'call', callData: { method: 'resume_new_risk', args: [] }, leaderOnly: false,
+    },
+  }), {
+    hash: GEN_HASH,
+    sender: OWNER,
+    contractAddress: CONTRACT,
+    method: 'resume_new_risk',
+    args: [],
+    valueAtto: '0',
+  }));
+  assert.doesNotThrow(() => assertExactFailedCallReceipt(finalizedReceipt({
+    txExecutionResultName: 'FINISHED_WITH_ERROR',
+    txDataDecoded: {
+      type: 'call', callData: { method: 'resume_new_risk', args: [] }, leaderOnly: false,
+    },
+  }), {
+    hash: GEN_HASH,
+    sender: OWNER,
+    contractAddress: CONTRACT,
+    method: 'resume_new_risk',
+    valueAtto: '0',
+  }));
+  assert.throws(() => assertExactFailedCallReceipt(finalizedReceipt({
+    txExecutionResultName: 'FINISHED_WITH_ERROR',
+    txDataDecoded: {
+      type: 'call', callData: { method: 'pause_new_risk', args: [] }, leaderOnly: false,
+    },
+  }), {
+    hash: GEN_HASH,
+    sender: OWNER,
+    contractAddress: CONTRACT,
+    method: 'resume_new_risk',
+    valueAtto: '0',
+  }), /does not prove call resume_new_risk/i);
   for (const [label, receipt, pattern] of [
     ['sender', finalizedReceipt({ sender: KEEPER }), /sender/i],
     ['recipient', finalizedReceipt({ recipient: FACTORY }), /recipient/i],
@@ -1036,6 +1119,10 @@ test('pause readback accepts live canary accounting but enforces every cross-vie
   assert.equal(continuity.before.reserve.new_risk_enabled, true);
   assert.equal(continuity.after.reserve.new_risk_enabled, false);
   assert.deepEqual(assertExactPauseAccountingIdentity(unpaused, unpaused), unpaused);
+  const resumed = assertResumeAccountingContinuity(exact, unpaused);
+  assert.equal(resumed.before.reserve.new_risk_enabled, false);
+  assert.equal(resumed.after.reserve.new_risk_enabled, true);
+  assert.deepEqual(assertExactResumeAccountingIdentity(exact, exact), exact);
   assert.deepEqual(normalizePauseAccountingIdentity(unpaused), unpaused);
   assert.doesNotThrow(
     () => assertPauseAccountingContinuity(
@@ -1043,6 +1130,17 @@ test('pause readback accepts live canary accounting but enforces every cross-vie
       liveAccountingIdentity(config, {
         newRiskEnabled: false,
         availableReserveAtto: '1001',
+      }),
+    ),
+  );
+  assert.doesNotThrow(
+    () => assertResumeAccountingContinuity(
+      exact,
+      liveAccountingIdentity(config, {
+        newRiskEnabled: true,
+        availableReserveAtto: '1001',
+        epochCount: 5,
+        payoutCount: 4,
       }),
     ),
   );
@@ -1057,8 +1155,19 @@ test('pause readback accepts live canary accounting but enforces every cross-vie
     /immutable accounting policy continuity/i,
   );
   assert.throws(
+    () => assertResumeAccountingContinuity(
+      exact,
+      liveAccountingIdentity(otherTreasuryConfig, { newRiskEnabled: true }),
+    ),
+    /immutable accounting policy continuity/i,
+  );
+  assert.throws(
     () => assertPauseAccountingContinuity(exact, exact),
     /risk true-to-false transition/i,
+  );
+  assert.throws(
+    () => assertResumeAccountingContinuity(unpaused, unpaused),
+    /risk false-to-true transition/i,
   );
   assert.throws(
     () => normalizePauseAccountingIdentity({ ...unpaused, sha256: '00'.repeat(32) }),
@@ -1177,6 +1286,181 @@ test('signed raw EVM transaction and exact event binding are durable before SUBM
   );
 });
 
+test('resume PREPARED evidence is hash-bound and can originate only from the risk-paused terminal', () => {
+  const config = normalizeConfig(rawConfig());
+  const root = mkdtempSync(join(tmpdir(), 'bradbury-v8-resume-state-'));
+  const statePath = join(root, 'state.json');
+  const pausedAccounting = liveAccountingIdentity(config, { newRiskEnabled: false });
+  let state = writeStateAtomic(statePath, {
+    ...newState(config),
+    stage: ACTIVATION_TERMINAL_STAGE,
+    contractAddress: CONTRACT,
+  });
+  state = prepareOperation(statePath, state, 'resume', {
+    resumeAccountingIdentity: pausedAccounting,
+  });
+  assert.equal(state.stage, 'RESUME_PREPARED');
+  assert.equal(state.operations.resume.preparedFromStage, ACTIVATION_TERMINAL_STAGE);
+  assert.equal(assertResumePreparedOrigin(state.operations.resume), state.operations.resume);
+  assert.throws(
+    () => assertResumePreparedOrigin({ ...state.operations.resume, preparedFromStage: RISK_ACTIVE_STAGE }),
+    /preparedFromStage is not exactly PAYOUTS_ACTIVE_RISK_PAUSED/i,
+  );
+  assert.deepEqual(state.operations.resume.resumeAccountingIdentity, pausedAccounting);
+  assert.equal(
+    prepareOperation(statePath, state, 'resume', {
+      resumeAccountingIdentity: pausedAccounting,
+    }),
+    state,
+  );
+  assert.throws(
+    () => prepareOperation(statePath, state, 'resume', {
+      resumeAccountingIdentity: liveAccountingIdentity(config, {
+        newRiskEnabled: false,
+        availableReserveAtto: '1001',
+      }),
+    }),
+    /reused resume PREPARED accounting identity/i,
+  );
+
+  const wrongOriginPath = join(root, 'wrong-origin.json');
+  const wrongOrigin = writeStateAtomic(wrongOriginPath, {
+    ...newState(config),
+    stage: RISK_ACTIVE_STAGE,
+    contractAddress: CONTRACT,
+  });
+  assert.throws(
+    () => prepareOperation(wrongOriginPath, wrongOrigin, 'resume', {
+      resumeAccountingIdentity: pausedAccounting,
+    }),
+    /allowed only after PAYOUTS_ACTIVE_RISK_PAUSED/i,
+  );
+  const activeIdentity = liveAccountingIdentity(config, { newRiskEnabled: true });
+  assert.throws(
+    () => prepareOperation(wrongOriginPath, {
+      ...wrongOrigin,
+      stage: ACTIVATION_TERMINAL_STAGE,
+    }, 'resume', { resumeAccountingIdentity: activeIdentity }),
+    /risk-paused accounting/i,
+  );
+});
+
+test('exact unsigned RESUME_PREPARED can be closed paused or atomically superseded by emergency pause', () => {
+  const config = normalizeConfig(rawConfig());
+  const root = mkdtempSync(join(tmpdir(), 'bradbury-v8-resume-supersede-'));
+  const pausedAccounting = liveAccountingIdentity(config, { newRiskEnabled: false });
+  const preparedState = (statePath) => prepareOperation(statePath, writeStateAtomic(statePath, {
+    ...newState(config),
+    stage: ACTIVATION_TERMINAL_STAGE,
+    contractAddress: CONTRACT,
+  }), 'resume', { resumeAccountingIdentity: pausedAccounting });
+
+  const closePath = join(root, 'close.json');
+  const closed = closeCleanPreparedResumeFromPausedReadback(
+    closePath,
+    preparedState(closePath),
+  );
+  assert.equal(closed.stage, ACTIVATION_TERMINAL_STAGE);
+  assert.equal(closed.operations.resume.status, 'FAILED');
+  assert.equal(closed.operations.resume.replayProhibited, true);
+  assert.match(closed.operations.resume.failure, /EXACT_PAUSED_READBACK.*REPLAY_PROHIBITED/i);
+
+  const supersedePath = join(root, 'supersede.json');
+  const prepared = preparedState(supersedePath);
+  const activeAccounting = liveAccountingIdentity(config, {
+    newRiskEnabled: true,
+    epochCount: 2,
+    payoutCount: 1,
+  });
+  const pausePrepared = prepareOperation(supersedePath, prepared, 'pause', {
+    pauseAccountingIdentity: activeAccounting,
+    supersedePreparedResume: true,
+  });
+  assert.equal(pausePrepared.stage, 'PAUSE_PREPARED');
+  assert.equal(pausePrepared.operations.resume.status, 'FAILED');
+  assert.equal(pausePrepared.operations.resume.replayProhibited, true);
+  assert.match(pausePrepared.operations.resume.failure, /SUPERSEDED.*REPLAY_PROHIBITED/i);
+  assert.equal(pausePrepared.operations.pause.status, 'PREPARED');
+  assert.deepEqual(pausePrepared.operations.pause.pauseAccountingIdentity, activeAccounting);
+  assert.throws(
+    () => prepareOperation(supersedePath, pausePrepared, 'pause', {
+      pauseAccountingIdentity: activeAccounting,
+      supersedePreparedResume: true,
+    }),
+    /cannot supersede anything except/i,
+  );
+});
+
+test('resume dry-run requires exact paused live state and refuses an unjournaled active readback', async () => {
+  const source = 'reviewed resume V8 source\n';
+  const config = normalizeConfig(rawConfig({ sourceSha256: sha256(source) }));
+  const local = { source, sourceHash: sha256(source) };
+  const pausedAccounting = liveAccountingIdentity(config, { newRiskEnabled: false });
+  const state = {
+    ...newState(config),
+    stage: ACTIVATION_TERMINAL_STAGE,
+    contractAddress: CONTRACT,
+  };
+  const context = {
+    config,
+    local,
+    state,
+    statePath: join(mkdtempSync(join(tmpdir(), 'bradbury-v8-resume-action-')), 'state.json'),
+    reader: pauseReadbackReader(config, source, pausedAccounting),
+  };
+  const plan = await resumeAction(context, { broadcast: false, bindProofPath: null });
+  assert.equal(plan.action, 'resume');
+  assert.equal(plan.stage, ACTIVATION_TERMINAL_STAGE);
+  assert.equal(plan.dryRun, true);
+  const resumeOperation = {
+    status: 'PREPARED',
+    preparedFromStage: ACTIVATION_TERMINAL_STAGE,
+    resumeAccountingIdentity: pausedAccounting,
+  };
+  assert.equal(
+    (await readAndVerifyResumePreSignState(
+      context.reader,
+      CONTRACT,
+      local,
+      config,
+      resumeOperation,
+    )).accounting.sha256,
+    pausedAccounting.sha256,
+  );
+  await assert.rejects(
+    () => readAndVerifyResumePreSignState(
+      pauseReadbackReader(config, source, liveAccountingIdentity(config, {
+        newRiskEnabled: false,
+        availableReserveAtto: '1001',
+      })),
+      CONTRACT,
+      local,
+      config,
+      resumeOperation,
+    ),
+    /pre-resume accounting identity continuity/i,
+  );
+
+  await assert.rejects(
+    () => resumeAction({ ...context, state: { ...state, stage: RISK_ACTIVE_STAGE } }, {
+      broadcast: false,
+      bindProofPath: null,
+    }),
+    /allowed only after PAYOUTS_ACTIVE_RISK_PAUSED/i,
+  );
+  await assert.rejects(
+    () => resumeAction({
+      ...context,
+      reader: pauseReadbackReader(
+        config,
+        source,
+        liveAccountingIdentity(config, { newRiskEnabled: true }),
+      ),
+    }, { broadcast: false, bindProofPath: null }),
+    /config readback/i,
+  );
+});
+
 test('pending activation blocks a defense pause operation until reconciliation', () => {
   const config = normalizeConfig(rawConfig());
   const root = mkdtempSync(join(tmpdir(), 'bradbury-v8-state-'));
@@ -1246,11 +1530,29 @@ test('asynchronous CLI actions remain awaited inside the exclusive-lock lifetime
     'deployAction(context, options)',
     'fundAction(context, options)',
     'activateAction(context, options)',
+    'resumeAction(context, options)',
     'reconcileAction(context, options)',
     'emergencyPauseAction(context, options)',
   ]) {
     assert.ok(source.includes(`return await ${action};`));
   }
+});
+
+test('signer child independently authorizes the exact durable resume operation', () => {
+  const source = readFileSync(new URL('./signer-child.mjs', import.meta.url), 'utf8');
+  assert.match(source, /'deploy', 'fund', 'activate', 'pause', 'resume'/);
+  assert.match(source, /resume: 'RESUME_PREPARED'/);
+  assert.match(source, /resume: 'resume_new_risk'/);
+  const signingHook = source.match(
+    /function withDurablePreSign\(.*?(?=\nasync function broadcast)/s,
+  )?.[0];
+  assert.ok(signingHook, 'durable signing hook source');
+  assert.match(
+    signingHook,
+    /const beforeFreshAccountPreflight = options\.action === 'resume'.*?readAndVerifyResumePreSignState\(/s,
+  );
+  assert.match(signingHook, /beforeFreshAccountPreflight,\s*signImpl: originalSign/s);
+  assert.doesNotMatch(signingHook, /await readAndVerifyResumePreSignState[\s\S]*?originalSign/);
 });
 
 test('all platforms keep replayable state inside one protected ignored operational root', () => {
@@ -1488,6 +1790,74 @@ test('raw replay is idempotent and reuses only the exact stored signed bytes', a
   assert.equal(receiptCalls, 2);
 });
 
+test('resume replay re-proves the exact paused snapshot before sending stored owner bytes', async () => {
+  const fixture = await signedReplayFixture(0n, undefined, 'resume');
+  const {
+    config, operation, action, state, local,
+  } = fixture;
+  for (const preparedFromStage of [undefined, RISK_ACTIVE_STAGE]) {
+    let receiptReads = 0;
+    await assert.rejects(() => reconcileEvmSubmission({
+      config,
+      operation: { ...operation, preparedFromStage },
+      action,
+      state,
+      local,
+      reader: {
+        evmReceipt: async () => {
+          receiptReads += 1;
+          return evmSubmissionReceipt(operation.evmTransactionHash);
+        },
+      },
+    }), /preparedFromStage is not exactly PAYOUTS_ACTIVE_RISK_PAUSED/i);
+    assert.equal(receiptReads, 0);
+  }
+  let receiptCalls = 0;
+  let replayedRaw = null;
+  const evidence = await reconcileEvmSubmission({
+    config,
+    operation,
+    action,
+    state,
+    local,
+    broadcast: true,
+    sleepImpl: async () => {},
+    reader: pauseReadbackReader(config, local.source, operation.resumeAccountingIdentity, {
+      evmReceipt: async () => {
+        receiptCalls += 1;
+        return receiptCalls === 1
+          ? null
+          : evmSubmissionReceipt(operation.evmTransactionHash);
+      },
+      sendSignedEvmTransaction: async (raw) => {
+        replayedRaw = raw;
+        return operation.evmTransactionHash;
+      },
+    }),
+  });
+  assert.equal(replayedRaw, operation.signedEvmTransaction);
+  assert.equal(evidence.genlayerTransactionHash, GEN_HASH);
+
+  let staleSends = 0;
+  const changedAccounting = liveAccountingIdentity(config, {
+    newRiskEnabled: false,
+    availableReserveAtto: '1001',
+  });
+  await assert.rejects(() => reconcileEvmSubmission({
+    config,
+    operation,
+    action,
+    state,
+    local,
+    broadcast: true,
+    reader: pauseReadbackReader(config, local.source, changedAccounting, {
+      evmReceipt: async () => null,
+      sendSignedEvmTransaction: async () => { staleSends += 1; },
+    }),
+  }), /pre-resume accounting identity continuity/i);
+  assert.equal(staleSends, 0);
+});
+
 test('raw replay and receipt mismatch or ambiguity refuse reconciliation', async () => {
   const fixture = await signedReplayFixture();
   const { config, operation, action, state, local } = fixture;
@@ -1530,6 +1900,213 @@ test('raw replay and receipt mismatch or ambiguity refuse reconciliation', async
     },
   }), /signed EVM value does not match/i);
   assert.equal(wrongValueSends, 0);
+});
+
+test('resume reconciliation proves the owner call and finalizes only at RISK_ACTIVE', async () => {
+  const fixture = await signedReplayFixture(0n, undefined, 'resume');
+  const { config, local } = fixture;
+  const root = mkdtempSync(join(tmpdir(), 'bradbury-v8-resume-reconcile-'));
+  const statePath = join(root, 'state.json');
+  const operation = {
+    ...fixture.operation,
+    status: 'SUBMITTED',
+    transactionHash: GEN_HASH,
+  };
+  const state = writeStateAtomic(statePath, {
+    ...newState(config),
+    stage: 'RESUME_SUBMITTED',
+    contractAddress: CONTRACT,
+    operations: { resume: operation },
+  });
+  const receipt = finalizedReceipt({
+    sender: config.expected.ownerAddress,
+    txDataDecoded: {
+      type: 'call', callData: { method: 'resume_new_risk', args: [] }, leaderOnly: false,
+    },
+  });
+  const postResumeAccounting = liveAccountingIdentity(config, {
+    newRiskEnabled: true,
+    availableReserveAtto: '1001',
+    epochCount: 5,
+    payoutCount: 4,
+  });
+  const reader = pauseReadbackReader(config, local.source, postResumeAccounting, {
+    waitFinalized: async () => receipt,
+    transaction: async () => receipt,
+  });
+  let invalidOriginFinalityReads = 0;
+  await assert.rejects(
+    () => finalizeReconciledOperation({
+      config,
+      statePath,
+      reader: {
+        ...reader,
+        waitFinalized: async () => {
+          invalidOriginFinalityReads += 1;
+          return receipt;
+        },
+      },
+      local: { ...local, sourceHash: sha256(local.source) },
+    }, {
+      ...state,
+      operations: {
+        resume: { ...operation, preparedFromStage: RISK_ACTIVE_STAGE },
+      },
+    }, 'resume'),
+    /preparedFromStage is not exactly PAYOUTS_ACTIVE_RISK_PAUSED/i,
+  );
+  assert.equal(invalidOriginFinalityReads, 0);
+  const result = await finalizeReconciledOperation({
+    config,
+    statePath,
+    reader,
+    local: { ...local, sourceHash: sha256(local.source) },
+  }, state, 'resume');
+  assert.equal(result.event, 'BRADBURY_V8_RESUME_RECONCILED');
+  assert.equal(result.stage, RISK_ACTIVE_STAGE);
+  assert.equal(result.payoutsEnabled, true);
+  assert.equal(result.newRiskEnabled, true);
+  const persisted = loadState(statePath, config);
+  assert.equal(persisted.stage, RISK_ACTIVE_STAGE);
+  assert.equal(persisted.operations.resume.status, 'FINALIZED');
+});
+
+test('finalized resume execution failure is proven, closed paused, and never replayable', async () => {
+  const fixture = await signedReplayFixture(0n, undefined, 'resume');
+  const { config, local } = fixture;
+  const root = mkdtempSync(join(tmpdir(), 'bradbury-v8-resume-failure-'));
+  const statePath = join(root, 'state.json');
+  const operation = {
+    ...fixture.operation,
+    status: 'SUBMITTED',
+    transactionHash: GEN_HASH,
+  };
+  const state = writeStateAtomic(statePath, {
+    ...newState(config),
+    stage: 'RESUME_SUBMITTED',
+    contractAddress: CONTRACT,
+    operations: { resume: operation },
+  });
+  const receipt = finalizedReceipt({
+    sender: config.expected.ownerAddress,
+    txExecutionResultName: 'FINISHED_WITH_ERROR',
+    txDataDecoded: {
+      type: 'call', callData: { method: 'resume_new_risk', args: [] }, leaderOnly: false,
+    },
+  });
+  const stillPausedAccounting = liveAccountingIdentity(config, {
+    newRiskEnabled: false,
+    availableReserveAtto: '1001',
+    epochCount: 3,
+    payoutCount: 2,
+  });
+  assert.doesNotThrow(() => assertFailedResumeAccountingContinuity(
+    operation.resumeAccountingIdentity,
+    stillPausedAccounting,
+  ));
+  const reader = pauseReadbackReader(config, local.source, stillPausedAccounting, {
+    waitFinalized: async () => receipt,
+    transaction: async () => receipt,
+  });
+  const result = await finalizeReconciledOperation({
+    config,
+    statePath,
+    reader,
+    local: { ...local, sourceHash: sha256(local.source) },
+  }, state, 'resume');
+  assert.equal(result.event, 'BRADBURY_V8_RESUME_FAILURE_RECONCILED_RISK_REMAINS_PAUSED');
+  assert.equal(result.stage, ACTIVATION_TERMINAL_STAGE);
+  assert.equal(result.newRiskEnabled, false);
+  assert.equal(result.replayProhibited, true);
+  const persisted = loadState(statePath, config);
+  assert.equal(persisted.stage, ACTIVATION_TERMINAL_STAGE);
+  assert.equal(persisted.operations.resume.status, 'FAILED');
+  assert.equal(persisted.operations.resume.transactionHash, GEN_HASH);
+  assert.equal(persisted.operations.resume.replayProhibited, true);
+  assert.match(persisted.operations.resume.failure, /FINISHED_WITH_ERROR.*REPLAY_PROHIBITED/i);
+  await assert.rejects(
+    () => finalizeReconciledOperation({
+      config,
+      statePath,
+      reader,
+      local: { ...local, sourceHash: sha256(local.source) },
+    }, persisted, 'resume'),
+    /resume finalization requires the exact submitted operation/i,
+  );
+});
+
+test('RISK_ACTIVE status verifies live payouts and new risk instead of pristine accounting', async () => {
+  const source = 'reviewed active status V8 source\n';
+  const sourceHash = sha256(source);
+  const config = normalizeConfig(rawConfig({ sourceSha256: sourceHash }));
+  const local = { source, sourceHash };
+  const root = mkdtempSync(join(tmpdir(), 'bradbury-v8-active-status-'));
+  const statePath = join(root, 'state.json');
+  const deployOperation = {
+    status: 'FINALIZED',
+    transactionHash: GEN_HASH,
+    evmTransactionHash: EVM_HASH,
+    evmReceiptBlockHash: BLOCK_HASH,
+    evmReceiptBlockNumber: '0x2a',
+  };
+  const state = writeStateAtomic(statePath, {
+    ...newState(config),
+    stage: RISK_ACTIVE_STAGE,
+    contractAddress: CONTRACT,
+    operations: {
+      deploy: deployOperation,
+      resume: {
+        status: 'FINALIZED',
+        transactionHash: `0x${'ef'.repeat(32)}`,
+        preparedFromStage: ACTIVATION_TERMINAL_STAGE,
+      },
+    },
+  });
+  ensureBindRequestArtifact(statePath, {
+    config,
+    local,
+    operation: deployOperation,
+    arenaAddress: CONTRACT,
+  });
+  const activeAccounting = liveAccountingIdentity(config, {
+    newRiskEnabled: true,
+    epochCount: 7,
+    payoutCount: 6,
+  });
+  const reader = pauseReadbackReader(config, source, activeAccounting, {
+    network: BRADBURY_ALIAS,
+    schemaForCode: async () => EXPECTED_V8_SCHEMA,
+  });
+  const result = await statusAction({ config, state, statePath, reader, local });
+  assert.equal(result.stage, RISK_ACTIVE_STAGE);
+  assert.equal(result.exactReadback, 'PASS_EXACT');
+  assert.match(result.nextAction, /run pause/i);
+  await assert.rejects(
+    () => statusAction({
+      config,
+      state: {
+        ...state,
+        operations: {
+          ...state.operations,
+          resume: { ...state.operations.resume, preparedFromStage: RISK_ACTIVE_STAGE },
+        },
+      },
+      statePath,
+      reader,
+      local,
+    }),
+    /preparedFromStage is not exactly PAYOUTS_ACTIVE_RISK_PAUSED/i,
+  );
+  await assert.rejects(
+    () => statusAction({
+      config,
+      state: { ...state, operations: { deploy: deployOperation } },
+      statePath,
+      reader,
+      local,
+    }),
+    /RISK_ACTIVE state does not have one finalized resume operation/i,
+  );
 });
 
 test('state is fingerprint-bound and permanently prohibits app/database cutover markers', () => {

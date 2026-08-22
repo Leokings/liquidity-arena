@@ -10,7 +10,7 @@ The V8 keeper maintains future epochs and reconciles the GenLayer side of payout
 - keeper journal domain: `bradbury`, chain `4221`
 - protocol: `LIQUIDITY_ARENA_V8`
 - V8: supplied through `V8_CONTRACT_ADDRESS`
-- payout factory: `0x944fdadd826c2a159c63cb100db174716ccd1317`
+- payout factory: `0xc812709d267372ad7e06807bf0a4d451ed263a30`
 - keeper signer: configured `GENLAYER_V8_KEEPER`
 
 Startup fails closed unless live `get_config`, schema, roles, stake limits, factory, reserve accounting, and risk flags match the reviewed configuration.

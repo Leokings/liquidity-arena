@@ -7,7 +7,7 @@ import { EXPECTED_V8_SCHEMA_SHA256 } from '../server/v8-contract-config.mjs';
 
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
-const EXPECTED_V8_SOURCE_SHA256 = '160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa';
+const EXPECTED_V8_SOURCE_SHA256 = '1e7545f8f0fd121d64f3565675ac8f541d0ba8274abbde60db0dd02d7d777db5';
 
 function proof(hash) {
   if (!HASH.test(String(hash || ''))) return null;

@@ -21,7 +21,7 @@ const EIP6963_REQUEST_EVENT = 'eip6963:requestProvider';
 const EIP6963_ANNOUNCE_EVENT = 'eip6963:announceProvider';
 const LOCAL_WALLET_RPC_PATH = '/genlayer-rpc';
 const WITHDRAW_SELECTOR = '0x3ccfd60b';
-const AUDITED_PAYOUT_FACTORY = '0x944fdadd826c2a159c63cb100db174716ccd1317';
+const AUDITED_PAYOUT_FACTORY = '0xc812709d267372ad7e06807bf0a4d451ed263a30';
 const FACTORY_INTERFACE = new Interface([
   'function protocol_version() view returns (string)',
   'function is_bound(address) view returns (bool)',

@@ -52,6 +52,7 @@ const UINT256_MAX = (1n << 256n) - 1n;
 const DEFAULT_CONFIRMATIONS = 2;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1_000;
 const DEFAULT_FINALITY_TIMEOUT_MS = 45 * 60 * 1_000;
+export const BRADBURY_MAX_QUERY_FILTER_BLOCKS = 10_000;
 const MAX_GAS_LIMIT = 6_000_000n;
 export const MAX_FEE_PER_GAS = 1_000_000_000n;
 export const MAX_TRANSACTION_GAS_COST = 6_000_000_000_000_000n;
@@ -65,6 +66,36 @@ const JOURNAL_SCHEMA = "liquidity-arena-bradbury-factory-journal-v1";
 
 function fail(message) {
   throw new Error(message);
+}
+
+export async function queryFilterInBradburyChunks(
+  contract,
+  filter,
+  fromBlock,
+  toBlock,
+) {
+  const first = Number(fromBlock);
+  const last = Number(toBlock);
+  if (!Number.isSafeInteger(first) || first < 0) {
+    fail("Bradbury event fromBlock must be a non-negative safe integer");
+  }
+  if (!Number.isSafeInteger(last) || last < 0) {
+    fail("Bradbury event toBlock must be a non-negative safe integer");
+  }
+  if (first > last) return [];
+  const events = [];
+  for (
+    let chunkFrom = first;
+    chunkFrom <= last;
+    chunkFrom += BRADBURY_MAX_QUERY_FILTER_BLOCKS
+  ) {
+    const chunkTo = Math.min(
+      chunkFrom + BRADBURY_MAX_QUERY_FILTER_BLOCKS - 1,
+      last,
+    );
+    events.push(...await contract.queryFilter(filter, chunkFrom, chunkTo));
+  }
+  return events;
 }
 
 function parseInteger(label, value, minimum, maximum) {
@@ -1965,14 +1996,27 @@ export async function runRehearsal(
     fail("Sacrificial rehearsal final state is not exact");
   }
 
+  const eventToBlock = await provider.getBlockNumber();
   const [boundEvents, preparedEvents, creditedEvents, withdrawnEvents, excessEvents, recoveredEvents] =
     await Promise.all([
-      factory.queryFilter(factory.filters.ArenaBound(), eventFromBlock, "latest"),
-      factory.queryFilter(factory.filters.PayoutPrepared(), eventFromBlock, "latest"),
-      vault.queryFilter(vault.filters.PayoutCredited(), eventFromBlock, "latest"),
-      vault.queryFilter(vault.filters.PayoutWithdrawn(), eventFromBlock, "latest"),
-      vault.queryFilter(vault.filters.ExcessReceived(), eventFromBlock, "latest"),
-      vault.queryFilter(vault.filters.ExcessRecovered(), eventFromBlock, "latest"),
+      queryFilterInBradburyChunks(
+        factory, factory.filters.ArenaBound(), eventFromBlock, eventToBlock,
+      ),
+      queryFilterInBradburyChunks(
+        factory, factory.filters.PayoutPrepared(), eventFromBlock, eventToBlock,
+      ),
+      queryFilterInBradburyChunks(
+        vault, vault.filters.PayoutCredited(), eventFromBlock, eventToBlock,
+      ),
+      queryFilterInBradburyChunks(
+        vault, vault.filters.PayoutWithdrawn(), eventFromBlock, eventToBlock,
+      ),
+      queryFilterInBradburyChunks(
+        vault, vault.filters.ExcessReceived(), eventFromBlock, eventToBlock,
+      ),
+      queryFilterInBradburyChunks(
+        vault, vault.filters.ExcessRecovered(), eventFromBlock, eventToBlock,
+      ),
     ]);
   if (
     boundEvents.length !== 1 ||
