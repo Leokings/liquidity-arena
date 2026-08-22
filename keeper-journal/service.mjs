@@ -117,6 +117,13 @@ export function createKeeperJournalService({
           receiptIdentityVerified: false,
         });
       }
+      if (request.action === 'ACCEPT_HANDOFF') {
+        return Object.freeze({
+          status: 'ok',
+          action: request.action,
+          operation: await repository.acceptHandoff(request),
+        });
+      }
       if (request.action === 'TRANSITION') {
         return Object.freeze({
           status: 'ok',

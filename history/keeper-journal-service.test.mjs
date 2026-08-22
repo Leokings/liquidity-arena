@@ -36,7 +36,7 @@ class MemoryRepository {
   }
 
   async health() {
-    return { configured: true, ready: true, schemaVersion: 5 };
+    return { configured: true, ready: true, schemaVersion: 6 };
   }
 
   async claimRequest({ keyHash, requestHash, action }) {
@@ -139,6 +139,11 @@ class MemoryRepository {
         transactionHash: null,
         lifecycleStatus: null,
         lifecycleObservedAt: null,
+        pipelineSlot: 0,
+        handoffPredecessorOperationId: null,
+        acceptedAt: null,
+        acceptanceRevalidatedAt: null,
+        acceptanceEvidence: null,
         stateReasonCode: null,
         quarantineReason: null,
         preparedAt: timestamp,
@@ -194,6 +199,27 @@ class MemoryRepository {
     record.lifecycleStatus = input.lifecycleStatus;
     record.lifecycleObservedAt = this.instant();
     record.updatedAt = this.instant();
+    return this.public(record);
+  }
+
+  async acceptHandoff(input) {
+    this.assertLease(input);
+    const record = this.operations.get(input.operationId);
+    if (!record || record.state !== 'SUBMITTED'
+        || input.acceptanceEvidence.transactionHash !== record.transactionHash
+        || input.acceptanceEvidence.contractAddress !== record.contractAddress
+        || input.acceptanceEvidence.recipient !== record.contractAddress
+        || input.acceptanceEvidence.method !== record.method
+        || JSON.stringify(input.acceptanceEvidence.arguments) !== JSON.stringify(record.args)) {
+      throw journalError('KEEPER_JOURNAL_ACCEPTANCE_CONFLICT');
+    }
+    record.lifecycleStatus = 'ACCEPTED';
+    record.lifecycleObservedAt = this.instant();
+    record.acceptedAt ||= record.lifecycleObservedAt;
+    record.acceptanceRevalidatedAt = record.lifecycleObservedAt;
+    record.acceptanceEvidence = structuredClone(input.acceptanceEvidence);
+    record.updatedAt = this.instant();
+    record.revision = String(BigInt(record.revision) + 1n);
     return this.public(record);
   }
 
@@ -449,6 +475,46 @@ test('a quarantined attempt blocks every second quarantine for the signer', asyn
   assert.equal(quarantines.length, 1);
 });
 
+test('ACCEPT_HANDOFF is distinct from status observation and persists exact receipt identity', async () => {
+  const fixture = service();
+  const lease = (await acquire(fixture.service, HOLDER_A, 70)).lease;
+  const prepared = await execute(fixture.service, {
+    action: 'PREPARE', ...leaseBody(lease), operation: operation(),
+  }, 71);
+  await execute(fixture.service, {
+    action: 'BIND_SUBMISSION', ...leaseBody(lease),
+    operationId: prepared.operation.operationId, transactionHash: HASH_A,
+  }, 72);
+  const observed = await execute(fixture.service, {
+    action: 'OBSERVE_LIFECYCLE', ...leaseBody(lease),
+    operationId: prepared.operation.operationId, lifecycleStatus: 'ACCEPTED',
+  }, 73);
+  assert.equal(observed.receiptIdentityVerified, false);
+  assert.equal(observed.operation.acceptedAt, null);
+
+  const acceptanceEvidence = {
+    transactionHash: HASH_A,
+    contractAddress: CONTRACT,
+    recipient: CONTRACT,
+    method: 'resolve_epoch',
+    arguments: ['1800014400'],
+    lifecycleStatus: 'ACCEPTED',
+    txExecutionResultName: 'FINISHED_WITH_RETURN',
+    receiptIdentityVerified: true,
+    executionVerified: true,
+    executionSucceeded: true,
+  };
+  const accepted = await execute(fixture.service, {
+    action: 'ACCEPT_HANDOFF', ...leaseBody(lease),
+    operationId: prepared.operation.operationId,
+    acceptanceEvidence,
+  }, 74);
+  assert.equal(accepted.operation.lifecycleStatus, 'ACCEPTED');
+  assert.ok(accepted.operation.acceptedAt);
+  assert.ok(accepted.operation.acceptanceRevalidatedAt);
+  assert.deepEqual(accepted.operation.acceptanceEvidence, acceptanceEvidence);
+});
+
 test('lightweight FINALIZED remains SUBMITTED until receipt success then post-state verification', async () => {
   const fixture = service();
   const lease = (await acquire(fixture.service, HOLDER_A, 20)).lease;
@@ -518,6 +584,36 @@ test('recovery uses bounded keyset pagination across attention records', async (
   assert.equal(second.operations.length, 1);
   assert.equal(second.page.nextCursor, null);
   assert.notEqual(second.operations[0].operationId, first.operations[1].operationId);
+});
+
+test('successful transition requests reject a non-null failure reason before SQL', () => {
+  for (const [targetState, metadata] of [
+    ['FINALIZED_SUCCESS', {
+      transactionHash: HASH_A,
+      lifecycleStatus: 'FINALIZED',
+      receiptIdentityVerified: true,
+      executionVerified: true,
+    }],
+    ['VERIFIED', {
+      transactionHash: HASH_A,
+      postStateStatus: 'RESOLVED',
+      postStateVerified: true,
+    }],
+  ]) {
+    assert.throws(
+      () => parseKeeperJournalRequest({
+        action: 'TRANSITION',
+        holderId: HOLDER_A,
+        signerAddress: SIGNER,
+        fencingToken: '1',
+        operationId: 'a'.repeat(64),
+        targetState,
+        reasonCode: 'FINALIZED_EXECUTION_FAILED',
+        metadata,
+      }),
+      /reasonCode must be null/,
+    );
+  }
 });
 
 test('same idempotency key cannot authorize a different mutation body', async () => {

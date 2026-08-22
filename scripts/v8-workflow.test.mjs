@@ -23,6 +23,8 @@ function assertProtectedMainGate(source, secretPattern) {
 test('V8 keeper refuses arbitrary workflow_dispatch refs before exposing its keystore', () => {
   const source = workflow('bradbury-v8-keeper.yml');
   assert.match(source, /workflow_dispatch:/);
+  assert.match(source, /cron: '7,22,37,52 \* \* \* \*'/);
+  assert.match(source, /cancel-in-progress: false/);
   assertProtectedMainGate(source, /\$\{\{\s*secrets\.V8_KEEPER_KEYSTORE_B64\s*\}\}/);
   assert.match(source, /V8_KEEPER_KEYSTORE_B64: \$\{\{ secrets\.V8_KEEPER_KEYSTORE_B64 \}\}/);
 });

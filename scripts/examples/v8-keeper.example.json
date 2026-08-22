@@ -14,7 +14,7 @@
     "platformFeeBps": 200
   },
   "epochs": {
-    "futureHours": 24,
+    "futureHours": 2,
     "minimumCreationLeadSeconds": 7200,
     "minStakeGen": "0.1",
     "maxStakePerWalletGen": "10"
@@ -26,7 +26,7 @@
     "maxWritesPerRun": 30,
     "readAttempts": 3,
     "retryBaseMs": 500,
-    "finalityRetries": 180,
+    "finalityRetries": 480,
     "finalityIntervalMs": 5000,
     "postStateAttempts": 5,
     "postStateIntervalMs": 2000

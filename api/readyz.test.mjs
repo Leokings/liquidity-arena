@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createReadyHandler, readinessEpochEnds } from './readyz.mjs';
+import {
+  READINESS_EPOCH_COVERAGE_COUNT,
+  createReadyHandler,
+  readinessEpochEnds,
+} from './readyz.mjs';
 import {
   BINANCE_QUOTES,
   V8_SCHEMA,
@@ -35,10 +39,16 @@ function fetchReady(url, options = {}) {
   }));
 }
 
-function handler({ schema = V8_SCHEMA, config = v8Config(), reserve = v8Reserve() } = {}) {
+function handler({
+  schema = V8_SCHEMA,
+  config = v8Config(),
+  reserve = v8Reserve(),
+  now = () => NOW,
+  readEpoch = (epochEndTimestamp) => v8Epoch(epochEndTimestamp),
+} = {}) {
   return createReadyHandler({
     environment: v8Environment(),
-    now: () => NOW,
+    now,
     fetchImpl: fetchReady,
     createClientImpl({ chain }) {
       assert.equal(chain.id, 4_221);
@@ -47,7 +57,7 @@ function handler({ schema = V8_SCHEMA, config = v8Config(), reserve = v8Reserve(
         async readContract({ functionName, args }) {
           if (functionName === 'get_config') return config;
           if (functionName === 'get_delivery_reserve_state') return reserve;
-          if (functionName === 'get_epoch') return v8Epoch(Number(args[0]));
+          if (functionName === 'get_epoch') return readEpoch(Number(args[0]));
           throw new Error(`unexpected read ${functionName}`);
         },
       };
@@ -69,6 +79,35 @@ test('Vercel readiness requires Bradbury V8 schema, payout/risk/reserve, epochs,
   assert.equal(body.checks.contract.reserve.availableReserveAtto, '3000000000000000000');
   assert.equal(body.checks.static.legacyClaimsEnabled, false);
   assert.deepEqual(body.checks.keeperCoverage.epochEnds, readinessEpochEnds(NOW));
+});
+
+test('readiness rolls an exact two-hour user window and never substitutes farther keeper-eligible epochs', async () => {
+  const beforeRollover = Date.UTC(2026, 7, 22, 18, 45, 0);
+  const atRollover = Date.UTC(2026, 7, 22, 19, 0, 0);
+  const nineteen = Date.UTC(2026, 7, 22, 19, 0, 0) / 1_000;
+  const twenty = Date.UTC(2026, 7, 22, 20, 0, 0) / 1_000;
+  const twentyOne = Date.UTC(2026, 7, 22, 21, 0, 0) / 1_000;
+  assert.equal(READINESS_EPOCH_COVERAGE_COUNT, 2);
+  assert.deepEqual(readinessEpochEnds(beforeRollover), [nineteen, twenty]);
+  assert.deepEqual(readinessEpochEnds(atRollover), [twenty, twentyOne]);
+
+  const reads = [];
+  const res = response();
+  await handler({
+    now: () => beforeRollover,
+    readEpoch(epochEndTimestamp) {
+      reads.push(epochEndTimestamp);
+      return epochEndTimestamp === nineteen
+        ? v8Epoch(epochEndTimestamp, { status: 'MISSING' })
+        : v8Epoch(epochEndTimestamp);
+    },
+  })({ method: 'GET' }, res);
+  assert.equal(res.statusCode, 503);
+  assert.deepEqual(reads, [nineteen, twenty]);
+  assert.deepEqual(JSON.parse(res.body).checks.keeperCoverage, {
+    ready: false,
+    epochEnds: [nineteen, twenty],
+  });
 });
 
 test('readiness degrades on schema, risk, factory, or reserve drift', async () => {

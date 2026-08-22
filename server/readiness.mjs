@@ -13,6 +13,7 @@ import {
 
 export const READINESS_CACHE_MS = 30_000;
 export const READINESS_TIMEOUT_MS = 5_000;
+export const READINESS_EPOCH_COVERAGE_COUNT = 2;
 const READINESS_RESPONSE_BYTES = 2 * 1024 * 1024;
 const HOUR_SECONDS = 3_600;
 const WAGER_OPEN_OFFSET_SECONDS = 2_400;
@@ -42,7 +43,13 @@ export function readinessEpochEnds(nowMs = Date.now()) {
   const nowSeconds = Math.floor(timestamp / 1_000);
   const hourStart = Math.floor(nowSeconds / HOUR_SECONDS) * HOUR_SECONDS;
   const operational = hourStart + HOUR_SECONDS;
-  return Object.freeze([operational, operational + HOUR_SECONDS]);
+  // Readiness intentionally protects the immediately usable product window.
+  // It must not skip a missing near-term epoch merely because the keeper's
+  // creation lead means that epoch can no longer be created in the current run.
+  return Object.freeze(Array.from(
+    { length: READINESS_EPOCH_COVERAGE_COUNT },
+    (_, index) => operational + index * HOUR_SECONDS,
+  ));
 }
 
 export function isOperationalLiquidityArenaEpoch(raw, epochEndTimestamp, config) {

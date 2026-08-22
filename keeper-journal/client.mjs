@@ -165,6 +165,8 @@ function validatedOperation(value) {
     'deploymentAlias', 'network', 'chainId', 'signerAddress',
     'contractAddress', 'subjectType', 'subjectId', 'method', 'args', 'valueAtto',
     'state', 'transactionHash', 'lifecycleStatus', 'lifecycleObservedAt',
+    'pipelineSlot', 'handoffPredecessorOperationId', 'acceptedAt',
+    'acceptanceRevalidatedAt', 'acceptanceEvidence',
     'stateReasonCode', 'quarantineReason', 'preparedAt', 'submittedAt',
     'finalizedAt', 'verifiedAt', 'updatedAt', 'revision',
   ];
@@ -179,6 +181,24 @@ function validatedOperation(value) {
     'UNKNOWN', 'PENDING', 'PROPOSING', 'COMMITTING', 'REVEALING', 'ACCEPTED', 'FINALIZED',
   ]);
   const reasonCode = (entry) => entry === null || /^[A-Z][A-Z0-9_]{0,79}$/.test(entry);
+  const acceptanceEvidence = value.acceptanceEvidence;
+  const validAcceptanceEvidence = acceptanceEvidence === null || (
+    acceptanceEvidence && typeof acceptanceEvidence === 'object'
+    && !Array.isArray(acceptanceEvidence)
+    && Object.keys(acceptanceEvidence).length === 10
+    && acceptanceEvidence.transactionHash === value.transactionHash
+    && acceptanceEvidence.contractAddress === value.contractAddress
+    && acceptanceEvidence.recipient === value.contractAddress
+    && acceptanceEvidence.method === value.method
+    && Array.isArray(acceptanceEvidence.arguments)
+    && acceptanceEvidence.arguments.length === value.args.length
+    && acceptanceEvidence.arguments.every((entry, index) => entry === value.args[index])
+    && acceptanceEvidence.lifecycleStatus === 'ACCEPTED'
+    && acceptanceEvidence.txExecutionResultName === 'FINISHED_WITH_RETURN'
+    && acceptanceEvidence.receiptIdentityVerified === true
+    && acceptanceEvidence.executionVerified === true
+    && acceptanceEvidence.executionSucceeded === true
+  );
   if (!/^[0-9a-f]{64}$/.test(value.operationId)
       || !/^[0-9a-f]{64}$/.test(value.logicalOperationId)
       || !/^[1-9]\d{0,18}$/.test(value.attemptNumber)
@@ -201,6 +221,18 @@ function validatedOperation(value) {
       || !states.has(value.state)
       || (value.transactionHash !== null && !/^0x[0-9a-f]{64}$/.test(value.transactionHash))
       || (value.lifecycleStatus !== null && !lifecycleStatuses.has(value.lifecycleStatus))
+      || (value.pipelineSlot !== null && ![0, 1].includes(value.pipelineSlot))
+      || (['PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'QUARANTINED',
+        'STATE_SATISFIED_UNPROVEN'].includes(value.state) && value.pipelineSlot === null)
+      || (value.handoffPredecessorOperationId !== null
+        && !/^[0-9a-f]{64}$/.test(value.handoffPredecessorOperationId))
+      || !nullableTimestamp(value.acceptedAt)
+      || !nullableTimestamp(value.acceptanceRevalidatedAt)
+      || ((value.acceptedAt === null) !== (acceptanceEvidence === null))
+      || ((value.acceptanceRevalidatedAt === null) !== (acceptanceEvidence === null))
+      || (value.acceptedAt !== null
+        && Date.parse(value.acceptanceRevalidatedAt) < Date.parse(value.acceptedAt))
+      || !validAcceptanceEvidence
       || !reasonCode(value.stateReasonCode)
       || !reasonCode(value.quarantineReason)
       || !/^[1-9]\d*$/.test(value.revision)
@@ -310,7 +342,7 @@ function validatedSuccess(action, payload) {
       && payload.configuration.signerConfigured === true;
     const databaseReady = payload.database.configured === true
       && payload.database.ready === true
-      && payload.database.schemaVersion === 5;
+      && payload.database.schemaVersion === 6;
     if (!['ready', 'degraded'].includes(payload.status)
         || payload.service !== 'liquidity-arena-keeper-journal'
         || typeof payload.ready !== 'boolean'
@@ -321,7 +353,7 @@ function validatedSuccess(action, payload) {
         || typeof payload.configuration.signerConfigured !== 'boolean'
         || typeof payload.database.configured !== 'boolean'
         || typeof payload.database.ready !== 'boolean'
-        || ![null, 5].includes(payload.database.schemaVersion)
+      || ![null, 6].includes(payload.database.schemaVersion)
         || (payload.ready === true
           ? payload.status !== 'ready' || !configurationReady || !databaseReady
           : payload.status !== 'degraded')) {
@@ -355,7 +387,7 @@ function validatedSuccess(action, payload) {
     }
     return Object.freeze({ ...payload, operation: validatedOperation(payload.operation) });
   }
-  if (['BIND_SUBMISSION', 'TRANSITION', 'OBSERVE_LIFECYCLE'].includes(action)) {
+  if (['BIND_SUBMISSION', 'TRANSITION', 'OBSERVE_LIFECYCLE', 'ACCEPT_HANDOFF'].includes(action)) {
     const keys = action === 'OBSERVE_LIFECYCLE'
       ? ['status', 'action', 'operation', 'receiptIdentityVerified']
       : ['status', 'action', 'operation'];
@@ -537,6 +569,26 @@ export function createKeeperJournalClient({
       if (result.operation.operationId !== String(operationId).toLowerCase()
           || result.operation.lifecycleStatus !== String(lifecycleStatus).toUpperCase()) {
         throw new KeeperJournalClientError('KEEPER_JOURNAL_RESPONSE_IDENTITY', 'Keeper journal lifecycle response identity does not match the request.');
+      }
+      return result;
+    },
+
+    async acceptHandoff({ lease, operationId, acceptanceEvidence, idempotencyKey }) {
+      const result = await post({
+        action: 'ACCEPT_HANDOFF',
+        ...leaseFields(lease),
+        operationId,
+        acceptanceEvidence,
+      }, idempotencyKey);
+      if (result.operation.operationId !== String(operationId).toLowerCase()
+          || result.operation.lifecycleStatus !== 'ACCEPTED'
+          || result.operation.acceptedAt === null
+          || result.operation.acceptanceEvidence?.transactionHash
+            !== String(acceptanceEvidence?.transactionHash || '').toLowerCase()) {
+        throw new KeeperJournalClientError(
+          'KEEPER_JOURNAL_RESPONSE_IDENTITY',
+          'Keeper journal ACCEPTED handoff response identity does not match the request.',
+        );
       }
       return result;
     },

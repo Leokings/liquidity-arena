@@ -18,6 +18,10 @@ Startup fails closed unless live `get_config`, schema, roles, stake limits, fact
 ## Keeper operations
 
 Epoch work creates or resolves only bounded due epochs after exact state reconciliation.
+The production schedule runs at minutes 7, 22, 37, and 52 and keeps exactly the next two eligible
+UTC-hour epochs populated. GenLayer queues this account's transactions in submission order. The
+two-hour horizon therefore bootstraps safely, while each scheduled run signs at most one fresh
+transaction.
 
 Payout work scans both a hot newest tail and a durable rotating older backlog. Based on exact V8 and EVM factory state it may submit:
 
@@ -33,17 +37,38 @@ The keeper never calls EVM `withdraw()` and has no recipient key.
 
 ## Durable journal
 
-Journal schema V5 supports epoch and payout subjects plus narrowly gated revalidation of a finalized generic receipt-identity quarantine. An operation is prepared before broadcast and records exact method, arguments, signer, contract, nonce/transaction identity, attempt, and final receipt.
+Journal schema V6 supports epoch and payout subjects, a hard two-slot pipeline, immutable handoff
+lineage, same-subject exclusion, and narrowly gated revalidation of a finalized generic
+receipt-identity quarantine. An operation is prepared before broadcast and records the exact
+method, arguments, signer, contract, transaction identity, attempt, and receipts.
+
+Only an exact successful `ACCEPTED` receipt can authorize a handoff. Its hash, recipient/contract,
+method, arguments, lifecycle status, and `FINISHED_WITH_RETURN` execution result are durably bound
+to the journal row. `ACCEPTED` is reversible during the appeal window and is never treated as
+terminal or verified. Before a successor is prepared, the keeper re-reads the predecessor and
+revalidates its exact `ACCEPTED` receipt; `UNKNOWN`, an appeal regression, or unavailable evidence
+blocks every new signature. Final receipt identity, successful execution, and monotonic post-state
+remain the only route to `VERIFIED`.
 
 Recovery rules:
 
 1. Acquire the Bradbury lease.
-2. Reconcile unresolved journal rows before preparing new work.
-3. Never sign a replacement for an operation with an unresolved hash.
-4. Accept only the exact finalized receipt and monotonic post-state.
-5. Quarantine contradictory hashes, arguments, or domain identity.
+2. Probe every unresolved row nonblocking before preparing new work.
+3. Suppress duplicate logical operations and every operation for an in-flight subject.
+4. Never rebroadcast or replace a durably bound transaction hash.
+5. Permit one independent successor only when the predecessor has a fresh, exact `ACCEPTED` proof.
+6. Refuse a third attention row; slots `0` and `1` are database-enforced.
+7. Accept only the exact finalized receipt and monotonic post-state as verification.
+8. Quarantine contradictory finalized hashes, arguments, or domain identity.
 
-Migration 004 checksum is `1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910`. Migration 005 (`keeper_receipt_identity_revalidation`) checksum is `a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59`. Keeper health requires exact migrations 001–005 and rejects any version newer than 5.
+Scheduled recovery performs a bounded live probe and stops safely on a provider failure; it never
+rebroadcasts the recorded operation. A newly submitted transaction may use up to 480 reads at
+five-second intervals (about 40 minutes) to reach exact `ACCEPTED` or `FINALIZED`, beneath the
+keeper's hard 45-minute run deadline. Before signing any fresh write, the keeper reserves that
+budget plus the bounded post-state verification margin. After one fresh signature, every remaining
+action is deferred to the next scheduled run.
+
+Migration 004 checksum is `1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910`. Migration 005 (`keeper_receipt_identity_revalidation`) checksum is `a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59`. Migration 006 (`keeper_accepted_handoff`) checksum is `5b81d291c121cae31962b164608e5ad5fc65a19158bed95cd96fae0348e13bdf`. Keeper health requires exact migrations 001–006 and rejects any version newer than 6.
 
 ## Local dry run
 
@@ -60,7 +85,7 @@ Before any write, verify:
 - owner, keeper, treasury, factory, source/schema, and policy are exact;
 - delivery reserve capacity is solvent;
 - journal schema and lease are healthy;
-- no other pending transaction exists for the signer.
+- the journal has a free pipeline slot and every predecessor has fresh exact `ACCEPTED` evidence.
 
 ## GitHub Actions
 

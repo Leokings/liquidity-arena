@@ -227,6 +227,40 @@ function exactTransitionMetadata(targetState, value, reasonCode) {
   return Object.freeze({ ...metadata, postStateStatus });
 }
 
+function exactAcceptanceEvidence(value) {
+  const evidence = safeMetadata(value);
+  exactObject(evidence, [
+    'transactionHash', 'contractAddress', 'recipient', 'method', 'arguments',
+    'lifecycleStatus', 'txExecutionResultName', 'receiptIdentityVerified',
+    'executionVerified', 'executionSucceeded',
+  ], 'acceptanceEvidence');
+  if (evidence.lifecycleStatus !== 'ACCEPTED'
+      || evidence.txExecutionResultName !== 'FINISHED_WITH_RETURN'
+      || evidence.receiptIdentityVerified !== true
+      || evidence.executionVerified !== true
+      || evidence.executionSucceeded !== true
+      || !METHODS.has(evidence.method)
+      || !Array.isArray(evidence.arguments)
+      || evidence.arguments.length !== 1
+      || typeof evidence.arguments[0] !== 'string') {
+    fail('ACCEPT_HANDOFF requires exact successful ACCEPTED receipt evidence.');
+  }
+  return Object.freeze({
+    ...evidence,
+    transactionHash: canonicalHash(
+      evidence.transactionHash,
+      'acceptanceEvidence.transactionHash',
+    ),
+    contractAddress: canonicalAddress(
+      evidence.contractAddress,
+      'acceptanceEvidence.contractAddress',
+    ),
+    recipient: canonicalAddress(evidence.recipient, 'acceptanceEvidence.recipient'),
+    method: String(evidence.method),
+    arguments: Object.freeze([...evidence.arguments]),
+  });
+}
+
 function stableJson(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -363,6 +397,20 @@ export function parseKeeperJournalRequest(value) {
     if (!LIFECYCLE_STATUSES.has(lifecycleStatus)) fail('lifecycleStatus is invalid.');
     return Object.freeze({ action, ...lease, operationId, lifecycleStatus });
   }
+  if (action === 'ACCEPT_HANDOFF') {
+    const lease = leaseIdentity(value, [
+      'action', 'holderId', 'signerAddress', 'fencingToken',
+      'operationId', 'acceptanceEvidence',
+    ]);
+    const operationId = String(value.operationId || '').toLowerCase();
+    if (!OPERATION_ID.test(operationId)) fail('operationId is invalid.');
+    return Object.freeze({
+      action,
+      ...lease,
+      operationId,
+      acceptanceEvidence: exactAcceptanceEvidence(value.acceptanceEvidence),
+    });
+  }
   if (action === 'TRANSITION') {
     const lease = leaseIdentity(value, [
       'action', 'holderId', 'signerAddress', 'fencingToken',
@@ -377,6 +425,9 @@ export function parseKeeperJournalRequest(value) {
     if (['FINALIZED_FAILURE', 'STATE_SATISFIED_UNPROVEN', 'QUARANTINED'].includes(targetState)
         && !reasonCode) {
       fail('reasonCode is required for this transition.');
+    }
+    if (['FINALIZED_SUCCESS', 'VERIFIED'].includes(targetState) && reasonCode !== null) {
+      fail('reasonCode must be null for a successful transition.');
     }
     const metadata = exactTransitionMetadata(targetState, value.metadata, reasonCode);
     return Object.freeze({
@@ -499,6 +550,40 @@ export function publicKeeperOperation(row) {
       { statusCode: 503 },
     );
   }
+  const pipelineSlot = row.pipeline_slot === null ? null : Number(row.pipeline_slot);
+  const handoffPredecessorOperationId = row.handoff_predecessor_operation_id === null
+    ? null
+    : String(row.handoff_predecessor_operation_id);
+  const acceptedAt = row.accepted_at || null;
+  const acceptanceRevalidatedAt = row.acceptance_revalidated_at || null;
+  const acceptanceEvidence = row.acceptance_metadata === null
+    ? null
+    : Object.freeze({ ...row.acceptance_metadata });
+  if ((pipelineSlot !== null && ![0, 1].includes(pipelineSlot))
+      || (RECOVERY_STATES.has(state) && pipelineSlot === null)
+      || (handoffPredecessorOperationId !== null
+        && !OPERATION_ID.test(handoffPredecessorOperationId))
+      || ((acceptedAt === null) !== (acceptanceEvidence === null))
+      || ((acceptanceRevalidatedAt === null) !== (acceptanceEvidence === null))
+      || (acceptedAt !== null && (
+        acceptanceEvidence.transactionHash !== String(row.transaction_hash)
+        || acceptanceEvidence.contractAddress !== String(row.contract_address)
+        || acceptanceEvidence.recipient !== String(row.contract_address)
+        || acceptanceEvidence.method !== String(row.method)
+        || JSON.stringify(acceptanceEvidence.arguments) !== JSON.stringify(row.arguments)
+        || acceptanceEvidence.lifecycleStatus !== 'ACCEPTED'
+        || acceptanceEvidence.txExecutionResultName !== 'FINISHED_WITH_RETURN'
+        || acceptanceEvidence.receiptIdentityVerified !== true
+        || acceptanceEvidence.executionVerified !== true
+        || acceptanceEvidence.executionSucceeded !== true
+        || Object.keys(acceptanceEvidence).length !== 10
+      ))) {
+    throw new KeeperJournalError(
+      'KEEPER_JOURNAL_DATABASE_SHAPE',
+      'Keeper journal returned invalid ACCEPTED handoff evidence.',
+      { statusCode: 503 },
+    );
+  }
   return Object.freeze({
     operationId,
     logicalOperationId,
@@ -518,6 +603,11 @@ export function publicKeeperOperation(row) {
     transactionHash: row.transaction_hash === null ? null : String(row.transaction_hash),
     lifecycleStatus: row.lifecycle_status === null ? null : String(row.lifecycle_status),
     lifecycleObservedAt: row.lifecycle_observed_at || null,
+    pipelineSlot,
+    handoffPredecessorOperationId,
+    acceptedAt,
+    acceptanceRevalidatedAt,
+    acceptanceEvidence,
     stateReasonCode: row.state_reason_code || null,
     quarantineReason: row.quarantine_reason || null,
     preparedAt: row.prepared_at,

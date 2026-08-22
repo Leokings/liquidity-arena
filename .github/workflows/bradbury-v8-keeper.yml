@@ -2,7 +2,7 @@ name: Bradbury V8 Keeper
 
 on:
   schedule:
-    - cron: '27 * * * *'
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
 
 permissions:

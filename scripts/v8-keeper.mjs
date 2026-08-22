@@ -21,6 +21,7 @@ import {
   assertFinalizedGenlayerExecution,
   createPasswordWritingSpawn,
   GENLAYER_BRADBURY_RPC_URL,
+  getGenlayerDecidedReceipt,
   getGenlayerTransactionStatus,
   parseGenlayerCallOutput,
   resolveGenlayerCommand,
@@ -508,7 +509,23 @@ export async function planV8KeeperRun(context) {
   const priority = { REFRESH: 0, CONFIRM: 1, RETRY_PAYOUT: 2, DISPATCH: 3, RETRY_PREPARE: 4, TIMEOUT: 5, RESOLVE: 6, CREATE: 7 };
   actions.sort((left, right) => priority[left.type] - priority[right.type]
     || String(left.payoutId ?? left.epochEndTimestamp).localeCompare(String(right.payoutId ?? right.epochEndTimestamp)));
-  const selected = actions.slice(0, context.config.operator.maxWritesPerRun);
+  const suppressed = [];
+  const eligible = actions.filter((action) => {
+    const identity = keeperOperationForAction({
+      deploymentAlias: 'v8',
+      contractAddress: context.config.contractAddress,
+      action,
+    });
+    const subjectType = action.payoutId ? 'payout' : 'epoch';
+    const subjectId = String(action.payoutId ?? action.epochEndTimestamp);
+    if (context.suppressedLogicalOperationIds?.has(identity.logicalOperationId)
+        || context.suppressedSubjects?.has(`${subjectType}:${subjectId}`)) {
+      suppressed.push(Object.freeze({ ...action, reason: 'DURABLE_OPERATION_IN_FLIGHT' }));
+      return false;
+    }
+    return true;
+  });
+  const selected = eligible.slice(0, context.config.operator.maxWritesPerRun);
   return Object.freeze({
     knownEpochCount: epochIds.length,
     totalPayoutCount: payoutScan.total,
@@ -516,7 +533,9 @@ export async function planV8KeeperRun(context) {
     payoutScanRanges: payoutScan.ranges,
     payoutRotationOrdinal: payoutScan.rotationOrdinal,
     actions: Object.freeze(selected),
-    deferredActionCount: actions.length - selected.length,
+    suppressedActions: Object.freeze(suppressed),
+    suppressedActionCount: suppressed.length,
+    deferredActionCount: eligible.length - selected.length,
   });
 }
 
@@ -529,6 +548,26 @@ export function validateReceiptIdentity(receipt, contractAddress, method, args) 
       || !Array.isArray(actual) || actual.length !== args.length
       || actual.some((entry, index) => String(entry) !== String(args[index]))) {
     fail('RECEIPT_IDENTITY_MISMATCH', `finalized receipt does not prove ${method}`);
+  }
+  return receipt;
+}
+
+export function validateAcceptedReceiptIdentity(receipt, operation) {
+  const call = receipt?.txDataDecoded?.callData;
+  const actual = call?.args;
+  if (String(receipt?.transactionHash ?? '').toLowerCase() !== operation.transactionHash
+      || receipt?.statusName !== 'ACCEPTED'
+      || receipt?.txExecutionResultName !== 'FINISHED_WITH_RETURN'
+      || String(receipt?.recipient ?? '').toLowerCase() !== operation.contractAddress
+      || receipt?.txDataDecoded?.type !== 'call'
+      || call?.method !== operation.method
+      || !Array.isArray(actual)
+      || actual.length !== operation.args.length
+      || actual.some((entry, index) => String(entry) !== String(operation.args[index]))) {
+    fail(
+      'ACCEPTED_RECEIPT_IDENTITY_MISMATCH',
+      `ACCEPTED receipt does not prove ${operation.method}`,
+    );
   }
   return receipt;
 }
@@ -576,6 +615,7 @@ function recoveryOptions(context) {
     contractAddress: context.config.contractAddress,
     operator: context.operator,
     validateReceipt: (receipt, operation) => validateReceiptIdentity(receipt, operation.contractAddress, operation.method, operation.args),
+    validateAcceptedReceipt: validateAcceptedReceiptIdentity,
     verifyPostState: (action) => verifiedPostState(context, action),
     sleep: context.sleep,
     lifecycleAttempts: context.config.operator.finalityRetries,
@@ -587,7 +627,28 @@ function recoveryOptions(context) {
   };
 }
 
-async function executeAction(context, action) {
+function freshWriteBudgetMs(config) {
+  return config.operator.finalityRetries * config.operator.finalityIntervalMs
+    + config.operator.postStateAttempts * config.operator.postStateIntervalMs;
+}
+
+async function executeAction(context, action, acceptedPredecessor = null) {
+  if (acceptedPredecessor) {
+    const predecessor = await reconcileAuthoritativeOperation({
+      ...recoveryOptions(context),
+      lifecycleAttempts: 1,
+      operation: acceptedPredecessor,
+    });
+    if (!predecessor.accepted && !predecessor.verified) {
+      return Object.freeze({
+        ...action,
+        transactionHash: null,
+        pendingReceipt: true,
+        reason: 'ACCEPTED_HANDOFF_NOT_LIVE',
+        predecessor: predecessor.pending,
+      });
+    }
+  }
   const identity = keeperOperationForAction({ deploymentAlias: 'v8', contractAddress: context.config.contractAddress, action });
   assertSigningAccount(
     await readChain(context, 'account before write', () => context.operator.getAccountInfo()),
@@ -614,6 +675,21 @@ async function executeAction(context, action) {
   });
   if (!/^0x[0-9a-f]{64}$/i.test(String(transactionHash || ''))) fail('TRANSACTION_HASH_NOT_DURABLE', 'write exited without a durable transaction hash');
   const reconciled = await reconcileAuthoritativeOperation({ ...recoveryOptions(context), operation });
+  if (reconciled.accepted) {
+    context.logger({
+      event: 'V8_KEEPER_ACTION_ACCEPTED_HANDOFF',
+      ...action,
+      transactionHash,
+      acceptedAt: reconciled.operation.acceptedAt,
+    });
+    return Object.freeze({
+      ...action,
+      transactionHash,
+      status: 'ACCEPTED',
+      acceptedHandoff: true,
+      operation: reconciled.operation,
+    });
+  }
   if (!reconciled.verified) return Object.freeze({ ...action, transactionHash, pendingReceipt: true, reason: reconciled.pending.reason });
   context.logger({ event: 'V8_KEEPER_ACTION_VERIFIED', ...action, transactionHash, status: reconciled.postState.status });
   return Object.freeze({ ...action, transactionHash, status: reconciled.postState.status });
@@ -650,7 +726,20 @@ export async function runV8KeeperOnce({
   journalSessionOptions = {},
 } = {}) {
   if (!config || !operator) fail('KEEPER_ARGUMENT', 'config and operator are required');
-  const context = { config, execute, nowEpochSeconds: safeInteger(nowEpochSeconds, 'nowEpochSeconds'), operator, sleep, logger, deadlineAtMs, clockMs, journalSession: null, roles: null };
+  const context = {
+    config,
+    execute,
+    nowEpochSeconds: safeInteger(nowEpochSeconds, 'nowEpochSeconds'),
+    operator,
+    sleep,
+    logger,
+    deadlineAtMs,
+    clockMs,
+    journalSession: null,
+    roles: null,
+    suppressedLogicalOperationIds: new Set(),
+    suppressedSubjects: new Set(),
+  };
   assertNetwork(await readChain(context, 'network info', () => operator.getNetworkInfo()));
   assertV8Schema(await readChain(context, 'contract schema', () => operator.getSchema()));
   context.roles = assertV8ContractConfiguration(config, await readChain(context, 'get_config', () => operator.getConfig()));
@@ -668,11 +757,31 @@ export async function runV8KeeperOnce({
     return await journalSession.withHeartbeat(async () => {
       const recovery = await recoverAuthoritativeOperations(recoveryOptions(context));
       if (recovery.blocked) return Object.freeze({ execute: true, actions: [], recovered: recovery.recovered, completed: [], pending: recovery.pending, skipped: [], failures: [], blocked: true });
+      context.suppressedLogicalOperationIds = new Set(recovery.outstandingLogicalOperationIds);
+      context.suppressedSubjects = new Set(recovery.outstandingSubjects);
       const plan = await planV8KeeperRun(context);
       const completed = [];
+      const accepted = [];
       const pending = [];
-      const skipped = [];
+      const skipped = [...plan.suppressedActions];
       const failures = [];
+      if (recovery.accepted.length >= 2) {
+        skipped.push(...plan.actions.map((action) => ({
+          ...action,
+          reason: 'KEEPER_PIPELINE_CAPACITY',
+        })));
+        return Object.freeze({
+          ...plan,
+          execute: true,
+          recovered: recovery.recovered,
+          accepted: recovery.accepted,
+          completed,
+          pending,
+          skipped,
+          failures,
+          blocked: false,
+        });
+      }
       for (let index = 0; index < plan.actions.length; index += 1) {
         if (clockMs() >= deadlineAtMs) {
           skipped.push(...plan.actions.slice(index).map((action) => ({ ...action, reason: 'RUN_DEADLINE' })));
@@ -682,20 +791,51 @@ export async function runV8KeeperOnce({
         try {
           const action = await revalidate(context, planned);
           if (!action) { skipped.push({ ...planned, reason: 'NO_LONGER_ACTIONABLE' }); continue; }
-          const result = await executeAction(context, action);
+          const remainingBudgetMs = deadlineAtMs - clockMs();
+          const requiredBudgetMs = freshWriteBudgetMs(context.config);
+          if (remainingBudgetMs < requiredBudgetMs) {
+            skipped.push(...plan.actions.slice(index).map((item) => ({
+              ...item,
+              reason: 'RUN_DEADLINE_BUDGET',
+              remainingBudgetMs,
+              requiredBudgetMs,
+            })));
+            break;
+          }
+          const result = await executeAction(
+            context,
+            action,
+            recovery.accepted[0]?.operation || null,
+          );
           if (result.pendingReceipt) {
             pending.push(result);
             skipped.push(...plan.actions.slice(index + 1).map((item) => ({ ...item, reason: 'BLOCKED_BY_NONTERMINAL_OPERATION' })));
             break;
           }
-          completed.push(result);
+          if (result.acceptedHandoff) accepted.push(result);
+          else completed.push(result);
+          skipped.push(...plan.actions.slice(index + 1).map((item) => ({
+            ...item,
+            reason: 'ONE_NEW_WRITE_PER_RUN',
+          })));
+          break;
         } catch (error) {
           failures.push({ ...planned, code: error?.code || 'ACTION_FAILED', message: error instanceof Error ? error.message : String(error) });
           skipped.push(...plan.actions.slice(index + 1).map((item) => ({ ...item, reason: 'BLOCKED_AFTER_ACTION_FAILURE' })));
           break;
         }
       }
-      const summary = Object.freeze({ ...plan, execute: true, recovered: recovery.recovered, completed, pending, skipped, failures, blocked: pending.length > 0 || failures.length > 0 });
+      const summary = Object.freeze({
+        ...plan,
+        execute: true,
+        recovered: recovery.recovered,
+        accepted: Object.freeze([...recovery.accepted, ...accepted]),
+        completed,
+        pending,
+        skipped,
+        failures,
+        blocked: pending.length > 0 || failures.length > 0,
+      });
       if (failures.length) throw new V8KeeperError('ACTION_FAILURES', `${failures.length} V8 keeper action(s) failed`, { summary });
       return summary;
     });
@@ -735,6 +875,13 @@ export function createCliV8KeeperOperator({ config, environment = process.env } 
       return Object.freeze({ prepared: prepared === true, credited: credited === true, withdrawn: withdrawn === true });
     },
     getTransactionStatus: (transactionHash) => getGenlayerTransactionStatus({ rpcUrl: GENLAYER_BRADBURY_RPC_URL, transactionHash }),
+    getAcceptedReceipt: (transactionHash) => getGenlayerDecidedReceipt({
+      invocation,
+      transactionHash,
+      stdin: password ? 'pipe' : 'inherit',
+      spawnImpl: password ? createPasswordWritingSpawn(password) : nodeSpawn,
+      ...quiet,
+    }),
     submitWrite: (method, args, onTransactionHash) => submitGenlayerWrite({
       invocation,
       args: [config.contractAddress, method, '--args', ...args.map(String)],
@@ -756,7 +903,7 @@ export function createCliV8KeeperOperator({ config, environment = process.env } 
 }
 
 function usage() {
-  return 'Reconcile Liquidity Arena V8 epochs and EVM-backed payouts on Bradbury.\n\nUsage:\n  node scripts/v8-keeper.mjs --config <file> [--execute]\n\nThe default is a read-only plan. --execute requires the fenced V8 keeper, schema-v5 journal, and exact testnet-bradbury network. The keeper never calls an EVM vault withdrawal; only recipients can withdraw.';
+  return 'Reconcile Liquidity Arena V8 epochs and EVM-backed payouts on Bradbury.\n\nUsage:\n  node scripts/v8-keeper.mjs --config <file> [--execute]\n\nThe default is a read-only plan. --execute requires the fenced V8 keeper, schema-v6 journal, and exact testnet-bradbury network. The keeper never calls an EVM vault withdrawal; only recipients can withdraw.';
 }
 
 function parseArguments(argv) {

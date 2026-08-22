@@ -152,6 +152,34 @@ function payoutRecord(overrides = {}) {
   };
 }
 
+function acceptedReceipt({ transactionHash, method, args, recipient = CONTRACT } = {}) {
+  return {
+    transactionHash,
+    statusName: 'ACCEPTED',
+    txExecutionResultName: 'FINISHED_WITH_RETURN',
+    recipient,
+    txDataDecoded: { type: 'call', callData: { method, args: [...args] } },
+  };
+}
+
+function emptyExecutionOperator(overrides = {}) {
+  return {
+    canSignLockedAccount: true,
+    getNetworkInfo: async () => ({ alias: 'testnet-bradbury', chainId: 4221 }),
+    getAccountInfo: async () => ({ address: KEEPER, active: true, status: 'locked' }),
+    getSchema: async () => structuredClone(V8_KEEPER_ABI),
+    getConfig: async () => chainConfig(),
+    getReserveState: async () => reserveState(),
+    getEpochPage: async (offset) => ({
+      offset, next_offset: offset, total: 0, epoch_ids: [],
+    }),
+    getPayoutPage: async (offset) => ({
+      offset, next_offset: offset, total: 0, payouts: [],
+    }),
+    ...overrides,
+  };
+}
+
 test('keeper pins the exhaustive V8 ABI and immutable contract configuration', () => {
   assert.equal(Object.keys(V8_KEEPER_ABI.methods).length, 25);
   assert.equal(V8_FACTORY_VIEW_ABI.length, 3);
@@ -388,6 +416,213 @@ test('execute PREPARE-binds and verifies a permissionless dispatch without vault
   assert.equal(submitted.method.includes('withdraw'), false);
 });
 
+test('production timing budget and structural gate sign at most one fresh write per run', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  const hash = `0x${'2'.padStart(64, '0')}`;
+  const startMs = Date.UTC(2027, 0, 15, 10, 0, 0);
+  let nowMs = startMs;
+  const submissions = [];
+  const operator = {
+    journalClient: journal.client,
+    canSignLockedAccount: true,
+    getNetworkInfo: async () => ({ alias: 'testnet-bradbury', chainId: 4221 }),
+    getAccountInfo: async () => ({ address: KEEPER, active: true, status: 'locked' }),
+    getSchema: async () => structuredClone(V8_KEEPER_ABI),
+    getConfig: async () => chainConfig(),
+    getReserveState: async () => reserveState(),
+    getEpochPage: async (offset) => ({ offset, next_offset: offset, total: 0, epoch_ids: [] }),
+    getEpoch: async (epochEndTimestamp) => epochRecord(epochEndTimestamp),
+    getPayoutPage: async (offset) => ({ offset, next_offset: offset, total: 0, payouts: [] }),
+    submitWrite: async (method, args, onHash) => {
+      submissions.push({ method, args: [...args] });
+      await onHash(hash);
+    },
+    getTransactionStatus: async () => {
+      nowMs += 30 * 60 * 1_000;
+      return 'FINALIZED';
+    },
+    waitFinalized: async () => ({
+      transactionHash: hash,
+      statusName: 'FINALIZED',
+      txExecutionResultName: 'FINISHED_WITH_RETURN',
+      recipient: CONTRACT,
+      txDataDecoded: {
+        type: 'call',
+        callData: { method: submissions[0].method, args: submissions[0].args },
+      },
+    }),
+  };
+  const result = await runV8KeeperOnce({
+    config: config({
+      maxWritesPerRun: 2,
+      finalityRetries: 480,
+      finalityIntervalMs: 5_000,
+      postStateAttempts: 5,
+      postStateIntervalMs: 2_000,
+    }),
+    execute: true,
+    operator,
+    journalClient: journal.client,
+    nowEpochSeconds: NOW,
+    logger: () => {},
+    sleep: async () => {},
+    deadlineAtMs: startMs + 45 * 60 * 1_000,
+    clockMs: () => nowMs,
+    journalSessionOptions: { setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {} },
+  });
+
+  assert.equal(result.actions.length, 2);
+  assert.equal(submissions.length, 1);
+  assert.equal(result.completed.length, 1);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].reason, 'ONE_NEW_WRITE_PER_RUN');
+  assert.equal(journal.operations.size, 1);
+});
+
+test('fifteen-minute ACCEPTED handoffs sustain hourly RESOLVE plus CREATE coverage at thirty-minute finality', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  const hourMs = 3_600_000;
+  const startMs = Date.UTC(2027, 0, 15, 10, 7, 0);
+  let nowMs = startMs;
+  let sequence = 0;
+  const epochs = new Map();
+  const transactions = new Map();
+  const submissions = [];
+  const hourStartSeconds = Math.floor(startMs / hourMs) * 3_600;
+  for (const end of [
+    hourStartSeconds - 3_600,
+    hourStartSeconds + 3_600,
+    hourStartSeconds + 7_200,
+  ]) epochs.set(end, epochRecord(end));
+
+  function applyFinalized(transaction) {
+    if (transaction.applied) return;
+    const epochEndTimestamp = Number(transaction.args[0]);
+    if (transaction.method === 'create_epoch') {
+      epochs.set(epochEndTimestamp, epochRecord(epochEndTimestamp));
+    } else if (transaction.method === 'resolve_epoch') {
+      epochs.set(epochEndTimestamp, epochRecord(epochEndTimestamp, {
+        status: 'RESOLVED',
+        result_status: 'DETERMINED',
+        resolution_digest: `0x${'d'.repeat(64)}`,
+      }));
+    } else {
+      throw new Error(`unexpected write ${transaction.method}`);
+    }
+    transaction.applied = true;
+  }
+
+  function settleFinalized() {
+    for (const transaction of transactions.values()) {
+      if (nowMs - transaction.submittedAtMs >= 30 * 60 * 1_000) {
+        applyFinalized(transaction);
+      }
+    }
+  }
+
+  const operator = emptyExecutionOperator({
+    getEpochPage: async (offset, limit) => {
+      const ids = [...epochs.keys()].sort((left, right) => left - right).map(String);
+      const items = ids.slice(offset, offset + limit);
+      return {
+        offset,
+        next_offset: offset + items.length,
+        total: ids.length,
+        epoch_ids: items,
+      };
+    },
+    getEpoch: async (epochEndTimestamp) => structuredClone(epochs.get(Number(epochEndTimestamp))),
+    submitWrite: async (method, args, onHash) => {
+      sequence += 1;
+      const transactionHash = `0x${sequence.toString(16).padStart(64, '0')}`;
+      const transaction = {
+        transactionHash,
+        method,
+        args: args.map(String),
+        submittedAtMs: nowMs,
+        applied: false,
+      };
+      transactions.set(transactionHash, transaction);
+      submissions.push(transaction);
+      await onHash(transactionHash);
+    },
+    getTransactionStatus: async (transactionHash) => {
+      const transaction = transactions.get(transactionHash);
+      if (!transaction) throw new Error('unknown simulated transaction');
+      if (nowMs - transaction.submittedAtMs >= 30 * 60 * 1_000) {
+        applyFinalized(transaction);
+        return 'FINALIZED';
+      }
+      return 'ACCEPTED';
+    },
+    getAcceptedReceipt: async (transactionHash) => {
+      const transaction = transactions.get(transactionHash);
+      return acceptedReceipt({
+        transactionHash,
+        method: transaction.method,
+        args: transaction.args,
+      });
+    },
+    waitFinalized: async (transactionHash) => {
+      const transaction = transactions.get(transactionHash);
+      applyFinalized(transaction);
+      return {
+        transactionHash,
+        statusName: 'FINALIZED',
+        txExecutionResultName: 'FINISHED_WITH_RETURN',
+        recipient: CONTRACT,
+        txDataDecoded: {
+          type: 'call',
+          callData: { method: transaction.method, args: transaction.args },
+        },
+      };
+    },
+  });
+
+  for (let run = 0; run < 32; run += 1) {
+    nowMs = startMs + run * 15 * 60 * 1_000;
+    settleFinalized();
+    if (new Date(nowMs).getUTCMinutes() === 7) {
+      const currentHour = Math.floor(nowMs / hourMs) * 3_600;
+      assert.equal(epochs.has(currentHour + 3_600), true);
+      assert.equal(epochs.has(currentHour + 7_200), true);
+    }
+    const result = await runV8KeeperOnce({
+      config: config({
+        maxWritesPerRun: 5,
+        finalityRetries: 480,
+        finalityIntervalMs: 5_000,
+        postStateAttempts: 5,
+        postStateIntervalMs: 2_000,
+      }),
+      execute: true,
+      operator,
+      journalClient: journal.client,
+      nowEpochSeconds: Math.floor(nowMs / 1_000),
+      logger: () => {},
+      sleep: async () => {},
+      deadlineAtMs: nowMs + 45 * 60 * 1_000,
+      clockMs: () => nowMs,
+      journalSessionOptions: {
+        setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {},
+      },
+    });
+    assert.equal(result.blocked, false);
+    assert.ok(result.accepted.length <= 2);
+  }
+
+  for (let hour = 1; hour < 8; hour += 1) {
+    const lower = startMs + hour * hourMs;
+    const upper = lower + hourMs;
+    const hourly = submissions.filter(
+      ({ submittedAtMs }) => submittedAtMs >= lower && submittedAtMs < upper,
+    );
+    assert.equal(hourly.filter(({ method }) => method === 'resolve_epoch').length, 1);
+    assert.equal(hourly.filter(({ method }) => method === 'create_epoch').length, 1);
+  }
+  assert.ok(submissions.every(({ method }) => ['create_epoch', 'resolve_epoch'].includes(method)));
+});
+
 test('recovery verifies FINALIZED_SUCCESS after a concurrent payout successor transition', async () => {
   const journal = createMemoryAuthoritativeKeeperJournalClient();
   const hash = `0x${'3'.padStart(64, '0')}`;
@@ -436,7 +671,7 @@ test('recovery verifies FINALIZED_SUCCESS after a concurrent payout successor tr
   assert.equal(journal.operations.get(operationId).state, 'VERIFIED');
 });
 
-test('recovery polls UNKNOWN and ACCEPTED until the exact submitted epoch is finalized', async () => {
+test('scheduled recovery probes lifecycle nonblocking and never rebroadcasts on status outage', async () => {
   const journal = createMemoryAuthoritativeKeeperJournalClient();
   const hash = `0x${'4'.padStart(64, '0')}`;
   const epochEndTimestamp = (Math.floor(NOW / 3600) + 3) * 3600;
@@ -454,9 +689,16 @@ test('recovery polls UNKNOWN and ACCEPTED until the exact submitted epoch is fin
     transactionHash: hash,
     lifecycleStatus: 'UNKNOWN',
   });
-  const statuses = ['UNKNOWN', 'ACCEPTED', 'FINALIZED'];
+  const statuses = [
+    new Error('temporary Bradbury status transport failure'),
+    'UNKNOWN',
+    new Error('temporary Bradbury status backend failure'),
+    'ACCEPTED',
+    'FINALIZED',
+  ];
   let statusReads = 0;
   let submitCalls = 0;
+  const sleeps = [];
   const epoch = epochRecord(epochEndTimestamp, { status: 'OPEN' });
   const operator = {
     canSignLockedAccount: true,
@@ -473,7 +715,11 @@ test('recovery polls UNKNOWN and ACCEPTED until the exact submitted epoch is fin
     }),
     getEpoch: async () => structuredClone(epoch),
     getPayoutPage: async (offset) => ({ offset, next_offset: offset, total: 0, payouts: [] }),
-    getTransactionStatus: async () => statuses[statusReads++],
+    getTransactionStatus: async () => {
+      const status = statuses[statusReads++];
+      if (status instanceof Error) throw status;
+      return status;
+    },
     waitFinalized: async () => ({
       transactionHash: hash,
       statusName: 'FINALIZED',
@@ -487,21 +733,195 @@ test('recovery polls UNKNOWN and ACCEPTED until the exact submitted epoch is fin
     submitWrite: async () => { submitCalls += 1; },
   };
   const result = await runV8KeeperOnce({
-    config: config({ finalityRetries: 3, finalityIntervalMs: 100 }),
+    config: config({ finalityRetries: 5, finalityIntervalMs: 100 }),
     execute: true,
     operator,
     journalClient: journal.client,
     nowEpochSeconds: NOW,
     logger: () => {},
-    sleep: async () => {},
+    sleep: async (milliseconds) => { sleeps.push(milliseconds); },
     journalSessionOptions: { setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {} },
   });
-  assert.equal(statusReads, 3);
+  assert.equal(statusReads, 1);
+  assert.deepEqual(sleeps, []);
   assert.equal(submitCalls, 0);
-  assert.equal(result.blocked, false);
-  assert.equal(result.recovered[0].status, 'EPOCH_OPEN');
-  assert.equal(journal.operations.get(operationId).state, 'VERIFIED');
+  assert.equal(result.blocked, true);
+  assert.equal(result.pending[0].reason, 'LIFECYCLE_STATUS_UNAVAILABLE');
+  assert.equal(journal.operations.get(operationId).state, 'SUBMITTED');
   assert.equal(journal.operations.get(operationId).transactionHash, hash);
+});
+
+test('receipt-proven ACCEPTED handoff pipelines one independent subject and suppresses duplicates', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  const firstEpoch = Math.ceil((NOW + 7_200) / 3_600) * 3_600;
+  const secondEpoch = firstEpoch + 3_600;
+  const firstHash = `0x${'8'.repeat(64)}`;
+  const secondHash = `0x${'9'.repeat(64)}`;
+  const firstOperationId = journal.seedOperation({
+    deploymentAlias: 'v8', chainId: '4221', contractAddress: CONTRACT,
+    subjectType: 'epoch', subjectId: String(firstEpoch), method: 'create_epoch',
+    args: [String(firstEpoch)], valueAtto: '0', signerAddress: KEEPER,
+    state: 'SUBMITTED', transactionHash: firstHash, lifecycleStatus: 'UNKNOWN',
+  });
+  const submissions = [];
+  let finalizedReceiptReads = 0;
+  const operator = emptyExecutionOperator({
+    getTransactionStatus: async () => 'ACCEPTED',
+    getAcceptedReceipt: async (transactionHash) => acceptedReceipt({
+      transactionHash,
+      method: 'create_epoch',
+      args: [String(transactionHash === firstHash ? firstEpoch : secondEpoch)],
+    }),
+    submitWrite: async (method, args, onHash) => {
+      submissions.push({ method, args: [...args] });
+      await onHash(secondHash);
+    },
+    waitFinalized: async () => {
+      finalizedReceiptReads += 1;
+      throw new Error('ACCEPTED handoff must not wait for finality');
+    },
+  });
+  const result = await runV8KeeperOnce({
+    config: config({ maxWritesPerRun: 5 }), execute: true, operator,
+    journalClient: journal.client, nowEpochSeconds: NOW, logger: () => {},
+    sleep: async () => {},
+    journalSessionOptions: {
+      setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {},
+    },
+  });
+
+  assert.equal(result.blocked, false);
+  assert.deepEqual(submissions, [{ method: 'create_epoch', args: [String(secondEpoch)] }]);
+  assert.equal(result.suppressedActionCount, 1);
+  assert.equal(result.skipped[0].reason, 'DURABLE_OPERATION_IN_FLIGHT');
+  assert.equal(result.accepted.length, 2);
+  assert.equal(finalizedReceiptReads, 0);
+  const operations = [...journal.operations.values()];
+  assert.deepEqual(operations.map((operation) => operation.pipelineSlot).sort(), [0, 1]);
+  const successor = operations.find((operation) => operation.operationId !== firstOperationId);
+  assert.equal(successor.handoffPredecessorOperationId, firstOperationId);
+  assert.equal(successor.lifecycleStatus, 'ACCEPTED');
+  assert.equal(successor.acceptanceEvidence.contractAddress, CONTRACT);
+  assert.equal(successor.acceptanceEvidence.recipient, CONTRACT);
+  assert.equal(successor.acceptanceEvidence.method, 'create_epoch');
+  assert.deepEqual(successor.acceptanceEvidence.arguments, [String(secondEpoch)]);
+  assert.equal(successor.acceptanceEvidence.txExecutionResultName, 'FINISHED_WITH_RETURN');
+  assert.equal(journal.calls.filter(({ method }) => method === 'acceptHandoff').length, 3);
+
+  let thirdSubmissions = 0;
+  const capacityResult = await runV8KeeperOnce({
+    config: config({ maxWritesPerRun: 5 }),
+    execute: true,
+    operator: emptyExecutionOperator({
+      getTransactionStatus: async () => 'ACCEPTED',
+      getAcceptedReceipt: async (transactionHash) => {
+        const candidate = operations.find((entry) => entry.transactionHash === transactionHash);
+        return acceptedReceipt({
+          transactionHash,
+          method: candidate.method,
+          args: candidate.args,
+        });
+      },
+      getPayoutPage: async (offset) => ({
+        offset,
+        next_offset: offset === 0 ? 1 : offset,
+        total: 1,
+        payouts: offset === 0 ? [payoutRecord()] : [],
+      }),
+      getPayoutRailState: async () => ({ prepared: true, credited: false, withdrawn: false }),
+      submitWrite: async () => { thirdSubmissions += 1; },
+    }),
+    journalClient: journal.client,
+    nowEpochSeconds: NOW,
+    logger: () => {},
+    sleep: async () => {},
+    journalSessionOptions: {
+      setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {},
+    },
+  });
+  assert.equal(capacityResult.blocked, false);
+  assert.equal(thirdSubmissions, 0);
+  assert.ok(capacityResult.skipped.some(
+    ({ reason, payoutId }) => reason === 'KEEPER_PIPELINE_CAPACITY' && payoutId === PAYOUT,
+  ));
+});
+
+test('an appeal regression from ACCEPTED preserves evidence but blocks every new signature', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  const epoch = Math.ceil((NOW + 7_200) / 3_600) * 3_600;
+  const hash = `0x${'a'.repeat(64)}`;
+  const operationId = journal.seedOperation({
+    deploymentAlias: 'v8', chainId: '4221', contractAddress: CONTRACT,
+    subjectType: 'epoch', subjectId: String(epoch), method: 'create_epoch',
+    args: [String(epoch)], valueAtto: '0', signerAddress: KEEPER,
+    state: 'SUBMITTED', transactionHash: hash, lifecycleStatus: 'ACCEPTED',
+  });
+  const operation = journal.operations.get(operationId);
+  operation.acceptedAt = '2027-01-15T09:55:00.000Z';
+  operation.acceptanceRevalidatedAt = '2027-01-15T09:56:00.000Z';
+  operation.acceptanceEvidence = {
+    transactionHash: hash, contractAddress: CONTRACT, recipient: CONTRACT,
+    method: 'create_epoch', arguments: [String(epoch)], lifecycleStatus: 'ACCEPTED',
+    txExecutionResultName: 'FINISHED_WITH_RETURN', receiptIdentityVerified: true,
+    executionVerified: true, executionSucceeded: true,
+  };
+  let submissions = 0;
+  let acceptedReceiptReads = 0;
+  const result = await runV8KeeperOnce({
+    config: config(), execute: true,
+    operator: emptyExecutionOperator({
+      getTransactionStatus: async () => 'COMMITTING',
+      getAcceptedReceipt: async () => { acceptedReceiptReads += 1; },
+      submitWrite: async () => { submissions += 1; },
+    }),
+    journalClient: journal.client, nowEpochSeconds: NOW, logger: () => {},
+    sleep: async () => {},
+    journalSessionOptions: {
+      setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {},
+    },
+  });
+
+  assert.equal(result.blocked, true);
+  assert.equal(result.pending[0].reason, 'LIFECYCLE_NONFINAL');
+  assert.equal(submissions, 0);
+  assert.equal(acceptedReceiptReads, 0);
+  assert.equal(operation.lifecycleStatus, 'COMMITTING');
+  assert.equal(operation.acceptedAt, '2027-01-15T09:55:00.000Z');
+  assert.equal(operation.acceptanceEvidence.transactionHash, hash);
+});
+
+test('status-only ACCEPTED with a mismatched receipt cannot mint handoff eligibility', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  const epoch = Math.ceil((NOW + 7_200) / 3_600) * 3_600;
+  const hash = `0x${'c'.repeat(64)}`;
+  const operationId = journal.seedOperation({
+    deploymentAlias: 'v8', chainId: '4221', contractAddress: CONTRACT,
+    subjectType: 'epoch', subjectId: String(epoch), method: 'create_epoch',
+    args: [String(epoch)], valueAtto: '0', signerAddress: KEEPER,
+    state: 'SUBMITTED', transactionHash: hash, lifecycleStatus: 'UNKNOWN',
+  });
+  let submissions = 0;
+  const result = await runV8KeeperOnce({
+    config: config(), execute: true,
+    operator: emptyExecutionOperator({
+      getTransactionStatus: async () => 'ACCEPTED',
+      getAcceptedReceipt: async () => acceptedReceipt({
+        transactionHash: hash, method: 'resolve_epoch', args: [String(epoch)],
+      }),
+      submitWrite: async () => { submissions += 1; },
+    }),
+    journalClient: journal.client, nowEpochSeconds: NOW, logger: () => {},
+    sleep: async () => {},
+    journalSessionOptions: {
+      setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {},
+    },
+  });
+
+  assert.equal(result.blocked, true);
+  assert.equal(result.pending[0].reason, 'ACCEPTED_RECEIPT_UNPROVEN');
+  assert.equal(submissions, 0);
+  assert.equal(journal.operations.get(operationId).acceptedAt, null);
+  assert.equal(journal.operations.get(operationId).acceptanceEvidence, null);
 });
 
 test('recovery revalidates only a finalized generic receipt-identity quarantine', async () => {

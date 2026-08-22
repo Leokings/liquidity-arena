@@ -108,7 +108,7 @@ test('health is authenticated but does not require an idempotency key', async ()
   assert.equal(res.headers['cache-control'], 'no-store');
 });
 
-test('client readiness requires the exact Bradbury version 5 journal schema', async () => {
+test('client readiness requires the exact Bradbury version 6 journal schema', async () => {
   const ready = {
     status: 'ready',
     service: 'liquidity-arena-keeper-journal',
@@ -120,7 +120,7 @@ test('client readiness requires the exact Bradbury version 5 journal schema', as
       authenticationConfigured: true,
       signerConfigured: true,
     },
-    database: { configured: true, ready: true, schemaVersion: 5 },
+    database: { configured: true, ready: true, schemaVersion: 6 },
   };
   const client = createKeeperJournalClient({
     endpoint: 'https://example.test/api/keeper-journal',
@@ -130,14 +130,14 @@ test('client readiness requires the exact Bradbury version 5 journal schema', as
       headers: { 'content-type': 'application/json' },
     }),
   });
-  assert.equal((await client.health()).database.schemaVersion, 5);
+  assert.equal((await client.health()).database.schemaVersion, 6);
 
   const staleClient = createKeeperJournalClient({
     endpoint: 'https://example.test/api/keeper-journal',
     secret: SECRET,
     fetchImpl: async () => new Response(JSON.stringify({
       ...ready,
-      database: { configured: true, ready: true, schemaVersion: 4 },
+      database: { configured: true, ready: true, schemaVersion: 5 },
     }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
@@ -266,6 +266,11 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
     transactionHash: null,
     lifecycleStatus: null,
     lifecycleObservedAt: null,
+    pipelineSlot: 0,
+    handoffPredecessorOperationId: null,
+    acceptedAt: null,
+    acceptanceRevalidatedAt: null,
+    acceptanceEvidence: null,
     stateReasonCode: null,
     quarantineReason: null,
     preparedAt: '2026-08-20T00:00:00.000Z',
