@@ -538,20 +538,16 @@ export async function reconcileAuthoritativeOperation({
         operation = validateRecoveredKeeperOperation(observed?.operation || operation);
       }
       if (lifecycleStatus === 'FINALIZED') break;
-      if (lifecycleStatus === 'UNKNOWN') {
-        return Object.freeze({
-          verified: false,
-          operation,
-          pending: pending(operation, 'LIFECYCLE_UNKNOWN'),
-        });
-      }
       if (attempt < attempts) await sleep(lifecycleIntervalMs);
     }
     if (lifecycleStatus !== 'FINALIZED') {
       return Object.freeze({
         verified: false,
         operation,
-        pending: pending(operation, 'LIFECYCLE_NONFINAL'),
+        pending: pending(
+          operation,
+          lifecycleStatus === 'UNKNOWN' ? 'LIFECYCLE_UNKNOWN' : 'LIFECYCLE_NONFINAL',
+        ),
       });
     }
 
