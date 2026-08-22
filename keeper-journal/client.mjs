@@ -163,7 +163,7 @@ function validatedOperation(value) {
   const keys = [
     'operationId', 'logicalOperationId', 'attemptNumber', 'retryOfOperationId',
     'deploymentAlias', 'network', 'chainId', 'signerAddress',
-    'contractAddress', 'method', 'args', 'valueAtto', 'epochEndTimestamp',
+    'contractAddress', 'subjectType', 'subjectId', 'method', 'args', 'valueAtto',
     'state', 'transactionHash', 'lifecycleStatus', 'lifecycleObservedAt',
     'stateReasonCode', 'quarantineReason', 'preparedAt', 'submittedAt',
     'finalizedAt', 'verifiedAt', 'updatedAt', 'revision',
@@ -183,14 +183,20 @@ function validatedOperation(value) {
       || !/^[0-9a-f]{64}$/.test(value.logicalOperationId)
       || !/^[1-9]\d{0,18}$/.test(value.attemptNumber)
       || (value.retryOfOperationId !== null && !/^[0-9a-f]{64}$/.test(value.retryOfOperationId))
-      || !['v6', 'v7'].includes(value.deploymentAlias)
-      || value.network !== 'studionet'
-      || value.chainId !== '61999'
+      || value.deploymentAlias !== 'v8'
+      || value.network !== 'bradbury'
+      || value.chainId !== '4221'
       || !/^0x[0-9a-f]{40}$/.test(value.signerAddress)
       || !/^0x[0-9a-f]{40}$/.test(value.contractAddress)
-      || !['create_epoch', 'resolve_epoch', 'activate_timeout_refund'].includes(value.method)
+      || !['epoch', 'payout'].includes(value.subjectType)
+      || typeof value.subjectId !== 'string'
+      || ![
+        'create_epoch', 'resolve_epoch', 'activate_timeout_refund',
+        'retry_prepare_payout', 'dispatch_payout', 'retry_payout',
+        'confirm_payout', 'refresh_payout_withdrawal',
+      ].includes(value.method)
       || !Array.isArray(value.args) || value.args.length !== 1 || typeof value.args[0] !== 'string'
-      || value.args[0] !== value.epochEndTimestamp
+      || value.args[0] !== value.subjectId
       || value.valueAtto !== '0'
       || !states.has(value.state)
       || (value.transactionHash !== null && !/^0x[0-9a-f]{64}$/.test(value.transactionHash))
@@ -225,10 +231,11 @@ function validatedOperation(value) {
       deploymentAlias: value.deploymentAlias,
       chainId: value.chainId,
       contractAddress: value.contractAddress,
+      subjectType: value.subjectType,
+      subjectId: value.subjectId,
       method: value.method,
       args: value.args,
       valueAtto: value.valueAtto,
-      epochEndTimestamp: value.epochEndTimestamp,
     });
     expectedOperationId = keeperAttemptOperationId(value.logicalOperationId, value.attemptNumber);
     if (value.attemptNumber !== '1') {
@@ -261,9 +268,10 @@ function assertPreparedResponseIdentity(result, requested, lease) {
       || operation.deploymentAlias !== requested.deploymentAlias
       || operation.chainId !== requested.chainId
       || operation.contractAddress !== requested.contractAddress
+      || operation.subjectType !== requested.subjectType
+      || operation.subjectId !== requested.subjectId
       || operation.method !== requested.method
       || operation.valueAtto !== requested.valueAtto
-      || operation.epochEndTimestamp !== requested.epochEndTimestamp
       || operation.args.length !== requested.args.length
       || operation.args.some((argument, index) => argument !== requested.args[index])
       || operation.signerAddress !== lease.signerAddress.toLowerCase()) {
@@ -299,18 +307,18 @@ function validatedSuccess(action, payload) {
       && payload.configuration.signerConfigured === true;
     const databaseReady = payload.database.configured === true
       && payload.database.ready === true
-      && payload.database.schemaVersion === 3;
+      && payload.database.schemaVersion === 4;
     if (!['ready', 'degraded'].includes(payload.status)
         || payload.service !== 'liquidity-arena-keeper-journal'
         || typeof payload.ready !== 'boolean'
-        || payload.network !== 'studionet'
-        || payload.chainId !== '61999'
+        || payload.network !== 'bradbury'
+        || payload.chainId !== '4221'
         || typeof payload.configuration.databaseConfigured !== 'boolean'
         || typeof payload.configuration.authenticationConfigured !== 'boolean'
         || typeof payload.configuration.signerConfigured !== 'boolean'
         || typeof payload.database.configured !== 'boolean'
         || typeof payload.database.ready !== 'boolean'
-        || ![null, 3].includes(payload.database.schemaVersion)
+        || ![null, 4].includes(payload.database.schemaVersion)
         || (payload.ready === true
           ? payload.status !== 'ready' || !configurationReady || !databaseReady
           : payload.status !== 'degraded')) {
@@ -381,10 +389,11 @@ function operationBody(value) {
     deploymentAlias: operation.deploymentAlias,
     chainId: operation.chainId,
     contractAddress: operation.contractAddress,
+    subjectType: operation.subjectType,
+    subjectId: operation.subjectId,
     method: operation.method,
     args: operation.args,
     valueAtto: operation.valueAtto,
-    epochEndTimestamp: operation.epochEndTimestamp,
   });
 }
 

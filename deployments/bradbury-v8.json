@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "deploymentAlias": "v8",
+  "network": "testnet-bradbury",
+  "chainId": 4221,
+  "contractAddress": "0xe6aa95e551f8407b139474ec60c2012e4cc8a6cd",
+  "protocolVersion": "LIQUIDITY_ARENA_V8",
+  "policyVersion": "CRYPTO_SPOT_1M_MEDIAN_V1",
+  "payoutProtocolVersion": "IDEMPOTENT_EVM_VAULT_V1",
+  "payoutFactoryAddress": "0x944fdadd826c2a159c63cb100db174716ccd1317",
+  "schemaSha256": "c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4",
+  "sourcePath": "contracts/LiquidityArenaV8.release.py",
+  "sourceSha256": "160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa",
+  "deploymentTransactionHash": "0x955ec665a7f9a1ee7c7d9dabcac603d5eaba12fefd5eb0e5b738708daaa58e27",
+  "factoryBindingTransactionHash": "0xc51b7ebb2755f6303a5a1d2959055461eb8a78f2889177f6d83abbb7ef29f7e4",
+  "deploymentStatus": "FINALIZED_BOUND_INACTIVE",
+  "active": false
+}

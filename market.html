@@ -150,12 +150,12 @@
         </dl>
         <button class="prediction-cta" id="prediction-button" type="button" disabled>
           <span>
-            <small id="prediction-kicker">STUDIONET ARENA</small>
+            <small id="prediction-kicker">BRADBURY V8 ARENA</small>
             <strong id="prediction-label">LOADING ROUND</strong>
           </span>
           <span aria-hidden="true">→</span>
         </button>
-        <p class="prediction-availability" id="prediction-availability" role="status">Checking the current StudioNet epoch and wager window.</p>
+        <p class="prediction-availability" id="prediction-availability" role="status">Checking the current Bradbury V8 epoch and wager window.</p>
       </aside>
     </section>
 
@@ -179,7 +179,7 @@
     <footer class="footer-bar">
       <span>MARKET VISUALIZATION · NOT FINANCIAL ADVICE</span>
       <span class="footer-center"><i></i> PROVISIONAL MARKET EVIDENCE</span>
-      <a id="network-explorer" href="https://explorer-studio.genlayer.com/" target="_blank" rel="noopener noreferrer">STUDIONET EXPLORER</a>
+      <a id="network-explorer" href="https://explorer-bradbury.genlayer.com/" target="_blank" rel="noopener noreferrer">BRADBURY EXPLORER</a>
     </footer>
 
     <div class="mobile-asset-strip" id="mobile-asset-strip" aria-label="Select an asset"></div>
@@ -188,7 +188,7 @@
       <button class="modal-backdrop" type="button" data-close-modal aria-label="Close prediction dialog"></button>
       <section class="prediction-modal" role="dialog" aria-modal="true" aria-labelledby="prediction-title" tabindex="-1">
         <button class="modal-close" type="button" data-close-modal aria-label="Close">×</button>
-        <span class="modal-eyebrow">GENLAYER NATIVE-GEN ARENA · <span id="round-network">STUDIONET</span></span>
+        <span class="modal-eyebrow">GENLAYER NATIVE-GEN ARENA · <span id="round-network">BRADBURY</span></span>
         <h1 id="prediction-title">Which asset wins this return battle?</h1>
         <p id="prediction-rule-copy">Choose one asset per objective. Same-asset top-ups remain available until the exact wager close.</p>
 
@@ -234,7 +234,7 @@
               <button type="button" data-stake="1">1</button>
             </div>
           </div>
-          <p class="stake-help" id="stake-help">Exact 18-decimal GEN input. StudioNet is gasless; your wallet needs faucet GEN to cover the wager value.</p>
+          <p class="stake-help" id="stake-help">Exact 18-decimal GEN input. Bradbury charges testnet gas, so keep faucet GEN above the wager value.</p>
           <p class="stake-error" id="stake-error" role="status"></p>
           <dl class="wager-quote">
             <div><dt>ROUND POOL</dt><dd id="round-pool">— GEN</dd></div>
@@ -253,6 +253,8 @@
             <div><dt>PICK</dt><dd id="position-choice">—</dd></div>
             <div><dt>STAKED</dt><dd id="position-stake">— GEN</dd></div>
             <div><dt>CLAIMABLE</dt><dd id="position-claimable">— GEN</dd></div>
+            <div><dt>PAYOUT STAGE</dt><dd id="position-payout-stage">—</dd></div>
+            <div><dt>EVM VAULT</dt><dd id="position-payout-vault">—</dd></div>
           </dl>
           <button class="claim-reconnect" id="claim-reconnect" type="button" hidden>
             RECONNECT WALLET TO VERIFY &amp; CLAIM
@@ -261,6 +263,9 @@
             RETRY POSITION VERIFICATION
           </button>
           <button class="claim-wager" id="claim-wager" type="button" disabled>CLAIM UNAVAILABLE</button>
+          <button class="position-refresh" id="payout-secondary" type="button" hidden disabled>
+            PAYOUT RETRY UNAVAILABLE
+          </button>
           <button class="unlock-refund" id="unlock-refund" type="button" hidden disabled>
             EMERGENCY PRINCIPAL UNLOCK UNAVAILABLE
           </button>
@@ -284,14 +289,14 @@
           <span class="consensus-glyph" aria-hidden="true">◎</span>
           <div class="consensus-copy">
             <p><strong>Provisional map, authoritative contract.</strong> ROUND uses exact Binance one-minute boundaries for immediate feedback. The selected deployment's FINALIZED five-exchange median result alone controls payouts.</p>
-            <p><strong>StudioNet test escrow.</strong> <span id="network-escrow-copy">The build-configured arena deployment escrows faucet-issued test GEN and uses pull-based claims/refunds.</span></p>
+            <p><strong>Bradbury V8 test escrow.</strong> <span id="network-escrow-copy">The build-configured V8 deployment creates immutable EVM payout vaults. Recipients withdraw their own faucet-issued test GEN.</span></p>
           </div>
         </div>
 
         <button class="submit-prediction" id="submit-prediction" type="button" disabled>
           <span>SELECT AN ASSET</span><span aria-hidden="true">→</span>
         </button>
-        <p class="modal-status" id="modal-status" role="status">Connect a StudioNet wallet and wait for the verified active wager window, or open a legacy claim.</p>
+        <p class="modal-status" id="modal-status" role="status">Connect a Bradbury wallet and wait for the verified active V8 wager window, or resume a V8 payout.</p>
         <p class="testnet-warning"><strong>TESTNET ONLY.</strong> GEN used here is faucet-issued test currency with no real-world value.</p>
       </section>
     </div>
@@ -305,7 +310,7 @@
         <ol>
           <li><span>01</span><div><strong>Territory is return-only</strong><p>The larger territory always has the higher signed return for the selected view. Every asset keeps at least five percent of the map.</p></div></li>
           <li><span>02</span><div><strong>Only ROUND resets</strong><p>ROUND resets at the canonical battle-start candle. 1H–1W are rolling market context and are never used as the active battle scoreboard.</p></div></li>
-          <li><span>03</span><div><strong id="how-resolution-title">Live leaders are provisional; GenLayer settles funds</strong><p id="how-resolution-copy">The live ROUND map uses Binance boundary data for immediate feedback. The allowlisted StudioNet deployment independently evaluates the five-exchange policy; only its FINALIZED result controls claims.</p></div></li>
+          <li><span>03</span><div><strong id="how-resolution-title">Live leaders are provisional; GenLayer settles funds</strong><p id="how-resolution-copy">The live ROUND map uses Binance boundary data for immediate feedback. The allowlisted Bradbury V8 deployment independently evaluates the five-exchange policy; only its FINALIZED result controls payouts.</p></div></li>
           <li><span>04</span><div><strong>Freshness stays visible</strong><p>Crypto trades 24/7, but a feed can still pause or carry a prior quote. The arena shows when each price was genuinely updated instead of treating every packet as new.</p></div></li>
         </ol>
       </section>

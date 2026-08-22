@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       genLayerRpcProxyPlugin({
-        upstreamUrl: env.GENLAYER_RPC_URL || 'https://studio.genlayer.com/api',
+        upstreamUrl: env.GENLAYER_RPC_URL || 'https://rpc-bradbury.genlayer.com',
       }),
       // The exact stream route must be registered before the broader REST
       // proxy, which intentionally rejects unknown /api/binance/* paths.

@@ -2,17 +2,18 @@
 
 ## Status
 
-V8 is an inactive, unbroadcast Bradbury release candidate. The repository contains the GenLayer
-contract, immutable EVM payout factory/vault, Bradbury factory-deploy/bind tools, and inactive-
-deployment harness. No V8-release transaction has been broadcast: nothing has been deployed, bound,
-funded, canaried, or cut over. No production or StudioNet route points to V8, and new wagering must
-remain on V7 until every live-network gate in this document passes.
+V8 is deployed and finalized on Bradbury at
+`0xe6aa95e551f8407b139474ec60c2012e4cc8a6cd`. Its production payout factory is finalized and
+explorer-verified at `0x944FdADd826C2a159c63cB100DB174716ccd1317`, and its one-time binding to
+that exact V8 arena is also finalized. The checked-in manifest remains deliberately `active:false`:
+delivery-reserve funding, payout activation, risk resume, attended canary, and production cutover
+are still pending. An address and finalized binding are not an assertion that payouts or new risk
+are live.
 
-The deployed V7 contract remains immutable and currently retains 2 GEN across two eligible legacy
-refunds. Those obligations cannot be read, moved, or claimed by V8: V7 has no upgrader, its claim is
-sender-bound, and V8 cannot pull V7 storage or balance. The public application must therefore keep
-V7 as a distinct legacy claim target after any future V8 cutover. Copying the two refunds into V8
-would create duplicate obligations and is prohibited.
+The deployed V7 contract remains immutable and its storage/balance cannot be moved into V8. This is
+a testnet cutover: V7 state and its remaining test-token claims will be abandoned rather than
+migrated or duplicated. The application, history service, and keeper will support only V8 after
+cutover.
 
 ## Why an escrow is required
 
@@ -44,6 +45,16 @@ V8 avoids those paths deliberately:
 
 The factory/vault split is therefore required for this runner. A future V0.3 port may simplify the
 flow to one value-bearing escrow method, but only after a full contract and test migration.
+
+Bradbury also imposes a practical transaction-pubdata ceiling below the original readable V8
+source size. The repository therefore keeps a reviewed readable source and deterministically
+generates `contracts/LiquidityArenaV8.release.py` with Python 3.13 and pinned
+`python-minifier==3.2.0`. The generator proves identical storage layout, constructor, and retained
+public ABI before emitting the deployable artifact. The current artifact is 44,125 bytes (SHA-256
+`160965bc42b34dce42fa7154923116f21edb39a7a42abc61bde162db8e15d5aa`), below the enforced
+45,000-byte source and 45,500-byte outer-calldata caps. A live credential-free Bradbury estimate of
+the exact release transaction succeeded at 35,346,217 gas; any estimate error, SDK fallback, or
+gas-envelope drift fails before signing.
 
 ## State machine
 
@@ -103,9 +114,12 @@ mismatch before signing. After the V8 ghost address is known, the binder may bin
 once. Activation verifies the
 exact binding and payout protocol, but those self-reported views are not a trust anchor. The exact
 independently audited, non-proxy factory address must also be compiled into the V8 source for chain
-`4221`. The release-candidate constant is intentionally the zero address, so this source cannot
-activate until the live factory bytecode, constructor immutables, binding, and reserve sink have
-been verified and the resulting V8 source hash has been reviewed again.
+`4221`. The finalized factory `0x944FdADd826C2a159c63cB100DB174716ccd1317` is frozen into both
+the readable and generated release sources. Its runtime, constructor immutables, protocol, reserve
+sink, source publication, and initial unbound state were independently verified before that source
+anchor was committed. The factory's one-time binding to the finalized V8 ghost is now finalized;
+activation remains blocked until the delivery reserve and every remaining activation gate are
+verified.
 
 Only the bound arena ghost may prepare a payout. The factory deploys one CREATE2 vault from the
 payout ID and permanently binds its arena, recipient, amount, and payout ID. The vault:
@@ -179,7 +193,7 @@ creating a non-atomic public-risk window while an operator waits for a separate 
 
 Repository acceptance requires:
 
-- GenVM lint plus V7-equivalent timing, market, settlement, and authorization tests;
+- GenVM lint plus complete V8 timing, market, settlement, and authorization tests;
 - direct payout tests for chain/factory fail-closed activation, domain-separated IDs, duplicate
   reservation, both two-winner claim orders, player/fee symmetry, simultaneous payouts, reserve exhaustion,
   exact immutable retry, cooldown/cap, late credit, and funded-versus-withdrawn accounting;
@@ -190,9 +204,10 @@ Repository acceptance requires:
   message fees, delayed/reordered attempts, duplicate excess, exact confirmation, withdrawal, and
   fee-path symmetry.
 
-Studio/direct mocks cannot close the final EVM gate. Until live evidence exists, V8 must remain an
-inactive candidate and no `deployments/*-v8.json`, public V8 route, V8 keeper schedule, or active
-history alias may be published.
+Studio/direct mocks cannot close the final EVM gate. Deployment and binding evidence may be
+published while the manifest stays inactive, but an active production history alias, enabled
+keeper schedule, or public money action must still fail closed until reserve, activation, canary,
+and cutover evidence exists.
 
 Local verification passes GenVM lint/validation, 34 direct V8 tests, 29 Bradbury harness tests
 (included in the 463/463 root Node suite), and 59 EVM tests: nine adversarial factory/vault tests plus
@@ -204,12 +219,9 @@ CI run. They prove the local state machine and tooling, not live ghost/EVM parit
 deployment evidence. The live gate must publish the resulting bytecode and constructor immutables
 and repeat the source/address-anchor review.
 
-A later cutover also requires a new append-only database migration and a global one-active-
-deployment constraint; the current history schema can otherwise leave both V7 and V8 marked active.
-The safe sequence is: complete a finalized sacrificial factory rehearsal; deploy and explorer-verify
-a finalized production unbound factory; freeze its exact address into V8 and repeat review/CI;
-deploy inactive V8; bind the factory once from finalized proof; fund reserve; activate payouts with
-risk paused; run live payout-only canaries; stop every V7 creation source, settle/drain all open V7
-epochs, and retain legacy V7 claim routes/liability; apply the migration/global one-active constraint;
-then run a separately reviewed attended risk canary and cut over the app and keeper while keeping V7
-claims/liability distinct.
+The finalized rehearsal, production-factory deployment, source freeze, inactive V8 deployment, and
+one-time factory binding are complete. The remaining safe sequence is: fund the delivery reserve;
+activate payouts with risk paused; apply and verify the append-only migration/global one-active
+constraint; run a separately reviewed attended risk and payout canary; explicitly resume new risk;
+then complete the production app, history-service, and keeper cutover. The manifest must remain
+`active:false` until those gates are closed.

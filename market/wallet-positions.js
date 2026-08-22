@@ -1,211 +1,45 @@
-import { normalizeV6Entry } from './v6-state.js';
-
-const MAX_POSITION_PAGE_SIZE = 50;
-const OBJECTIVES = new Set(['HIGH', 'LOW']);
 const CLAIM_INTENT_VALUE = '1';
-const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
+const OBJECTIVES = new Set(['HIGH', 'LOW']);
+const ADDRESS_PATTERN = /^0x[0-9a-f]{40}$/;
+const DEFAULT_EPOCH_PAGE_SIZE = 25;
 
-export class WalletPositionRetryError extends Error {
-  constructor(code, message, { refreshNewest = false } = {}) {
-    super(message);
-    this.name = 'WalletPositionRetryError';
-    this.code = code;
-    this.retryable = true;
-    this.refreshNewest = refreshNewest;
-  }
-}
-
-function unsignedInteger(value, label) {
+function positiveHourlyEpoch(value, label) {
   const normalized = Number(value);
-  if (!Number.isSafeInteger(normalized) || normalized < 0) {
-    throw new TypeError(`${label} must be a non-negative safe integer.`);
+  if (!Number.isSafeInteger(normalized) || normalized <= 0 || normalized % 3_600 !== 0) {
+    throw new RangeError(`${label} must be a positive exact-hour timestamp.`);
   }
   return normalized;
-}
-
-function deploymentIdentity(deployment) {
-  const alias = String(deployment?.alias || '').trim().toLowerCase();
-  const address = String(deployment?.address || '').trim();
-  const protocolVersion = String(deployment?.protocolVersion || '').trim();
-  if (!alias || !address || !protocolVersion) {
-    throw new TypeError('Wallet position deployment identity is incomplete.');
-  }
-  return { alias, address, protocolVersion };
-}
-
-export function walletPositionPageWindow({ total, loaded = 0, pageSize = MAX_POSITION_PAGE_SIZE }) {
-  const normalizedTotal = unsignedInteger(total, 'Wallet position count');
-  const normalizedLoaded = Math.min(
-    unsignedInteger(loaded, 'Loaded wallet position count'),
-    normalizedTotal,
-  );
-  const normalizedPageSize = unsignedInteger(pageSize, 'Wallet position page size');
-  if (normalizedPageSize < 1 || normalizedPageSize > MAX_POSITION_PAGE_SIZE) {
-    throw new RangeError(`Wallet position page size must be between 1 and ${MAX_POSITION_PAGE_SIZE}.`);
-  }
-  const remaining = normalizedTotal - normalizedLoaded;
-  const limit = Math.min(normalizedPageSize, remaining);
-  return Object.freeze({
-    total: normalizedTotal,
-    loaded: normalizedLoaded,
-    remaining,
-    limit,
-    offset: Math.max(0, remaining - limit),
-  });
-}
-
-function walletAccount(value, label) {
-  const normalized = String(value || '').trim();
-  if (!ADDRESS_PATTERN.test(normalized)) {
-    throw new TypeError(`${label} must be a 20-byte hexadecimal address.`);
-  }
-  return normalized;
-}
-
-function retryPage(code, message, options) {
-  throw new WalletPositionRetryError(code, message, options);
-}
-
-export function normalizeWalletPositionPage(rawPage, deployment, {
-  account = null,
-  offset = null,
-  limit = null,
-  expectedTotal = null,
-} = {}) {
-  if (!rawPage || typeof rawPage !== 'object' || Array.isArray(rawPage)) {
-    throw new TypeError('Wallet position page must be an object.');
-  }
-  const identity = deploymentIdentity(deployment);
-  const pageAccount = walletAccount(rawPage.account, 'Wallet position page account');
-  const pageOffset = unsignedInteger(rawPage.offset, 'Wallet position page offset');
-  const nextOffset = unsignedInteger(rawPage.next_offset, 'Wallet position page next offset');
-  const total = unsignedInteger(rawPage.total, 'Wallet position page total');
-  if (!Array.isArray(rawPage.positions)) {
-    throw new TypeError('Wallet position page positions must be an array.');
-  }
-  if (account !== null
-    && pageAccount.toLowerCase() !== walletAccount(account, 'Expected wallet account').toLowerCase()) {
-    retryPage(
-      'WALLET_POSITION_PAGE_ACCOUNT_MISMATCH',
-      'Wallet position page account does not match the requested wallet.',
-      { refreshNewest: true },
-    );
-  }
-  if (offset !== null && pageOffset !== unsignedInteger(offset, 'Expected wallet position page offset')) {
-    retryPage(
-      'WALLET_POSITION_PAGE_OFFSET_MISMATCH',
-      'Wallet position page offset does not match the requested offset.',
-      { refreshNewest: true },
-    );
-  }
-  if (expectedTotal !== null
-    && total !== unsignedInteger(expectedTotal, 'Expected wallet position page total')) {
-    retryPage(
-      'WALLET_POSITION_PAGE_TOTAL_MISMATCH',
-      'Wallet position count changed while its page was being read.',
-      { refreshNewest: true },
-    );
-  }
-  if (pageOffset > total || nextOffset > total
-    || nextOffset !== pageOffset + rawPage.positions.length) {
-    retryPage(
-      'WALLET_POSITION_PAGE_CURSOR_MISMATCH',
-      'Wallet position page cursor is inconsistent with its rows and total.',
-      { refreshNewest: true },
-    );
-  }
-  if (limit !== null) {
-    const normalizedLimit = unsignedInteger(limit, 'Wallet position page limit');
-    const expectedLength = Math.min(normalizedLimit, total - pageOffset);
-    if (rawPage.positions.length !== expectedLength) {
-      retryPage(
-        'WALLET_POSITION_PAGE_LIMIT_MISMATCH',
-        'Wallet position page length does not match the requested limit.',
-        { refreshNewest: true },
-      );
-    }
-  }
-
-  const seenIndices = new Set();
-  const positions = rawPage.positions.map((position, pageIndex) => {
-    const positionIndex = unsignedInteger(
-      position?.position_index,
-      'Wallet position index',
-    );
-    if (seenIndices.has(positionIndex)) {
-      retryPage(
-        'WALLET_POSITION_PAGE_DUPLICATE',
-        'Wallet position page contains a duplicate position index.',
-        { refreshNewest: true },
-      );
-    }
-    seenIndices.add(positionIndex);
-    if (positionIndex !== pageOffset + pageIndex) {
-      retryPage(
-        'WALLET_POSITION_PAGE_INDEX_MISMATCH',
-        'Wallet position index is inconsistent with its page offset.',
-        { refreshNewest: true },
-      );
-    }
-    const normalized = normalizeV6Entry(position);
-    const positionAccount = walletAccount(normalized.account, 'Wallet position row account');
-    if (positionAccount.toLowerCase() !== pageAccount.toLowerCase()) {
-      retryPage(
-        'WALLET_POSITION_PAGE_ACCOUNT_MISMATCH',
-        'Wallet position row account does not match its page account.',
-        { refreshNewest: true },
-      );
-    }
-    return Object.freeze({
-      ...normalized,
-      positionIndex,
-      deploymentAlias: identity.alias,
-      contractAddress: identity.address,
-      protocolVersion: identity.protocolVersion,
-    });
-  }).reverse();
-
-  return Object.freeze({
-    account: pageAccount,
-    offset: pageOffset,
-    nextOffset,
-    total,
-    positions: Object.freeze(positions),
-  });
 }
 
 export function walletClaimTarget(position) {
-  const epochEndTimestamp = unsignedInteger(
+  const epochEndTimestamp = positiveHourlyEpoch(
     position?.epochEndTimestamp,
     'Wallet position epoch',
   );
-  if (epochEndTimestamp < 1) throw new RangeError('Wallet position epoch must be positive.');
   const objective = String(position?.objective || '').trim().toUpperCase();
   if (!OBJECTIVES.has(objective)) throw new RangeError('Wallet position objective is unsupported.');
   return Object.freeze({ epochEndTimestamp, objective });
 }
 
+/**
+ * Parse only a V8 claim/payout-recovery route. Legacy deployment parameters
+ * are canonicalized by the registry before this helper runs and never retain
+ * a route to an old contract.
+ */
 export function walletClaimIntentFromHref(href, baseHref = 'https://liquidity-arena.invalid/') {
   let url;
-  try {
-    url = new URL(href, baseHref);
-  } catch {
+  try { url = new URL(href, baseHref); } catch { return null; }
+  if (url.searchParams.get('claim') !== CLAIM_INTENT_VALUE) return null;
+  if (String(url.searchParams.get('deployment') || '').trim().toLowerCase() !== 'v8') return null;
+  const epoch = String(url.searchParams.get('epoch') || '').trim();
+  if (!/^\d{10}$/.test(epoch)) return null;
+  const epochEndTimestamp = Number(epoch);
+  if (!Number.isSafeInteger(epochEndTimestamp) || epochEndTimestamp <= 0 || epochEndTimestamp % 3_600 !== 0) {
     return null;
   }
-  if (url.searchParams.get('claim') !== CLAIM_INTENT_VALUE) return null;
-  const deploymentAlias = String(url.searchParams.get('deployment') || '').trim().toLowerCase();
-  if (!/^[a-z][a-z0-9-]{0,31}$/.test(deploymentAlias)) return null;
-  const epoch = String(url.searchParams.get('epoch') || '').trim();
-  const epochEndTimestamp = /^\d{10}$/.test(epoch) ? Number(epoch) : 0;
-  if (!Number.isSafeInteger(epochEndTimestamp)
-    || epochEndTimestamp < 1
-    || epochEndTimestamp % 3_600 !== 0) return null;
-  const objectiveParam = String(url.searchParams.get('objective') || '').trim().toLowerCase();
-  const objective = objectiveParam === 'highest'
-    ? 'HIGH'
-    : objectiveParam === 'lowest' ? 'LOW' : null;
-  if (!objective) return null;
-  return Object.freeze({ deploymentAlias, epochEndTimestamp, objective });
+  const direction = String(url.searchParams.get('objective') || '').trim().toLowerCase();
+  const objective = direction === 'highest' ? 'HIGH' : direction === 'lowest' ? 'LOW' : null;
+  return objective ? Object.freeze({ deploymentAlias: 'v8', epochEndTimestamp, objective }) : null;
 }
 
 export function clearWalletClaimIntentHref(href, baseHref = 'https://liquidity-arena.invalid/') {
@@ -214,175 +48,143 @@ export function clearWalletClaimIntentHref(href, baseHref = 'https://liquidity-a
   return url.href;
 }
 
-export function walletClaimSummary(positions) {
-  const claimablePositions = Object.freeze((Array.isArray(positions) ? positions : [])
-    .filter((position) => position?.eligible === true
-      && position?.claimed !== true
-      && typeof position?.amountAtto === 'bigint'
-      && position.amountAtto > 0n));
-  return Object.freeze({
-    count: claimablePositions.length,
-    amountAtto: claimablePositions.reduce((sum, position) => sum + position.amountAtto, 0n),
-    refundCount: claimablePositions.filter((position) =>
-      String(position.settlementMode || '').startsWith('REFUND_')).length,
-    payoutCount: claimablePositions.filter((position) =>
-      !String(position.settlementMode || '').startsWith('REFUND_')).length,
-    positions: claimablePositions,
-  });
+function exactAccount(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!ADDRESS_PATTERN.test(normalized) || /^0x0{40}$/.test(normalized)) {
+    throw new TypeError('Wallet history account must be a non-zero address.');
+  }
+  return normalized;
 }
 
-export function reconcileWalletPositionSnapshot({
-  previousPositions = [],
-  previousCount = null,
-  nextPage = null,
-  observedCount = null,
-  append = false,
-  error = null,
+function pageInteger(value, label, { minimum = 0, maximum = Number.MAX_SAFE_INTEGER } = {}) {
+  const normalized = Number(value);
+  if (!Number.isSafeInteger(normalized) || normalized < minimum || normalized > maximum) {
+    throw new RangeError(`${label} is malformed.`);
+  }
+  return normalized;
+}
+
+/**
+ * Scan one newest-first page of V8 epochs and both immutable objectives.
+ *
+ * V8 deliberately has no wallet-position index. The cursor therefore counts
+ * epochs scanned, never the number of positions found. A page is accepted only
+ * if its total remains identical across reads; callers keep the previous page
+ * on any inconsistency and may retry from the same cursor.
+ */
+export async function readWalletPositionPage({
+  gateway,
+  account,
+  cursor = null,
+  pageSize = DEFAULT_EPOCH_PAGE_SIZE,
 } = {}) {
-  const verifiedPrevious = Object.freeze(Array.isArray(previousPositions)
-    ? [...previousPositions]
-    : []);
-  const verifiedPreviousCount = previousCount === null
-    ? verifiedPrevious.length
-    : unsignedInteger(previousCount, 'Previous wallet position count');
-  if (verifiedPrevious.length > verifiedPreviousCount) {
-    throw new RangeError('Loaded wallet positions exceed the previous verified on-chain count.');
+  if (typeof gateway?.readEpochPage !== 'function'
+    || typeof gateway?.readEpochClaimQuote !== 'function') {
+    throw new TypeError('A V8 gateway with epoch-page and claim-quote reads is required.');
   }
-  if (error) {
+  const normalizedAccount = exactAccount(account);
+  const contractAddress = exactAccount(gateway.contractAddress);
+  const limit = pageInteger(pageSize, 'Wallet history page size', { minimum: 1, maximum: 50 });
+  if (gateway.connected && String(gateway.account || '').toLowerCase() !== normalizedAccount) {
+    throw new Error('Connected wallet changed before V8 history scanning.');
+  }
+
+  let totalEpochs;
+  let endOffset;
+  let scannedBefore;
+  let metadataPage = null;
+  if (cursor) {
+    if (String(cursor.account || '').toLowerCase() !== normalizedAccount
+      || String(cursor.contractAddress || '').toLowerCase() !== contractAddress) {
+      throw new Error('Wallet history cursor belongs to a different chain identity.');
+    }
+    totalEpochs = pageInteger(cursor.totalEpochs, 'Wallet history total');
+    endOffset = pageInteger(cursor.nextOffset, 'Wallet history cursor', { maximum: totalEpochs });
+    scannedBefore = pageInteger(cursor.scannedEpochs, 'Wallet history scanned count', { maximum: totalEpochs });
+    if (scannedBefore !== totalEpochs - endOffset) throw new Error('Wallet history cursor is inconsistent.');
+  } else {
+    metadataPage = await gateway.readEpochPage(0, 1);
+    totalEpochs = pageInteger(metadataPage?.total, 'V8 epoch total');
+    endOffset = totalEpochs;
+    scannedBefore = 0;
+  }
+
+  if (endOffset === 0) {
     return Object.freeze({
-      positions: verifiedPrevious,
-      count: verifiedPreviousCount,
-      stale: true,
-      error: error instanceof Error ? error.message : String(error),
+      account: normalizedAccount,
+      contractAddress,
+      totalEpochs,
+      scannedEpochs: scannedBefore,
+      positions: Object.freeze([]),
+      nextCursor: null,
+      complete: true,
     });
   }
-  if (!nextPage || typeof nextPage !== 'object' || Array.isArray(nextPage)
-    || !Array.isArray(nextPage.positions)) {
-    throw new TypeError('Next wallet position page must be normalized after a successful read.');
+
+  const startOffset = Math.max(0, endOffset - limit);
+  const expectedLength = endOffset - startOffset;
+  const page = !cursor && totalEpochs === 1 && startOffset === 0
+    ? metadataPage
+    : await gateway.readEpochPage(startOffset, expectedLength);
+  if (pageInteger(page?.total, 'V8 epoch page total') !== totalEpochs
+    || pageInteger(page?.offset, 'V8 epoch page offset') !== startOffset
+    || !Array.isArray(page?.epoch_ids)
+    || page.epoch_ids.length !== expectedLength) {
+    throw new Error('V8 epoch index changed or returned an inconsistent history page.');
   }
-  const verifiedObservedCount = observedCount === null
-    ? unsignedInteger(nextPage.total, 'Wallet position page total')
-    : unsignedInteger(observedCount, 'Observed wallet position count');
-  if (nextPage.total !== verifiedObservedCount) {
-    retryPage(
-      'WALLET_POSITION_PAGE_TOTAL_MISMATCH',
-      'Wallet position count does not match the normalized page total.',
-      { refreshNewest: true },
-    );
-  }
-  if (append && verifiedObservedCount !== verifiedPreviousCount) {
-    retryPage(
-      'WALLET_POSITION_COUNT_CHANGED',
-      'Wallet position count changed before an older page could be appended.',
-      { refreshNewest: true },
-    );
+  const epochIds = page.epoch_ids.map((value) => positiveHourlyEpoch(value, 'V8 history epoch'));
+  if (new Set(epochIds).size !== epochIds.length) throw new Error('V8 epoch history contains duplicate IDs.');
+  for (let index = 1; index < epochIds.length; index += 1) {
+    if (epochIds[index] <= epochIds[index - 1]) throw new Error('V8 epoch history is not strictly ordered.');
   }
 
-  const keyFor = (position) => {
-    const positionIndex = unsignedInteger(position?.positionIndex, 'Wallet position index');
-    const deploymentAlias = String(position?.deploymentAlias || '').trim().toLowerCase();
-    const contractAddress = String(position?.contractAddress || '').trim().toLowerCase();
-    if (!deploymentAlias || !contractAddress) {
-      throw new TypeError('Wallet position identity is incomplete.');
-    }
-    return `${deploymentAlias}:${contractAddress}:${positionIndex}`;
-  };
-  const seenKeys = new Set();
-  if (append) {
-    for (const position of verifiedPrevious) {
-      const key = keyFor(position);
-      if (seenKeys.has(key)) {
-        retryPage(
-          'WALLET_POSITION_SNAPSHOT_DUPLICATE',
-          'Previous wallet position snapshot contains duplicate rows.',
-          { refreshNewest: true },
+  const quoteReads = [];
+  for (const epochEndTimestamp of [...epochIds].reverse()) {
+    for (const requestedObjective of OBJECTIVES) {
+      quoteReads.push((async () => {
+        const quote = await gateway.readEpochClaimQuote(
+          epochEndTimestamp,
+          requestedObjective,
+          normalizedAccount,
         );
-      }
-      seenKeys.add(key);
+        if (!quote || typeof quote !== 'object') throw new Error('V8 claim quote is unavailable.');
+        if (Number(quote.epoch_end_timestamp) !== epochEndTimestamp
+          || String(quote.objective || '').trim().toUpperCase() !== requestedObjective
+          || String(quote.account || '').trim().toLowerCase() !== normalizedAccount) {
+          throw new Error('V8 claim quote does not match the requested wallet position.');
+        }
+        let stake;
+        try { stake = BigInt(quote.stake_atto); } catch { throw new TypeError('V8 claim quote stake is malformed.'); }
+        if (stake < 0n) throw new RangeError('V8 claim quote stake is malformed.');
+        if (stake === 0n) return null;
+        return Object.freeze({
+          identity: `${contractAddress}:${epochEndTimestamp}:${requestedObjective}`,
+          epochEndTimestamp,
+          objective: requestedObjective,
+          quote,
+        });
+      })());
     }
   }
-  const nextKeys = new Set();
-  for (const position of nextPage.positions) {
-    const key = keyFor(position);
-    if (nextKeys.has(key)) {
-      retryPage(
-        'WALLET_POSITION_PAGE_DUPLICATE',
-        'Wallet position page contains duplicate rows.',
-        { refreshNewest: true },
-      );
-    }
-    if (append && seenKeys.has(key)) {
-      retryPage(
-        'WALLET_POSITION_PAGE_OVERLAP',
-        'Wallet position page overlaps rows already present in the snapshot.',
-        { refreshNewest: true },
-      );
-    }
-    nextKeys.add(key);
-    if (append) seenKeys.add(key);
+  const positions = (await Promise.all(quoteReads)).filter(Boolean);
+  if (gateway.connected && String(gateway.account || '').toLowerCase() !== normalizedAccount) {
+    throw new Error('Connected wallet changed during V8 history scanning.');
   }
-
-  if (append) {
-    const expectedWindow = walletPositionPageWindow({
-      total: verifiedObservedCount,
-      loaded: verifiedPrevious.length,
-    });
-    if (nextPage.offset !== expectedWindow.offset
-      || nextPage.positions.length !== expectedWindow.limit) {
-      retryPage(
-        'WALLET_POSITION_PAGE_COVERAGE_MISMATCH',
-        'Wallet position page does not continue the verified snapshot.',
-        { refreshNewest: true },
-      );
-    }
-  } else if (nextPage.nextOffset !== verifiedObservedCount) {
-    retryPage(
-      'WALLET_POSITION_PAGE_COVERAGE_MISMATCH',
-      'Wallet position refresh did not return the newest page.',
-      { refreshNewest: true },
-    );
-  }
-
-  const positions = Object.freeze(append
-    ? [...verifiedPrevious, ...nextPage.positions]
-    : [...nextPage.positions]);
-  return Object.freeze({
-    positions,
-    count: verifiedObservedCount,
-    stale: false,
-    error: '',
+  const scannedEpochs = scannedBefore + epochIds.length;
+  const nextCursor = startOffset === 0 ? null : Object.freeze({
+    account: normalizedAccount,
+    contractAddress,
+    totalEpochs,
+    nextOffset: startOffset,
+    scannedEpochs,
   });
-}
-
-export function walletPositionPresentation(position, deployment, baseHref) {
-  const identity = deploymentIdentity(deployment);
-  const claimTarget = walletClaimTarget(position);
-  const href = new URL(baseHref);
-  const currentDeploymentAlias = String(href.searchParams.get('deployment') || '')
-    .trim()
-    .toLowerCase();
-  href.searchParams.delete('contract');
-  href.searchParams.set('feed', 'live');
-  href.searchParams.set('deployment', identity.alias);
-  href.searchParams.set('epoch', String(claimTarget.epochEndTimestamp));
-  href.searchParams.set('objective', claimTarget.objective === 'LOW' ? 'lowest' : 'highest');
-  if (position.eligible && !position.claimed) href.searchParams.set('claim', CLAIM_INTENT_VALUE);
-  else href.searchParams.delete('claim');
-  const status = position.claimed
-    ? 'CLAIMED'
-    : position.eligible
-      ? (position.settlementMode.startsWith('REFUND_') ? 'REFUND READY' : 'PAYOUT READY')
-      : position.settlementMode === 'PENDING' ? 'AWAITING RESULT' : 'NO PAYOUT';
   return Object.freeze({
-    claimTarget,
-    dataStatus: position.claimed ? 'finalized' : position.eligible ? 'submitted' : 'review',
-    status,
-    href: href.href,
-    actionText: position.eligible && !position.claimed
-      ? currentDeploymentAlias && currentDeploymentAlias !== identity.alias
-        ? `OPEN ${identity.alias.toUpperCase()} & RECONNECT TO CLAIM`
-        : 'OPEN & CLAIM'
-      : 'OPEN EPOCH',
-    actionTitle: `Open epoch ${claimTarget.epochEndTimestamp} ${claimTarget.objective}`,
+    account: normalizedAccount,
+    contractAddress,
+    totalEpochs,
+    scannedEpochs,
+    positions: Object.freeze(positions),
+    nextCursor,
+    complete: nextCursor === null,
   });
 }

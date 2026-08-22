@@ -696,8 +696,9 @@ test("sanitized bind request is exact and permits the reviewed owner-equals-bind
   );
 });
 
-test("V8 bind provenance is independently re-fetched through GenLayer and canonical EVM finality", async (t) => {
+test("V8 bind provenance tolerates finalized constructor omission only with exact outer calldata", async (t) => {
   const fixture = v8ValidationFixture(t);
+  delete fixture.deploymentReceipt.txDataDecoded.constructorArgs;
   const proof = await validateFinalizedV8Deployment(
     fixture.provider,
     fixture.request,

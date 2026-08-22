@@ -1,299 +1,139 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createStudioNetHistoryChain } from './chain.mjs';
+import { createBradburyHistoryChain } from './chain.mjs';
 import {
   TEST_EPOCH,
   TEST_OWNER,
-  testAssetCatalog,
   testAssets,
   testConfig,
   testDeployment,
   testDeterminedEpoch,
-  testVenueCatalog,
+  testPayout,
+  testSchema,
 } from './test-fixtures.mjs';
-
-function jsonResponse(value) {
-  return new Response(JSON.stringify(value), {
-    status: 200,
-    headers: { 'content-type': 'application/json' },
-  });
-}
 
 function configuration() {
   return {
-    network: 'studionet',
-    chainId: 61999,
-    rpcUrl: 'https://studio.example.invalid/api',
+    network: 'testnet-bradbury',
+    keeperNetwork: 'bradbury',
+    chainId: 4_221,
+    rpcUrl: 'https://rpc-bradbury.genlayer.com/',
     deployments: [testDeployment()],
   };
 }
 
-function studioSuccessfulReceipt({ method = 'resolve_epoch', args = [String(TEST_EPOCH)] } = {}) {
-  return {
-    status_name: 'FINALIZED',
-    result: 6,
-    result_name: 'MAJORITY_AGREE',
-    consensus_data: {
-      leader_receipt: [
-        {
-          mode: 'leader',
-          execution_result: 'SUCCESS',
-          result: { status: 'return' },
-        },
-        {
-          mode: 'validator',
-          vote: 'idle',
-          execution_result: 'ERROR',
-          result: { status: 'return' },
-          genvm_result: {
-            raw_error: { fatal: false, causes: ['VALIDATOR_QUORUM_REACHED'] },
-            error_code: 'VALIDATOR_QUORUM_REACHED',
-          },
-        },
-      ],
-    },
-    data: {
-      calldata: {
-        readable: `{"args":${JSON.stringify(args)}"method":${JSON.stringify(method)}}`,
-      },
-    },
-  };
+function jsonResponse(body) {
+  return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 }
 
-test('StudioNet chain reader verifies 0xf22f and reads only allowlisted deployment state', async () => {
-  const deployment = testDeployment();
-  const calls = [];
-  const client = {
-    async readContract({ address, functionName, args }) {
-      assert.equal(address, deployment.address);
-      calls.push({ functionName, args });
-      if (functionName === 'get_config') return testConfig();
-      if (functionName === 'get_asset_catalog') return testAssetCatalog();
-      if (functionName === 'get_venue_catalog') return testVenueCatalog();
-      if (functionName === 'get_epoch_count') return 1;
-      if (functionName === 'get_epoch_page') return { offset: 0, next_offset: 1, total: 1, epoch_ids: [String(TEST_EPOCH)] };
-      if (functionName === 'get_epoch') return { ...testDeterminedEpoch(), result_status: 'PENDING' };
-      throw new Error(`unexpected ${functionName}`);
-    },
-  };
-  const chain = createStudioNetHistoryChain({
-    configuration: configuration(),
-    createClientImpl: () => client,
-    fetchImpl: async (_url, options) => {
-      const request = JSON.parse(options.body);
-      assert.equal(request.method, 'eth_chainId');
-      return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0xf22f' });
-    },
-  });
-  const result = await chain.readDeployment(`studionet:${deployment.address}`, { maxEpochs: 1, startOffset: null });
-  assert.equal(result.deployment.address, deployment.address);
-  assert.equal(result.deployment.addressKey, deployment.address.toLowerCase());
-  assert.equal(result.deployment.deploymentId, `studionet:${deployment.address.toLowerCase()}`);
-  assert.equal(result.epochCount, 1);
-  assert.equal(result.epochs.length, 1);
-  assert.equal(calls.some((call) => call.functionName === 'get_epoch_asset'), false);
-  await assert.rejects(
-    () => chain.readDeployment(`studionet:0x${'9'.repeat(40)}`, { maxEpochs: 1, startOffset: null }),
-    /not allowlisted/,
-  );
-});
-
-test('scheduled history reads the latest resolvable epoch instead of the pre-seeded future tail', async () => {
-  const deployment = testDeployment();
-  const ids = [
-    TEST_EPOCH + 10_800,
-    TEST_EPOCH + 3_600,
-    TEST_EPOCH,
-    TEST_EPOCH + 7_200,
-  ];
-  const epochReads = [];
-  const client = {
+function readClient() {
+  return {
+    async getContractSchema() { return testSchema(); },
     async readContract({ functionName, args }) {
       if (functionName === 'get_config') return testConfig();
-      if (functionName === 'get_asset_catalog') return testAssetCatalog();
-      if (functionName === 'get_venue_catalog') return testVenueCatalog();
-      if (functionName === 'get_epoch_count') return ids.length;
       if (functionName === 'get_epoch_page') {
-        assert.deepEqual(args, [0, ids.length]);
-        return { offset: 0, next_offset: ids.length, total: ids.length, epoch_ids: ids.map(String) };
+        const offset = Number(args[0]);
+        return { offset, next_offset: 1, total: 1, epoch_ids: [TEST_EPOCH] };
       }
-      if (functionName === 'get_epoch') {
-        epochReads.push(Number(args[0]));
-        return { ...testDeterminedEpoch(), result_status: 'PENDING' };
-      }
-      throw new Error(`unexpected ${functionName}`);
-    },
-  };
-  const chain = createStudioNetHistoryChain({
-    configuration: configuration(),
-    createClientImpl: () => client,
-    now: () => (TEST_EPOCH + 7_200 + 121) * 1_000,
-    fetchImpl: async () => jsonResponse({ jsonrpc: '2.0', id: 1, result: '0xf22f' }),
-  });
-
-  const result = await chain.readDeployment(deployment.deploymentId, { maxEpochs: 2, startOffset: null });
-
-  assert.deepEqual(epochReads, [TEST_EPOCH + 3_600, TEST_EPOCH + 7_200]);
-  assert.equal(result.offset, 1);
-  assert.equal(result.epochs.length, 2);
-});
-
-test('three determined V7 epochs stay below StudioNet thirty-call quota', async () => {
-  const deployment = testDeployment('v7');
-  let networkReads = 0;
-  let contractReads = 0;
-  const client = {
-    async readContract({ functionName, args }) {
-      contractReads += 1;
-      if (functionName === 'get_config') return testConfig('v7');
-      if (functionName === 'get_asset_catalog') return testAssetCatalog();
-      if (functionName === 'get_venue_catalog') return testVenueCatalog();
-      if (functionName === 'get_epoch_count') return 3;
-      if (functionName === 'get_epoch_page') {
-        return {
-          offset: 0,
-          next_offset: 3,
-          total: 3,
-          epoch_ids: [TEST_EPOCH - 7_200, TEST_EPOCH - 3_600, TEST_EPOCH].map(String),
-        };
+      if (functionName === 'get_payout_page') {
+        const offset = Number(args[0]);
+        return { offset, next_offset: 1, total: 1, payouts: [testPayout()] };
       }
       if (functionName === 'get_epoch') return testDeterminedEpoch();
       if (functionName === 'get_epoch_asset') {
         return testAssets().find((asset) => asset.asset_id === args[1]);
       }
-      throw new Error(`unexpected ${functionName}`);
+      throw new Error(`unexpected read ${functionName}`);
     },
-  };
-  const chain = createStudioNetHistoryChain({
-    configuration: {
-      ...configuration(),
-      deployments: [deployment],
-    },
-    createClientImpl: () => client,
-    now: () => (TEST_EPOCH + 121) * 1_000,
-    fetchImpl: async () => {
-      networkReads += 1;
-      return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0xf22f' });
-    },
-  });
-
-  const result = await chain.readDeployment(deployment.deploymentId, { maxEpochs: 3, startOffset: null });
-  assert.equal(result.epochs.length, 3);
-  assert.ok(result.epochs.every((epoch) => epoch.assets.length === 5));
-
-  assert.equal(networkReads + contractReads, 24);
-  assert.ok(networkReads + contractReads < 30);
-});
-
-test('proof verifier derives kind from finalized decoded call and rejects caller-selected mismatch', async () => {
-  const deployment = testDeployment();
-  const hash = `0x${'a'.repeat(64)}`;
-  const raw = {
-    hash,
-    status: 'FINALIZED',
-    // StudioNet proof responses normalize addresses even though readContract
-    // requires the configured mixed-case address.
-    recipient: deployment.addressKey,
-    sender: TEST_OWNER,
-    type: 2,
-    value: 0,
-  };
-  const client = {
     async waitForTransactionReceipt() {
       return {
         statusName: 'FINALIZED',
         txExecutionResultName: 'FINISHED_WITH_RETURN',
         txDataDecoded: {
           type: 'call',
-          callData: { method: 'resolve_epoch', args: [String(TEST_EPOCH)] },
+          callData: { method: 'claim', args: [String(TEST_EPOCH), 'HIGH'] },
         },
       };
     },
   };
-  const chain = createStudioNetHistoryChain({
+}
+
+test('Bradbury chain reader uses V8 pages and returns epoch plus payout state', async () => {
+  const chain = createBradburyHistoryChain({
+    configuration: configuration(),
+    createClientImpl: readClient,
+    fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body);
+      assert.equal(request.method, 'eth_chainId');
+      return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0x107d' });
+    },
+  });
+  const state = await chain.readDeployment(testDeployment().deploymentId, { maxEpochs: 10, startOffset: 0 });
+  assert.equal(state.epochCount, 1);
+  assert.equal(state.payoutCount, 1);
+  assert.equal(state.epochs[0].assets.length, 5);
+  assert.equal(state.payouts[0].payout_id, 'a'.repeat(64));
+  assert.deepEqual(state.payoutPage, { offset: 0, nextOffset: 0, total: 1 });
+  assert.deepEqual(state.schema, testSchema());
+});
+
+test('Bradbury payout pages rotate durably instead of starving payouts outside the newest 25', async () => {
+  const total = 60;
+  const payoutOffsets = [];
+  const client = readClient();
+  client.readContract = async ({ functionName, args }) => {
+    if (functionName === 'get_config') return testConfig();
+    if (functionName === 'get_epoch_page') {
+      const offset = Number(args[0]);
+      return { offset, next_offset: 1, total: 1, epoch_ids: [TEST_EPOCH] };
+    }
+    if (functionName === 'get_payout_page') {
+      const offset = Number(args[0]);
+      const limit = Number(args[1]);
+      payoutOffsets.push(offset);
+      return {
+        offset,
+        next_offset: offset + Math.min(limit, total - offset),
+        total,
+        payouts: Array.from(
+          { length: Math.min(limit, total - offset) },
+          (_, index) => testPayout({ payout_id: (offset + index + 1).toString(16).padStart(64, '0') }),
+        ),
+      };
+    }
+    if (functionName === 'get_epoch') return testDeterminedEpoch();
+    if (functionName === 'get_epoch_asset') return testAssets().find((asset) => asset.asset_id === args[1]);
+    throw new Error(`unexpected read ${functionName}`);
+  };
+  const history = createBradburyHistoryChain({
     configuration: configuration(),
     createClientImpl: () => client,
+    fetchImpl: async () => jsonResponse({ jsonrpc: '2.0', id: 1, result: '0x107d' }),
+  });
+  const middle = await history.readDeployment(testDeployment().deploymentId, {
+    maxEpochs: 1, startOffset: 0, payoutOffset: 25,
+  });
+  assert.equal(middle.payouts.length, 25);
+  assert.deepEqual(middle.payoutPage, { offset: 25, nextOffset: 50, total });
+  const tail = await history.readDeployment(testDeployment().deploymentId, {
+    maxEpochs: 1, startOffset: 0, payoutOffset: middle.payoutPage.nextOffset,
+  });
+  assert.equal(tail.payouts.length, 10);
+  assert.deepEqual(tail.payoutPage, { offset: 50, nextOffset: 0, total });
+  assert.deepEqual(payoutOffsets, [0, 25, 0, 50]);
+});
+
+test('proof verifier records V8 claim as a request and never as credited legacy delivery', async () => {
+  const hash = `0x${'b'.repeat(64)}`;
+  const deployment = testDeployment();
+  const chain = createBradburyHistoryChain({
+    configuration: configuration(),
+    createClientImpl: readClient,
     fetchImpl: async (_url, options) => {
       const request = JSON.parse(options.body);
-      if (request.method === 'eth_chainId') return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0xf22f' });
+      if (request.method === 'eth_chainId') return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0x107d' });
       assert.equal(request.method, 'eth_getTransactionByHash');
-      return jsonResponse({ jsonrpc: '2.0', id: 1, result: raw });
-    },
-  });
-  await assert.rejects(
-    () => chain.verifyProof({
-      deploymentId: `studionet:${deployment.address}`,
-      hash,
-      assertedKind: 'WAGER',
-      expectedDeploymentHash: null,
-    }),
-    /does not match the finalized decoded chain method/,
-  );
-  const proof = await chain.verifyProof({
-    deploymentId: `studionet:${deployment.address}`,
-    hash,
-    assertedKind: 'RESOLVE_EPOCH',
-    expectedDeploymentHash: null,
-  });
-  assert.equal(proof.proofKind, 'RESOLVE_EPOCH');
-  assert.equal(proof.deploymentId, deployment.deploymentId);
-  assert.equal(proof.recipientAddress, deployment.addressKey);
-  assert.equal(proof.epochEndTimestamp, String(TEST_EPOCH));
-  assert.equal(proof.proofMetadata.independentOracle, false);
-});
-
-test('proof verifier accepts successful StudioNet consensus receipts and ignores idle validators', async () => {
-  const deployment = testDeployment();
-  const hash = `0x${'1'.repeat(64)}`;
-  const raw = {
-    hash,
-    status: 'FINALIZED',
-    recipient: deployment.addressKey,
-    sender: TEST_OWNER,
-    type: 2,
-    value: 0,
-  };
-  const chain = createStudioNetHistoryChain({
-    configuration: configuration(),
-    createClientImpl: () => ({
-      async waitForTransactionReceipt() {
-        return studioSuccessfulReceipt();
-      },
-    }),
-    fetchImpl: async (_url, options) => {
-      const request = JSON.parse(options.body);
-      if (request.method === 'eth_chainId') return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0xf22f' });
-      return jsonResponse({ jsonrpc: '2.0', id: 1, result: raw });
-    },
-  });
-
-  const proof = await chain.verifyProof({
-    deploymentId: deployment.deploymentId,
-    hash,
-    assertedKind: 'RESOLVE_EPOCH',
-    expectedDeploymentHash: null,
-  });
-
-  assert.equal(proof.executionResult, 'FINISHED_WITH_RETURN');
-  assert.equal(proof.proofKind, 'RESOLVE_EPOCH');
-});
-
-test('proof verifier rejects StudioNet consensus receipts whose authoritative leader failed', async () => {
-  const deployment = testDeployment();
-  const hash = `0x${'2'.repeat(64)}`;
-  const receipt = studioSuccessfulReceipt();
-  receipt.consensus_data.leader_receipt[0].execution_result = 'ERROR';
-  const chain = createStudioNetHistoryChain({
-    configuration: configuration(),
-    createClientImpl: () => ({
-      async waitForTransactionReceipt() {
-        return receipt;
-      },
-    }),
-    fetchImpl: async (_url, options) => {
-      const request = JSON.parse(options.body);
-      if (request.method === 'eth_chainId') return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0xf22f' });
       return jsonResponse({
         jsonrpc: '2.0',
         id: 1,
@@ -308,170 +148,26 @@ test('proof verifier rejects StudioNet consensus receipts whose authoritative le
       });
     },
   });
-
-  await assert.rejects(
-    () => chain.verifyProof({
-      deploymentId: deployment.deploymentId,
-      hash,
-      assertedKind: 'RESOLVE_EPOCH',
-      expectedDeploymentHash: null,
-    }),
-    /did not prove successful FINALIZED execution/,
-  );
-});
-
-test('proof verifier recognizes the deployed enter and withdraw_accrued_fees ABI methods', async () => {
-  const deployment = testDeployment();
-  const cases = [
-    {
-      hash: `0x${'d'.repeat(64)}`,
-      method: 'enter',
-      args: [String(TEST_EPOCH), 'HIGH', 'BTC'],
-      assertedKind: 'WAGER',
-      value: '10000000000000000',
-      expectedEpoch: String(TEST_EPOCH),
-    },
-    {
-      hash: `0x${'e'.repeat(64)}`,
-      method: 'withdraw_accrued_fees',
-      args: ['1000000000000000'],
-      assertedKind: 'FEE_WITHDRAWAL',
-      value: 0,
-      expectedEpoch: null,
-    },
-  ];
-  for (const proofCase of cases) {
-    const raw = {
-      hash: proofCase.hash,
-      status: 'FINALIZED',
-      recipient: deployment.addressKey,
-      sender: TEST_OWNER,
-      type: 2,
-      value: proofCase.value,
-    };
-    const chain = createStudioNetHistoryChain({
-      configuration: configuration(),
-      createClientImpl: () => ({
-        async waitForTransactionReceipt() {
-          if (proofCase.assertedKind === 'WAGER') {
-            return studioSuccessfulReceipt({
-              method: proofCase.method,
-              args: proofCase.args,
-            });
-          }
-          return {
-            statusName: 'FINALIZED',
-            txExecutionResultName: 'FINISHED_WITH_RETURN',
-            txDataDecoded: {
-              type: 'call',
-              callData: { method: proofCase.method, args: proofCase.args },
-            },
-          };
-        },
-      }),
-      fetchImpl: async (_url, options) => {
-        const request = JSON.parse(options.body);
-        if (request.method === 'eth_chainId') return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0xf22f' });
-        assert.equal(request.method, 'eth_getTransactionByHash');
-        return jsonResponse({ jsonrpc: '2.0', id: 1, result: raw });
-      },
-    });
-    const proof = await chain.verifyProof({
-      deploymentId: `studionet:${deployment.address}`,
-      hash: proofCase.hash,
-      assertedKind: proofCase.assertedKind,
-      expectedDeploymentHash: null,
-    });
-    assert.equal(proof.method, proofCase.method);
-    assert.equal(proof.proofKind, proofCase.assertedKind);
-    assert.equal(proof.epochEndTimestamp, proofCase.expectedEpoch);
-  }
-});
-
-test('claim proof is accepted only after deriving one finalized credited child from its parent', async () => {
-  const deployment = testDeployment();
-  const parentHash = `0x${'b'.repeat(64)}`;
-  const childHash = `0x${'c'.repeat(64)}`;
-  const amount = '198000000000000000';
-  const parent = {
-    hash: parentHash,
-    tx_id: parentHash,
-    status: 'FINALIZED',
-    recipient: deployment.addressKey,
-    sender: TEST_OWNER,
-    from_address: TEST_OWNER,
-    type: 2,
-    value: 0,
-    messages: [{
-      messageType: '0',
-      recipient: TEST_OWNER,
-      value: amount,
-      data: '',
-      onAcceptance: false,
-    }],
-    triggered_transactions: [childHash],
-  };
-  const child = {
-    hash: childHash,
-    tx_id: childHash,
-    status: 'FINALIZED',
-    to_address: TEST_OWNER,
-    recipient: TEST_OWNER,
-    sender: deployment.addressKey,
-    from_address: deployment.addressKey,
-    origin_address: deployment.addressKey,
-    value: amount,
-    type: 0,
-    triggered_by: parentHash,
-    triggered_on: 'finalized',
-    value_credited: true,
-  };
-  const client = {
-    async waitForTransactionReceipt({ hash }) {
-      if (hash === childHash) {
-        return {
-          status: 7,
-          status_name: 'FINALIZED',
-          result: 5,
-          result_name: 'NO_MAJORITY',
-          value_credited: true,
-        };
-      }
-      return studioSuccessfulReceipt({
-        method: 'claim',
-        args: [String(TEST_EPOCH), 'LOW'],
-      });
-    },
-  };
-  let tamperChild = false;
-  const chain = createStudioNetHistoryChain({
-    configuration: configuration(),
-    createClientImpl: () => client,
-    fetchImpl: async (_url, options) => {
-      const request = JSON.parse(options.body);
-      if (request.method === 'eth_chainId') return jsonResponse({ jsonrpc: '2.0', id: 1, result: '0xf22f' });
-      const hash = request.params[0];
-      const result = hash === parentHash ? parent : { ...child, value_credited: tamperChild ? false : true };
-      return jsonResponse({ jsonrpc: '2.0', id: 1, result });
-    },
-  });
   const proof = await chain.verifyProof({
-    deploymentId: `studionet:${deployment.address}`,
-    hash: parentHash,
-    assertedKind: 'CLAIM',
+    deploymentId: deployment.deploymentId,
+    hash,
+    assertedKind: 'CLAIM_REQUEST',
     expectedDeploymentHash: null,
   });
-  assert.deepEqual(proof.childTransactionHashes, [childHash]);
-  assert.equal(proof.valueAtto, amount);
-  assert.equal(proof.valueCredited, true);
-  tamperChild = true;
+  assert.equal(proof.proofKind, 'CLAIM_REQUEST');
+  assert.equal(proof.valueCredited, null);
+  assert.deepEqual(proof.childTransactionHashes, []);
+  assert.equal(proof.proofMetadata.authority, 'GENLAYER_BRADBURY_RPC');
+});
+
+test('chain identity rejects any non-Bradbury endpoint result', async () => {
+  const chain = createBradburyHistoryChain({
+    configuration: configuration(),
+    createClientImpl: readClient,
+    fetchImpl: async () => jsonResponse({ jsonrpc: '2.0', id: 1, result: '0xf22f' }),
+  });
   await assert.rejects(
-    () => chain.verifyProof({
-      deploymentId: `studionet:${deployment.address}`,
-      hash: parentHash,
-      assertedKind: 'CLAIM',
-      expectedDeploymentHash: null,
-    }),
-    /did not credit its exact value/,
+    () => chain.readDeployment(testDeployment().deploymentId, { maxEpochs: 1, startOffset: 0 }),
+    /not Bradbury/,
   );
 });

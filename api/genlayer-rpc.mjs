@@ -7,7 +7,7 @@ import {
 } from '../server/vercel-runtime.mjs';
 
 const middleware = createGenLayerRpcProxyMiddleware({
-  upstreamUrl: process.env.GENLAYER_RPC_URL || 'https://studio.genlayer.com/api',
+  upstreamUrl: process.env.GENLAYER_RPC_URL || 'https://rpc-bradbury.genlayer.com',
   clientKey: vercelClientKey,
 });
 

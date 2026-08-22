@@ -1,12 +1,12 @@
-# Cloudflare backup scheduler
+# Bradbury V8 backup scheduler
 
 This Cron-only Cloudflare Worker is an independent trigger for the existing GitHub Actions keeper
 and operations watchdog. It does not contain a GenLayer key, keeper password, Neon credential,
 journal secret, or contract write implementation.
 
-The native GitHub schedules remain primary:
+The V8-only native GitHub schedules remain primary:
 
-- `27 * * * *` — StudioNet V7 keeper
+- `27 * * * *` — Bradbury V8 epoch and payout keeper
 - `47 * * * *` — operations watchdog
 
 Cloudflare checks ten minutes later:

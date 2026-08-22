@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 
@@ -62,7 +63,7 @@ test('normalizes a string request ID to a safe number and restores it', async ()
     body: JSON.stringify({ jsonrpc: '2.0', id: 'sdk-request-7', method: 'eth_chainId' }),
   });
 
-  assert.equal(upstreamRequest.url, 'https://studio.genlayer.com/api');
+  assert.equal(upstreamRequest.url, 'https://rpc-bradbury.genlayer.com');
   assert.equal(upstreamRequest.options.method, 'POST');
   assert.equal(Number.isSafeInteger(upstreamRequest.body.id), true);
   assert.notEqual(upstreamRequest.body.id, 'sdk-request-7');
@@ -75,7 +76,7 @@ test('normalizes a string request ID to a safe number and restores it', async ()
   assert.equal(res.headers['access-control-allow-origin'], '*');
 });
 
-test('numeric-ID transaction proofs preserve Studio integer digits byte-for-byte', async () => {
+test('numeric-ID transaction proofs preserve GenLayer integer digits byte-for-byte', async () => {
   const hash = `0x${'ab'.repeat(32)}`;
   const upstreamBody = `{"jsonrpc":"2.0","id":7,"result":{"hash":"${hash}","messages":[{"value":100000000000000000}]}}`;
   let forwarded;
@@ -505,4 +506,15 @@ test('non-route requests fall through and plugin installs the same middleware', 
   assert.equal(installed[0], installed[1]);
   assert.equal(devHookResult, undefined);
   assert.equal(previewHookResult, undefined);
+});
+
+test('both development and production RPC entrypoints default to Bradbury, never StudioNet', async () => {
+  const [viteSource, functionSource] = await Promise.all([
+    readFile(new URL('../vite.config.js', import.meta.url), 'utf8'),
+    readFile(new URL('../api/genlayer-rpc.mjs', import.meta.url), 'utf8'),
+  ]);
+  for (const source of [viteSource, functionSource]) {
+    assert.match(source, /https:\/\/rpc-bradbury\.genlayer\.com/);
+    assert.doesNotMatch(source, /studio\.genlayer\.com|StudioNet/i);
+  }
 });

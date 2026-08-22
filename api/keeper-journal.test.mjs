@@ -94,7 +94,7 @@ test('health is authenticated but does not require an idempotency key', async ()
       assert.equal(idempotencyKey, null);
       return {
         status: 'ready', service: 'liquidity-arena-keeper-journal', ready: true,
-        network: 'studionet', chainId: '61999', configuration: {}, database: {},
+        network: 'bradbury', chainId: '4221', configuration: {}, database: {},
       };
     },
   });
@@ -108,19 +108,19 @@ test('health is authenticated but does not require an idempotency key', async ()
   assert.equal(res.headers['cache-control'], 'no-store');
 });
 
-test('client readiness requires the exact version 3 journal schema', async () => {
+test('client readiness requires the exact Bradbury version 4 journal schema', async () => {
   const ready = {
     status: 'ready',
     service: 'liquidity-arena-keeper-journal',
     ready: true,
-    network: 'studionet',
-    chainId: '61999',
+    network: 'bradbury',
+    chainId: '4221',
     configuration: {
       databaseConfigured: true,
       authenticationConfigured: true,
       signerConfigured: true,
     },
-    database: { configured: true, ready: true, schemaVersion: 3 },
+    database: { configured: true, ready: true, schemaVersion: 4 },
   };
   const client = createKeeperJournalClient({
     endpoint: 'https://example.test/api/keeper-journal',
@@ -130,14 +130,14 @@ test('client readiness requires the exact version 3 journal schema', async () =>
       headers: { 'content-type': 'application/json' },
     }),
   });
-  assert.equal((await client.health()).database.schemaVersion, 3);
+  assert.equal((await client.health()).database.schemaVersion, 4);
 
   const staleClient = createKeeperJournalClient({
     endpoint: 'https://example.test/api/keeper-journal',
     secret: SECRET,
     fetchImpl: async () => new Response(JSON.stringify({
       ...ready,
-      database: { configured: true, ready: true, schemaVersion: 2 },
+      database: { configured: true, ready: true, schemaVersion: 3 },
     }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
@@ -241,9 +241,10 @@ test('client validates successful response shapes instead of trusting arbitrary 
 
 test('PREPARE response can authorize only the exact newly fenced operation', async () => {
   const requestedOperation = {
-    deploymentAlias: 'v7', chainId: '61999',
+    deploymentAlias: 'v8', chainId: '4221',
     contractAddress: '0xb2ae59ae641f571726ae81e30080f8c2192b15ef', method: 'resolve_epoch',
-    args: ['1800014400'], valueAtto: '0', epochEndTimestamp: '1800014400',
+    subjectType: 'epoch', subjectId: '1800014400',
+    args: ['1800014400'], valueAtto: '0',
   };
   const logicalOperationId = canonicalKeeperOperation(requestedOperation).operationId;
   const operation = {
@@ -251,15 +252,16 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
     logicalOperationId,
     attemptNumber: '1',
     retryOfOperationId: null,
-    deploymentAlias: 'v7',
-    network: 'studionet',
-    chainId: '61999',
+    deploymentAlias: 'v8',
+    network: 'bradbury',
+    chainId: '4221',
     signerAddress: SIGNER,
     contractAddress: '0xb2ae59ae641f571726ae81e30080f8c2192b15ef',
+    subjectType: 'epoch',
+    subjectId: '1800014400',
     method: 'resolve_epoch',
     args: ['1800014400'],
     valueAtto: '0',
-    epochEndTimestamp: '1800014400',
     state: 'PREPARED',
     transactionHash: null,
     lifecycleStatus: null,

@@ -1494,6 +1494,7 @@ export function assertExactDeploymentReceipt(receipt, {
   source,
   config,
   signedOperation,
+  allowOmittedConstructorArgs = false,
 }) {
   assertSuccessfulFinalizedReceipt(receipt, hash);
   if (normalizedAddressLike(receiptSender(receipt), 'deployment sender')
@@ -1510,34 +1511,40 @@ export function assertExactDeploymentReceipt(receipt, {
   if (decoded.type !== 'deploy' || decoded.leaderOnly !== false || decoded.code !== source) {
     fail('FINALIZED receipt does not prove the exact full-consensus V8 source deployment');
   }
-  const constructor = decodedRecord(decoded.constructorArgs, 'deployment constructorArgs');
-  if (!Array.isArray(constructor.args) || Object.keys(constructor).some(
-    (key) => !['args', 'kwargs'].includes(key),
-  )) {
-    fail('deployment receipt constructor arguments are malformed');
+  if (decoded.constructorArgs === undefined) {
+    if (!allowOmittedConstructorArgs) {
+      fail('deployment constructorArgs must be an object');
+    }
+  } else {
+    const constructor = decodedRecord(decoded.constructorArgs, 'deployment constructorArgs');
+    if (!Array.isArray(constructor.args) || Object.keys(constructor).some(
+      (key) => !['args', 'kwargs'].includes(key),
+    )) {
+      fail('deployment receipt constructor arguments are malformed');
+    }
+    const normalizedKwargs = constructor.kwargs instanceof Map
+      ? decodedRecord(constructor.kwargs, 'deployment constructor kwargs')
+      : constructor.kwargs;
+    if (normalizedKwargs !== undefined
+      && stableStringify(normalizedKwargs) !== stableStringify({})) {
+      fail('deployment receipt contains unexpected constructor keyword arguments');
+    }
+    if (constructor.args.length !== 5) fail('deployment receipt constructor arity is not five');
+    const normalizedArgs = [
+      normalizedAddressLike(constructor.args[0], 'constructor treasury'),
+      normalizedAddressLike(constructor.args[1], 'constructor keeper'),
+      normalizedDecimalLike(constructor.args[2], 'constructor minimum stake'),
+      normalizedDecimalLike(constructor.args[3], 'constructor wallet cap'),
+      normalizedAddressLike(constructor.args[4], 'constructor factory'),
+    ];
+    exactObject(normalizedArgs, [
+      config.expected.treasuryAddress,
+      config.expected.keeperAddress,
+      config.expected.epochMinStakeAtto,
+      config.expected.epochMaxStakePerWalletAtto,
+      config.expected.payoutFactoryAddress,
+    ], 'deployment constructor arguments');
   }
-  const normalizedKwargs = constructor.kwargs instanceof Map
-    ? decodedRecord(constructor.kwargs, 'deployment constructor kwargs')
-    : constructor.kwargs;
-  if (normalizedKwargs !== undefined
-    && stableStringify(normalizedKwargs) !== stableStringify({})) {
-    fail('deployment receipt contains unexpected constructor keyword arguments');
-  }
-  if (constructor.args.length !== 5) fail('deployment receipt constructor arity is not five');
-  const normalizedArgs = [
-    normalizedAddressLike(constructor.args[0], 'constructor treasury'),
-    normalizedAddressLike(constructor.args[1], 'constructor keeper'),
-    normalizedDecimalLike(constructor.args[2], 'constructor minimum stake'),
-    normalizedDecimalLike(constructor.args[3], 'constructor wallet cap'),
-    normalizedAddressLike(constructor.args[4], 'constructor factory'),
-  ];
-  exactObject(normalizedArgs, [
-    config.expected.treasuryAddress,
-    config.expected.keeperAddress,
-    config.expected.epochMinStakeAtto,
-    config.expected.epochMaxStakePerWalletAtto,
-    config.expected.payoutFactoryAddress,
-  ], 'deployment constructor arguments');
   const recipient = normalizedAddressLike(receipt.recipient, 'deployment recipient');
   const decodedAddress = normalizedAddressLike(decoded.contractAddress, 'decoded contract address');
   if (recipient !== decodedAddress) fail('deployment receipt reports conflicting contract addresses');

@@ -9,5 +9,11 @@ export default function handler(req, res) {
   res.setHeader('cache-control', 'no-store');
   res.setHeader('content-type', 'application/json; charset=utf-8');
   if (req.method === 'HEAD') res.end();
-  else res.end(JSON.stringify({ status: 'ok', service: 'liquidity-arena', network: 'studionet' }));
+  else res.end(JSON.stringify({
+    status: 'ok',
+    service: 'liquidity-arena',
+    network: 'testnet-bradbury',
+    chainId: 4221,
+    deployment: 'v8',
+  }));
 }

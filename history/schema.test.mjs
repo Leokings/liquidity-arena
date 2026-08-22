@@ -5,146 +5,150 @@ import {
   encodeHistoryCursor,
   normalizeDeploymentState,
   normalizeEpochState,
+  normalizePayoutState,
   parseHistorySyncBody,
   parsePublicHistoryQuery,
 } from './schema.mjs';
 import {
   TEST_EPOCH,
-  testAssetCatalog,
+  TEST_PAYOUT_ID,
   testAssets,
   testConfig,
   testDeployment,
   testDeterminedEpoch,
-  testVenueCatalog,
+  testPayout,
+  testSchema,
 } from './test-fixtures.mjs';
 
-test('public history query is exact, bounded, keyset-cursor scoped, and rejects duplicates', () => {
+test('public history accepts only V8 and has payout-stage keyset cursors', () => {
+  const deployment = testDeployment();
   const cursor = encodeHistoryCursor({
-    epochEndTimestamp: String(TEST_EPOCH),
-    deploymentId: testDeployment().deploymentId,
-  }, 'epochs', 'v7');
+    createdAtTimestamp: String(TEST_EPOCH + 200),
+    deploymentId: deployment.deploymentId,
+    payoutId: TEST_PAYOUT_ID,
+  }, 'payouts', 'v8');
   const parsed = parsePublicHistoryQuery(
-    new URL(`https://example.test/api/history?view=epochs&deployment=v7&limit=50&cursor=${cursor}`),
+    new URL(`https://example.test/api/history?view=payouts&limit=50&cursor=${cursor}`),
   );
-  assert.equal(parsed.limit, 50);
-  assert.equal(parsed.cursor.epochEndTimestamp, String(TEST_EPOCH));
-  assert.equal(parsed.cursor.deploymentFilter, 'v7');
-  assert.throws(
-    () => parsePublicHistoryQuery(new URL('https://example.test/api/history?limit=10&limit=20')),
-    /unsupported or repeated/,
-  );
-  assert.throws(
-    () => parsePublicHistoryQuery(new URL('https://example.test/api/history?limit=51')),
-    /between 1 and 50/,
-  );
-  assert.throws(
-    () => parsePublicHistoryQuery(new URL(`https://example.test/api/history?deployment=v6&cursor=${cursor}`)),
-    /does not match/,
-  );
+  assert.equal(parsed.deployment, 'v8');
+  assert.equal(parsed.cursor.payoutId, TEST_PAYOUT_ID);
+  assert.throws(() => parsePublicHistoryQuery(new URL('https://x.test/api/history?deployment=v7')), /must be v8/);
+  assert.throws(() => parsePublicHistoryQuery(new URL('https://x.test/api/history?limit=51')), /between 1 and 50/);
 });
 
-test('public proof history requires a deployment and scopes its transaction-hash cursor', () => {
-  const feeParent = '0x3df8d942bd9c5d699ee0d7816761ec5fd6264108d3a3e8bf3486c2c4f4fbb01f';
-  const cursor = encodeHistoryCursor({ transactionHash: feeParent }, 'proofs', 'v7');
-  const parsed = parsePublicHistoryQuery(
-    new URL(`https://example.test/api/history?view=proofs&deployment=v7&limit=25&cursor=${cursor}`),
-  );
-  assert.equal(parsed.view, 'proofs');
-  assert.equal(parsed.deployment, 'v7');
-  assert.equal(parsed.cursor.transactionHash, feeParent);
-  assert.equal(parsed.cursor.deploymentFilter, 'v7');
-  assert.throws(
-    () => parsePublicHistoryQuery(new URL('https://example.test/api/history?view=proofs')),
-    /requires a deployment filter/,
-  );
-  assert.throws(
-    () => parsePublicHistoryQuery(
-      new URL(`https://example.test/api/history?view=proofs&deployment=v6&cursor=${cursor}`),
-    ),
-    /does not match/,
-  );
-});
-
-test('sync request accepts selection only and rejects outcomes, oversize work, duplicates, and standalone children', () => {
-  assert.equal(parseHistorySyncBody({}).maxEpochs, 10);
+test('sync selection and proof assertions accept only V8 payout semantics', () => {
   const parsed = parseHistorySyncBody({
-    deployments: ['v7'],
-    maxEpochs: 10,
-    proofs: [{ deployment: 'v7', hash: `0x${'a'.repeat(64)}`, kind: 'RESOLVE_EPOCH' }],
+    deployments: ['v8'],
+    proofs: [{ deployment: 'v8', hash: `0x${'b'.repeat(64)}`, kind: 'CLAIM_REQUEST' }],
   });
-  assert.deepEqual(parsed.deployments, ['v7']);
-  assert.equal(parsed.maxEpochs, 10);
-  assert.throws(() => parseHistorySyncBody({ winner: 'BTC' }), /unsupported field winner/);
-  assert.throws(() => parseHistorySyncBody({ maxEpochs: 11 }), /between 1 and 10/);
-  assert.throws(() => parseHistorySyncBody({ deployments: ['v7', 'v7'] }), /duplicates/);
+  assert.deepEqual(parsed.deployments, ['v8']);
+  assert.equal(parsed.proofs[0].kind, 'CLAIM_REQUEST');
+  assert.throws(() => parseHistorySyncBody({ deployments: ['v7'] }), /must be v8/);
   assert.throws(
-    () => parseHistorySyncBody({ proofs: [{ deployment: 'v7', hash: `0x${'b'.repeat(64)}`, kind: 'TRANSFER_CHILD' }] }),
+    () => parseHistorySyncBody({ proofs: [{ deployment: 'v8', hash: `0x${'b'.repeat(64)}`, kind: 'CLAIM' }] }),
     /unsupported/,
   );
 });
 
-test('chain state normalizer preserves exact atto strings and recomputes vector median, winners, and digest', () => {
+test('V8 chain state normalizer requires exact schema/config and preserves epoch digest', () => {
   const deployment = testDeployment();
-  const normalizedDeployment = normalizeDeploymentState({
+  const normalized = normalizeDeploymentState({
     deployment,
     config: testConfig(),
-    assetCatalog: testAssetCatalog(),
-    venueCatalog: testVenueCatalog(),
+    schema: testSchema(),
     epochCount: 1,
+    payoutCount: 1,
     manifest: { deploymentTransactionHash: null, sourceMetadata: { artifactMatched: false } },
   });
-  assert.equal(normalizedDeployment.deploymentId, deployment.deploymentId);
-  assert.equal(normalizedDeployment.contractAddress, deployment.addressKey);
+  assert.equal(normalized.network, 'testnet-bradbury');
+  assert.equal(normalized.chainId, 4_221);
+  assert.equal(normalized.contractSchemaSha256, 'c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4');
+  assert.equal(normalized.payoutCount, 1);
+  assert.throws(
+    () => normalizeDeploymentState({
+      deployment, config: testConfig({ new_risk_enabled: false }), schema: testSchema(), epochCount: 0,
+    }),
+    /release-exact/,
+  );
   const epoch = normalizeEpochState({
     deployment,
     epoch: testDeterminedEpoch(),
     assets: testAssets(),
-    syncedAt: '2026-08-19T18:00:00.000Z',
+    syncedAt: '2026-08-22T00:00:00.000Z',
   });
-  assert.equal(epoch.snapshot.assetVector.length, 5);
   assert.equal(epoch.snapshot.highWinnerAssetId, 'SOL');
-  assert.equal(epoch.snapshot.lowWinnerAssetId, 'XRP');
-  assert.equal(epoch.deploymentId, deployment.deploymentId);
-  assert.equal(epoch.contractAddress, deployment.addressKey);
-  assert.equal(epoch.sourceMetadata.contractAddress, deployment.addressKey);
-  assert.equal(epoch.highObjective.payout_pool_atto, '198');
+  assert.equal(epoch.finalityMetadata.network, 'testnet-bradbury');
+  assert.throws(
+    () => normalizeEpochState({
+      deployment,
+      epoch: { ...testDeterminedEpoch(), status: 'UNDETERMINED', result_status: 'UNDETERMINED' },
+      assets: [],
+      syncedAt: 'x',
+    }),
+    /unsupported value/,
+  );
+});
 
-  const tamperedWinner = { ...testDeterminedEpoch(), high_winner_asset_id: 'BTC' };
+test('payout normalizer enforces lowercase ID and monotonic stage invariants', () => {
+  const deployment = testDeployment();
+  const payout = normalizePayoutState({ deployment, payout: testPayout(), syncedAt: 'x' });
+  assert.equal(payout.payoutId, TEST_PAYOUT_ID);
+  assert.equal(payout.vaultAddress, null);
+  assert.equal(payout.walletKey, `${TEST_EPOCH}|HIGH|${payout.recipientAddress}`);
+  assert.equal(payout.stakeAtto, '100');
+  assert.equal(payout.settlementMode, 'PARIMUTUEL');
+  assert.equal(payout.includesRoundingRemainder, false);
   assert.throws(
-    () => normalizeEpochState({ deployment, epoch: tamperedWinner, assets: testAssets(), syncedAt: 'x' }),
-    /winners do not match/,
+    () => normalizePayoutState({ deployment, payout: testPayout({ payout_id: `0x${TEST_PAYOUT_ID}` }), syncedAt: 'x' }),
+    /lowercase 64-hex without 0x/,
   );
-  const tamperedVector = testAssets();
-  tamperedVector[0] = { ...tamperedVector[0], return_ppb: 999 };
   assert.throws(
-    () => normalizeEpochState({ deployment, epoch: testDeterminedEpoch(), assets: tamperedVector, syncedAt: 'x' }),
-    /median return is inconsistent/,
+    () => normalizePayoutState({ deployment, payout: testPayout({ state: 'FUNDED_IN_ESCROW' }), syncedAt: 'x' }),
+    /stage timestamps/,
   );
   assert.throws(
-    () => normalizeEpochState({
+    () => normalizePayoutState({ deployment, payout: testPayout({ wallet_key: 'forged' }), syncedAt: 'x' }),
+    /wallet and settlement identity/,
+  );
+  assert.throws(
+    () => normalizePayoutState({
       deployment,
-      epoch: { ...testDeterminedEpoch(), resolution_digest: 'f'.repeat(64) },
-      assets: testAssets(),
+      payout: testPayout({ settlement_mode: 'REFUND_TIE', includes_rounding_remainder: true }),
       syncedAt: 'x',
     }),
-    /digest does not match/,
+    /wallet and settlement identity/,
   );
+});
+
+test('fee payouts preserve the V8 fee-withdrawal identity without wallet liability fields', () => {
+  const deployment = testDeployment();
+  const payout = normalizePayoutState({
+    deployment,
+    payout: testPayout({
+      kind: 'FEE',
+      recipient: deployment.expectations.treasury,
+      epoch_end_timestamp: 0,
+      objective: '',
+      wallet_key: '',
+      stake_atto: '0',
+      settlement_mode: 'FEE_WITHDRAWAL',
+      includes_rounding_remainder: false,
+    }),
+    syncedAt: 'x',
+  });
+  assert.equal(payout.epochEndTimestamp, null);
+  assert.equal(payout.walletKey, '');
+  assert.equal(payout.stakeAtto, '0');
+  assert.equal(payout.settlementMode, 'FEE_WITHDRAWAL');
   assert.throws(
-    () => normalizeEpochState({
+    () => normalizePayoutState({
       deployment,
-      epoch: { ...testDeterminedEpoch(), created_at_timestamp: TEST_EPOCH - 3599 },
-      assets: testAssets(),
+      payout: testPayout({
+        kind: 'FEE', epoch_end_timestamp: 0, objective: '', wallet_key: '', stake_atto: '0',
+        settlement_mode: 'FEE_WITHDRAWAL', includes_rounding_remainder: true,
+      }),
       syncedAt: 'x',
     }),
-    /one-hour lead/,
-  );
-  assert.throws(
-    () => normalizeEpochState({
-      deployment,
-      epoch: { ...testDeterminedEpoch(), resolved_at_timestamp: TEST_EPOCH + 60 },
-      assets: testAssets(),
-      syncedAt: 'x',
-    }),
-    /settlement window/,
+    /wallet and settlement identity/,
   );
 });

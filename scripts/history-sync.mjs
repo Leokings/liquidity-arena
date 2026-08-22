@@ -11,14 +11,14 @@ const RESPONSE_MAX_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 100_000;
 
 function usage() {
-  return `Synchronize durable StudioNet epoch history through the authenticated API.
+  return `Synchronize durable Bradbury V8 epoch and payout history through the authenticated API.
 
 Usage:
   node scripts/history-sync.mjs [options]
 
 Options:
   --url <https-url>          Sync endpoint (or HISTORY_SYNC_URL)
-  --deployment <v6|v7>      Deployment alias; may be repeated
+  --deployment <v8>         Deployment alias (V8 only)
   --start-offset <integer>   Bounded contract epoch-page offset
   --max-epochs <1-10>        Total epoch work budget (default 10)
   --proof <alias:hash:kind>  Finalized proof assertion; may be repeated
@@ -45,7 +45,7 @@ function endpointUrl(value) {
 }
 
 function proofArgument(value) {
-  const match = /^(v6|v7):(0x[0-9a-fA-F]{64}):([A-Za-z_]+)$/.exec(String(value || ''));
+  const match = /^(v8):(0x[0-9a-fA-F]{64}):([A-Za-z_]+)$/.exec(String(value || ''));
   if (!match) throw new Error('--proof must be alias:0x-hash:kind.');
   return { deployment: match[1], hash: match[2], kind: match[3].toUpperCase() };
 }
@@ -60,7 +60,10 @@ export function parseHistorySyncArguments(argv) {
       const value = argv[index + 1];
       if (!value || value.startsWith('--')) throw new Error(`${argument} requires a value.`);
       if (argument === '--url') result.url = value;
-      else if (argument === '--deployment') result.deployments.push(value);
+      else if (argument === '--deployment') {
+        if (value !== 'v8') throw new Error('--deployment must be v8.');
+        result.deployments.push(value);
+      }
       else if (argument === '--start-offset') result.startOffset = value;
       else if (argument === '--max-epochs') result.maxEpochs = value;
       else if (argument === '--proof') result.proofs.push(proofArgument(value));

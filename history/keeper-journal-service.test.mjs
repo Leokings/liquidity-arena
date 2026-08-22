@@ -36,7 +36,7 @@ class MemoryRepository {
   }
 
   async health() {
-    return { configured: true, ready: true, schemaVersion: 3 };
+    return { configured: true, ready: true, schemaVersion: 4 };
   }
 
   async claimRequest({ keyHash, requestHash, action }) {
@@ -126,14 +126,15 @@ class MemoryRepository {
         attemptNumber,
         retryOfOperationId,
         deploymentAlias: input.operation.deploymentAlias,
-        network: 'studionet',
-        chainId: '61999',
+        network: 'bradbury',
+        chainId: '4221',
         signerAddress: input.signerAddress,
         contractAddress: input.operation.contractAddress,
+        subjectType: input.operation.subjectType,
+        subjectId: input.operation.subjectId,
         method: input.operation.method,
         args: [...input.operation.args],
         valueAtto: input.operation.valueAtto,
-        epochEndTimestamp: input.operation.epochEndTimestamp,
         state: 'PREPARED',
         transactionHash: null,
         lifecycleStatus: null,
@@ -250,8 +251,9 @@ function service(repository = new MemoryRepository()) {
 
 function operation(epoch = '1800014400', method = 'resolve_epoch') {
   return {
-    deploymentAlias: 'v7', chainId: '61999', contractAddress: CONTRACT,
-    method, args: [epoch], valueAtto: '0', epochEndTimestamp: epoch,
+    deploymentAlias: 'v8', chainId: '4221', contractAddress: CONTRACT,
+    subjectType: 'epoch', subjectId: epoch,
+    method, args: [epoch], valueAtto: '0',
   };
 }
 

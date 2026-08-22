@@ -2,8 +2,8 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 
 import { KeeperJournalError } from './errors.mjs';
 
-export const KEEPER_JOURNAL_CHAIN_ID = '61999';
-export const KEEPER_JOURNAL_NETWORK = 'studionet';
+export const KEEPER_JOURNAL_CHAIN_ID = '4221';
+export const KEEPER_JOURNAL_NETWORK = 'bradbury';
 export const KEEPER_JOURNAL_MAX_BODY_BYTES = 16 * 1024;
 export const KEEPER_JOURNAL_MAX_PAGE = 50;
 export const KEEPER_JOURNAL_MIN_LEASE_SECONDS = 60;

@@ -35,14 +35,14 @@ function exactDecodedCall(value, label) {
   });
 }
 
-class StudioReadableCallParser {
+class GenLayerReadableCallParser {
   constructor(source) {
     if (typeof source !== 'string' || source.trim() === '') {
-      throw new Error('StudioNet calldata.readable is missing.');
+      throw new Error('GenLayer calldata.readable is missing.');
     }
     if (source.length > MAX_READABLE_CALL_BYTES
       || new TextEncoder().encode(source).byteLength > MAX_READABLE_CALL_BYTES) {
-      throw new Error('StudioNet calldata.readable exceeds its byte limit.');
+      throw new Error('GenLayer calldata.readable exceeds its byte limit.');
     }
     this.source = source;
     this.index = 0;
@@ -57,14 +57,14 @@ class StudioReadableCallParser {
   countNode() {
     this.nodes += 1;
     if (this.nodes > MAX_READABLE_CALL_NODES) {
-      throw new Error('StudioNet calldata.readable has too many values.');
+      throw new Error('GenLayer calldata.readable has too many values.');
     }
   }
 
   withDepth(parse) {
     this.depth += 1;
     if (this.depth > MAX_READABLE_CALL_DEPTH) {
-      throw new Error('StudioNet calldata.readable is nested too deeply.');
+      throw new Error('GenLayer calldata.readable is nested too deeply.');
     }
     try {
       return parse();
@@ -121,7 +121,7 @@ class StudioReadableCallParser {
     const match = this.numberPattern.exec(this.source);
     if (!match) throw new Error(`expected a number at offset ${this.index}`);
     if (match[0].length > MAX_NUMBER_TOKEN_CHARS) {
-      throw new Error('StudioNet calldata.readable contains an oversized number.');
+      throw new Error('GenLayer calldata.readable contains an oversized number.');
     }
     this.index = this.numberPattern.lastIndex;
     return match[0];
@@ -187,18 +187,18 @@ class StudioReadableCallParser {
   }
 }
 
-function studioDecodedCall(receipt) {
+function readableDecodedCall(receipt) {
   if (receipt.data === undefined) return null;
-  if (!isPlainObject(receipt.data)) throw new Error('StudioNet receipt data is malformed.');
+  if (!isPlainObject(receipt.data)) throw new Error('GenLayer receipt data is malformed.');
   if (receipt.data.calldata === undefined) return null;
   if (!isPlainObject(receipt.data.calldata)) {
-    throw new Error('StudioNet receipt data.calldata is malformed.');
+    throw new Error('GenLayer receipt data.calldata is malformed.');
   }
-  const parsed = new StudioReadableCallParser(receipt.data.calldata.readable).parseDocument();
+  const parsed = new GenLayerReadableCallParser(receipt.data.calldata.readable).parseDocument();
   if (!isPlainObject(parsed)) {
-    throw new Error('StudioNet calldata.readable is not a call object.');
+    throw new Error('GenLayer calldata.readable is not a call object.');
   }
-  return exactDecodedCall({ type: 'call', callData: parsed }, 'StudioNet calldata.readable');
+  return exactDecodedCall({ type: 'call', callData: parsed }, 'GenLayer calldata.readable');
 }
 
 function nativeDecodedCall(receipt) {
@@ -217,11 +217,11 @@ function sameCall(left, right) {
 export function decodeGenLayerReceiptCall(receipt) {
   if (!isPlainObject(receipt)) throw new Error('GenLayer receipt is malformed.');
   const native = nativeDecodedCall(receipt);
-  const studio = studioDecodedCall(receipt);
-  if (native && studio && !sameCall(native, studio)) {
+  const readable = readableDecodedCall(receipt);
+  if (native && readable && !sameCall(native, readable)) {
     throw new Error('GenLayer receipt reports conflicting decoded call evidence.');
   }
-  const call = native || studio;
+  const call = native || readable;
   if (!call) throw new Error('GenLayer receipt has no exact decoded contract call.');
   return call;
 }

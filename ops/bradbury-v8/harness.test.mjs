@@ -906,6 +906,23 @@ test('deployment receipt proves successful full-consensus source, constructor, a
     source,
     config,
   }), CONTRACT);
+
+  const finalizedReadbackShape = {
+    ...receipt,
+    txDataDecoded: { ...receipt.txDataDecoded },
+  };
+  delete finalizedReadbackShape.txDataDecoded.constructorArgs;
+  assert.throws(() => assertExactDeploymentReceipt(finalizedReadbackShape, {
+    hash: GEN_HASH,
+    source,
+    config,
+  }), /constructorArgs must be an object/i);
+  assert.equal(assertExactDeploymentReceipt(finalizedReadbackShape, {
+    hash: GEN_HASH,
+    source,
+    config,
+    allowOmittedConstructorArgs: true,
+  }), CONTRACT);
 });
 
 test('actual SDK Map call decoding and absent GenLayer value use signed outer EVM evidence', async () => {

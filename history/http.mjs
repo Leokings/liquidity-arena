@@ -240,7 +240,9 @@ export function createPublicHistoryHandler({ repository }) {
         ? await repository.listDeployments(query)
         : query.view === 'proofs'
           ? await repository.listProofs(query)
-          : await repository.listEpochs(query);
+          : query.view === 'payouts'
+            ? await repository.listPayouts(query)
+            : await repository.listEpochs(query);
       const hasMore = rows.length > query.limit;
       const items = rows.slice(0, query.limit);
       const last = items.at(-1);
@@ -249,7 +251,11 @@ export function createPublicHistoryHandler({ repository }) {
         : null;
       return jsonResponse(res, 200, {
         status: 'ok',
-        dataScope: query.view === 'proofs' ? 'VERIFIED_TRANSACTION_PROOFS' : 'HOURLY_CONTRACT_EPOCHS',
+        dataScope: query.view === 'proofs'
+          ? 'VERIFIED_TRANSACTION_PROOFS'
+          : query.view === 'payouts'
+            ? 'V8_PAYOUT_STAGES'
+            : 'HOURLY_CONTRACT_EPOCHS',
         continuousVisualizationTicksStored: false,
         view: query.view,
         deployment: query.deployment,
@@ -288,7 +294,7 @@ export function createHistoryHealthHandler({ repository, environment = process.e
     return jsonResponse(res, status === 'degraded' ? 503 : 200, {
       status,
       service: 'liquidity-arena-history',
-      dataScope: 'HOURLY_CONTRACT_EPOCHS',
+      dataScope: 'BRADBURY_V8_EPOCHS_AND_PAYOUT_STAGES',
       continuousVisualizationTicksStored: false,
       configuration,
       database,

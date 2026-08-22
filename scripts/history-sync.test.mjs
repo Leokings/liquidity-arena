@@ -7,14 +7,15 @@ import { parseHistorySyncArguments, runHistorySyncCli } from './history-sync.mjs
 test('history sync CLI parses only bounded selector and proof assertions', () => {
   const hash = `0x${'a'.repeat(64)}`;
   const parsed = parseHistorySyncArguments([
-    '--deployment', 'v7',
+    '--deployment', 'v8',
     '--max-epochs', '5',
-    '--proof', `v7:${hash}:resolve_epoch`,
+    '--proof', `v8:${hash}:resolve_epoch`,
     '--no-known-proofs',
   ]);
-  assert.deepEqual(parsed.deployments, ['v7']);
+  assert.deepEqual(parsed.deployments, ['v8']);
   assert.equal(parsed.proofs[0].kind, 'RESOLVE_EPOCH');
   assert.equal(parsed.includeKnownProofs, false);
+  assert.throws(() => parseHistorySyncArguments(['--deployment', 'v7']), /must be v8/);
   assert.throws(() => parseHistorySyncArguments(['--winner', 'BTC']), /Unknown option/);
 });
 
@@ -23,7 +24,7 @@ test('history sync CLI sends the secret only in Authorization and never logs it'
   let captured;
   const logs = [];
   const result = await runHistorySyncCli(
-    ['--deployment', 'v7', '--max-epochs', '1', '--no-known-proofs'],
+    ['--deployment', 'v8', '--max-epochs', '1', '--no-known-proofs'],
     {
       environment: {
         HISTORY_SYNC_URL: 'https://liquidity.example.test/api/history-sync',
@@ -44,7 +45,7 @@ test('history sync CLI sends the secret only in Authorization and never logs it'
   assert.equal(captured.options.headers.authorization, `Bearer ${secret}`);
   assert.match(captured.options.headers['idempotency-key'], /^history-sync:/);
   const body = JSON.parse(captured.options.body);
-  assert.deepEqual(body.deployments, ['v7']);
+  assert.deepEqual(body.deployments, ['v8']);
   assert.equal(body.maxEpochs, 1);
   assert.equal(Object.hasOwn(body, 'startOffset'), false);
   assert.equal(parseHistorySyncBody(body).startOffset, null);

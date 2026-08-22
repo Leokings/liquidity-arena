@@ -1,5 +1,5 @@
 import { createClient } from 'genlayer-js';
-import { studionet } from 'genlayer-js/chains';
+import { testnetBradbury } from 'genlayer-js/chains';
 
 import { configuredBinanceRestBases } from '../market/binance-proxy.js';
 import { loadLiquidityArenaDeploymentConfig } from '../server/deployment-config.mjs';
@@ -31,12 +31,13 @@ export function createReadyHandler({
     ...deployment,
     binanceRestBases: configuredBinanceRestBases(environment.BINANCE_REST_BASES),
   });
-  const client = createClientImpl({ chain: studionet, endpoint: config.genLayerRpcUrl });
+  const client = createClientImpl({ chain: testnetBradbury, endpoint: config.genLayerRpcUrl });
   const readiness = createLiquidityArenaReadinessProbe({
     config,
     fetchImpl,
     now,
     timeoutMs,
+    readSchema: (address) => client.getContractSchema(address),
     readContract: ({ address, functionName, args }) => client.readContract({
       address,
       functionName,

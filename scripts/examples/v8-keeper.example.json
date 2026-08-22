@@ -1,13 +1,16 @@
 {
   "version": 1,
-  "network": "studionet",
-  "contractAddress": "${V7_CONTRACT_ADDRESS}",
+  "network": "testnet-bradbury",
+  "chainId": 4221,
+  "contractAddress": "${V8_CONTRACT_ADDRESS}",
   "expected": {
-    "protocolVersion": "LIQUIDITY_ARENA_V7",
+    "protocolVersion": "LIQUIDITY_ARENA_V8",
     "policyVersion": "CRYPTO_SPOT_1M_MEDIAN_V1",
-    "ownerAddress": "${V7_OWNER_ADDRESS}",
-    "keeperAddress": "${V7_KEEPER_ADDRESS}",
-    "treasuryAddress": "${V7_TREASURY_ADDRESS}",
+    "payoutProtocolVersion": "IDEMPOTENT_EVM_VAULT_V1",
+    "payoutFactoryAddress": "0x944fdadd826c2a159c63cb100db174716ccd1317",
+    "ownerAddress": "${V8_OWNER_ADDRESS}",
+    "keeperAddress": "${V8_KEEPER_ADDRESS}",
+    "treasuryAddress": "${V8_TREASURY_ADDRESS}",
     "platformFeeBps": 200
   },
   "epochs": {
@@ -18,15 +21,13 @@
   },
   "operator": {
     "pageSize": 50,
-    "scanIntervalMs": 25,
-    "readIntervalMs": 3000,
-    "maxEpochReadsPerRun": 8,
+    "maxEpochReadsPerRun": 50,
+    "maxPayoutReadsPerRun": 500,
     "maxWritesPerRun": 30,
     "readAttempts": 3,
     "retryBaseMs": 500,
     "finalityRetries": 180,
     "finalityIntervalMs": 5000,
-    "finalityWaitAttempts": 7,
     "postStateAttempts": 5,
     "postStateIntervalMs": 2000
   }

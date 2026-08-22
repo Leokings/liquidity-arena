@@ -735,6 +735,10 @@ export async function validateFinalizedV8Deployment(
     hash: request.deploymentGenLayerTransactionHash,
     source: local.source,
     config,
+    // Bradbury's finalized receipt readback can omit constructorArgs. The
+    // exact outer consensus calldata is independently decoded and verified
+    // below before this proof can authorize a signer.
+    allowOmittedConstructorArgs: true,
   });
   if (getAddress(arenaAddress) !== request.arenaAddress) {
     fail("Live finalized GenLayer deployment address differs from the bind request");
@@ -1605,7 +1609,7 @@ export async function runBradburyBindTool(
         factoryEvidence: factoryProof.fingerprint,
         v8BindRequestSha256: request.fileSha256,
       }, env);
-      const binderSigner = await walletLoader(
+      let binderSigner = await walletLoader(
         env,
         "BRADBURY_EVM",
         factoryProof.binder,
@@ -1629,33 +1633,38 @@ export async function runBradburyBindTool(
         { binder: factoryProof.binder, reserveSink: factoryProof.reserveSink },
         { expectedArena: ZeroAddress },
       );
-      const submitted = await sendCheckedTransaction(
-        BIND_TRANSACTION_LABEL,
-        binderSigner,
-        provider,
-        {
-          to: factoryProof.factoryAddress,
-          data: preflight.data,
-          value: 0n,
-        },
-        {
-          mode: "production-bind",
-          evidencePath: config.evidencePath,
-          confirmations: config.confirmations,
-          timeoutMs: config.timeoutMs,
-          finalityTimeoutMs: config.finalityTimeoutMs,
-          requiredBroadcastConfirmation: preflight.confirmation,
-          broadcastConfirmation: config.broadcastConfirmation,
-        },
-        checkpoint,
-        {
-          estimate: preflight.estimate,
-          gasLimit: preflight.gasLimit,
-          fees: preflight.fees,
-          nonce: preflight.nonce,
-          intent: preflight.intent,
-        },
-      );
+      let submitted;
+      try {
+        submitted = await sendCheckedTransaction(
+          BIND_TRANSACTION_LABEL,
+          binderSigner,
+          provider,
+          {
+            to: factoryProof.factoryAddress,
+            data: preflight.data,
+            value: 0n,
+          },
+          {
+            mode: "production-bind",
+            evidencePath: config.evidencePath,
+            confirmations: config.confirmations,
+            timeoutMs: config.timeoutMs,
+            finalityTimeoutMs: config.finalityTimeoutMs,
+            requiredBroadcastConfirmation: preflight.confirmation,
+            broadcastConfirmation: config.broadcastConfirmation,
+          },
+          checkpoint,
+          {
+            estimate: preflight.estimate,
+            gasLimit: preflight.gasLimit,
+            fees: preflight.fees,
+            nonce: preflight.nonce,
+            intent: preflight.intent,
+          },
+        );
+      } finally {
+        binderSigner = undefined;
+      }
       config.txHash = submitted.transactionHash;
     } else {
       const signed = rawJournalEntries(config.evidencePath).find(

@@ -6,10 +6,26 @@ import {
   canonicalSyncRequestHash,
   normalizeDeploymentState,
   normalizeEpochState,
+  normalizePayoutState,
 } from './schema.mjs';
 
 const SYNC_LEASE_SECONDS = 120;
 const SYNC_DEADLINE_MS = 90_000;
+const PAYOUT_PROOF_METHODS = new Set([
+  'retry_prepare_payout',
+  'dispatch_payout',
+  'retry_payout',
+  'confirm_payout',
+  'refresh_payout_withdrawal',
+]);
+
+function payoutIdFromProof(proof) {
+  if (!PAYOUT_PROOF_METHODS.has(proof?.method)
+    || !Array.isArray(proof?.arguments)
+    || proof.arguments.length !== 1
+    || !/^[0-9a-f]{64}$/.test(String(proof.arguments[0] || ''))) return null;
+  return String(proof.arguments[0]);
+}
 
 function keyHash(value) {
   return createHash('sha256').update(String(value), 'utf8').digest('hex');
@@ -29,7 +45,7 @@ function selectedDeployments(configuration, requestedAliases) {
   const aliases = requestedAliases || [...new Set(configuration.deployments.map((item) => item.alias))];
   for (const alias of aliases) {
     if (!configuration.deployments.some((item) => item.alias === alias)) {
-      fail('HISTORY_DEPLOYMENT_ALLOWLIST', `Deployment ${alias} is not configured on StudioNet.`, 400);
+      fail('HISTORY_DEPLOYMENT_ALLOWLIST', `Deployment ${alias} is not the active Bradbury V8 deployment.`, 400);
     }
   }
   return configuration.deployments.filter((item) => aliases.includes(item.alias));
@@ -88,7 +104,7 @@ async function beforeDeadline(promise, deadline, now) {
 }
 
 export function createHistorySyncService({ repository, chain, now = Date.now } = {}) {
-  if (!repository || !chain) throw new TypeError('History repository and StudioNet chain are required.');
+  if (!repository || !chain) throw new TypeError('History repository and Bradbury chain are required.');
 
   return Object.freeze({
     async sync({ request, idempotencyKey }) {
@@ -118,12 +134,14 @@ export function createHistorySyncService({ repository, chain, now = Date.now } =
       const syncedAt = new Date(startedAt).toISOString();
       const summary = {
         status: 'ok',
-        dataScope: 'HOURLY_CONTRACT_EPOCHS',
+        dataScope: 'BRADBURY_V8_EPOCHS_AND_PAYOUT_STAGES',
         continuousVisualizationTicksStored: false,
-        network: 'studionet',
-        chainId: 61999,
+        network: 'testnet-bradbury',
+        chainId: 4_221,
         deploymentsSynced: 0,
         epochsSynced: 0,
+        payoutsSynced: 0,
+        payoutStageProofsProjected: 0,
         snapshotsSynced: 0,
         proofsVerified: 0,
         proofsAlreadyVerified: 0,
@@ -141,10 +159,12 @@ export function createHistorySyncService({ repository, chain, now = Date.now } =
             : 0;
           const deployment = deployments[index];
           const manifest = deploymentManifest(deployment);
+          const payoutCursor = await repository.getPayoutSyncCursor(deployment.deploymentId);
           const raw = await beforeDeadline(
             chain.readDeployment(deployment.deploymentId, {
               maxEpochs: allocation,
               startOffset: request.startOffset,
+              payoutOffset: payoutCursor.nextOffset,
             }),
             deadline,
             now,
@@ -167,6 +187,23 @@ export function createHistorySyncService({ repository, chain, now = Date.now } =
             summary.epochsSynced += 1;
             if (epoch.snapshot) summary.snapshotsSynced += 1;
           }
+          const payoutIds = [];
+          for (const rawPayout of raw.payouts || []) {
+            const payout = normalizePayoutState({ deployment, payout: rawPayout, syncedAt });
+            await repository.upsertPayout(payout);
+            payoutIds.push(payout.payoutId);
+            summary.payoutsSynced += 1;
+          }
+          summary.payoutStageProofsProjected += await repository.projectVerifiedPayoutStageProofs({
+            deploymentId: deployment.deploymentId,
+            payoutIds,
+          });
+          await repository.advancePayoutSyncCursor({
+            deploymentId: deployment.deploymentId,
+            expectedOffset: payoutCursor.nextOffset,
+            nextOffset: raw.payoutPage.nextOffset,
+            observedTotal: raw.payoutPage.total,
+          });
           remainingEpochBudget = Math.max(0, remainingEpochBudget - raw.epochs.length);
         }
 
@@ -186,6 +223,13 @@ export function createHistorySyncService({ repository, chain, now = Date.now } =
               fail('HISTORY_PROOF_CONFLICT', 'Stored transaction proof identity conflicts with this request.', 409);
             }
             summary.proofsAlreadyVerified += 1;
+            const payoutId = payoutIdFromProof(existing);
+            if (payoutId) {
+              summary.payoutStageProofsProjected += await repository.projectVerifiedPayoutStageProofs({
+                deploymentId: deployment.deploymentId,
+                payoutIds: [payoutId],
+              });
+            }
             continue;
           }
           const manifest = deploymentManifest(deployment);
@@ -217,6 +261,13 @@ export function createHistorySyncService({ repository, chain, now = Date.now } =
               );
             }
             await repository.upsertProof(proof);
+            const payoutId = payoutIdFromProof(proof);
+            if (payoutId) {
+              summary.payoutStageProofsProjected += await repository.projectVerifiedPayoutStageProofs({
+                deploymentId: deployment.deploymentId,
+                payoutIds: [payoutId],
+              });
+            }
             summary.proofsVerified += 1;
           } catch (error) {
             if (item.source === 'request') {

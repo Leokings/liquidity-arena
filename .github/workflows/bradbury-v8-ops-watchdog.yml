@@ -1,4 +1,4 @@
-name: StudioNet Operations Watchdog
+name: Bradbury V8 Operations Watchdog
 
 on:
   schedule:
@@ -6,15 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       synthetic_failure:
-        description: Exercise issue delivery without degrading production
         required: true
         default: false
         type: boolean
   workflow_run:
     workflows:
-      - StudioNet V7 Keeper
-    types:
-      - completed
+      - Bradbury V8 Keeper
+    types: [completed]
 
 permissions:
   actions: read
@@ -22,22 +20,36 @@ permissions:
   issues: write
 
 concurrency:
-  group: studionet-liquidity-arena-watchdog
+  group: bradbury-v8-liquidity-arena-watchdog
   cancel-in-progress: false
 
 jobs:
   verify:
+    if: >-
+      github.repository == 'Leokings/liquidity-arena' &&
+      github.ref == 'refs/heads/main' &&
+      github.ref_name == 'main'
     runs-on: ubuntu-latest
-    environment: studionet-keeper
+    environment: bradbury-v8-keeper
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Enforce protected main before secrets
+        shell: bash
+        env:
+          ACTUAL_REPOSITORY: ${{ github.repository }}
+          ACTUAL_REF: ${{ github.ref }}
+          ACTUAL_REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$ACTUAL_REPOSITORY" != 'Leokings/liquidity-arena' || "$ACTUAL_REF" != 'refs/heads/main' || "$ACTUAL_REF_NAME" != 'main' ]]; then
+            echo '::error::Bradbury V8 watchdog secrets are restricted to protected main.'
+            exit 1
+          fi
 
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-
-      - name: Verify independent operational surfaces
+      - name: Verify V8 operational surfaces
         id: health
         continue-on-error: true
         env:
@@ -49,7 +61,6 @@ jobs:
           WATCHDOG_SYNTHETIC_FAILURE: ${{ inputs.synthetic_failure }}
           WATCHDOG_REPORT_PATH: ${{ runner.temp }}/ops-watchdog-report.md
         run: node scripts/ops-watchdog.mjs
-
       - name: Open or update the operational alert
         if: steps.health.outcome == 'failure'
         shell: bash
@@ -57,26 +68,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPORT_PATH: ${{ runner.temp }}/ops-watchdog-report.md
         run: |
-          title='[ops] StudioNet liquidity arena degraded'
+          title='[ops] Bradbury V8 liquidity arena degraded'
           issue_number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
           if [[ -n "$issue_number" ]]; then
             gh issue comment "$issue_number" --repo "$GITHUB_REPOSITORY" --body-file "$REPORT_PATH"
           else
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$REPORT_PATH"
           fi
-
       - name: Close a recovered operational alert
         if: steps.health.outcome == 'success'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          title='[ops] StudioNet liquidity arena degraded'
+          title='[ops] Bradbury V8 liquidity arena degraded'
           issue_number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
           if [[ -n "$issue_number" ]]; then
-            gh issue close "$issue_number" --repo "$GITHUB_REPOSITORY" --comment 'Automated watchdog recovery check passed.'
+            gh issue close "$issue_number" --repo "$GITHUB_REPOSITORY" --comment 'Automated V8 watchdog recovery check passed.'
           fi
-
       - name: Fail after persisting the alert
         if: steps.health.outcome == 'failure'
         run: exit 1

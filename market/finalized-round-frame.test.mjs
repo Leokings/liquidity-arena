@@ -36,9 +36,9 @@ function sourceFrame(window = 'ROUND') {
 
 function finalRound(overrides = {}) {
   return {
-    protocolVersion: 'LIQUIDITY_ARENA_V6',
-    deploymentAlias: 'v6',
-    contractAddress: `0x${'6'.repeat(40)}`,
+    protocolVersion: 'LIQUIDITY_ARENA_V8',
+    deploymentAlias: 'v8',
+    contractAddress: `0x${'8'.repeat(40)}`,
     objective: 'HIGH',
     status: 'RESOLVED',
     epochEndTimestamp: 1_787_155_200,
@@ -98,7 +98,7 @@ test('explicit historical epoch targets both actions and visualization', () => {
   assert.throws(() => selectRoundTargets({ explicitEpochEndTimestamp: explicit + 1 }), /exact-hour/);
 });
 
-test('finalized V6 vector replaces ROUND returns, leaders and territory only', () => {
+test('finalized V8 vector replaces ROUND returns, leaders and territory only', () => {
   const frame = sourceFrame();
   const reconciled = reconcileFinalizedRoundFrame(frame, finalRound(), finalAssets);
   assert.notEqual(reconciled, frame);
@@ -122,19 +122,15 @@ test('finalized V6 vector replaces ROUND returns, leaders and territory only', (
   }
 });
 
-test('same epoch can render a contract-qualified V7 settlement without being labeled V6', () => {
+test('finalized settlement rejects every non-V8 protocol or alias', () => {
   const frame = sourceFrame();
-  const round = finalRound({
+  assert.throws(() => reconcileFinalizedRoundFrame(frame, finalRound({
     protocolVersion: 'LIQUIDITY_ARENA_V7',
     deploymentAlias: 'v7',
     contractAddress: `0x${'7'.repeat(40)}`,
-  });
-  const result = reconcileFinalizedRoundFrame(frame, round, finalAssets);
-  assert.equal(result.settlement.source, 'GENLAYER_V7_FIVE_VENUE_MEDIAN');
-  assert.equal(result.settlement.protocolVersion, 'LIQUIDITY_ARENA_V7');
-  assert.equal(result.settlement.contractAddress, `0x${'7'.repeat(40)}`);
+  }), finalAssets), /not allowlisted/);
   assert.throws(
-    () => reconcileFinalizedRoundFrame(frame, { ...round, deploymentAlias: 'arbitrary' }, finalAssets),
+    () => reconcileFinalizedRoundFrame(frame, finalRound({ deploymentAlias: 'arbitrary' }), finalAssets),
     /not allowlisted/,
   );
 });

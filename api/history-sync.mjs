@@ -1,4 +1,4 @@
-import { createStudioNetHistoryChain } from '../history/chain.mjs';
+import { createBradburyHistoryChain } from '../history/chain.mjs';
 import { loadHistoryChainConfiguration } from '../history/config.mjs';
 import { createHistorySyncHandler } from '../history/http.mjs';
 import { createNeonHistoryRepository } from '../history/repository.mjs';
@@ -15,7 +15,7 @@ const handler = createHistorySyncHandler({
     async sync(input) {
       service ||= createHistorySyncService({
         repository,
-        chain: createStudioNetHistoryChain({
+        chain: createBradburyHistoryChain({
           configuration: loadHistoryChainConfiguration(process.env),
         }),
       });
