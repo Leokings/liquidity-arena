@@ -270,10 +270,10 @@ export function createAuthoritativeKeeperSession({
         || health?.configuration?.signerConfigured !== true
         || health?.database?.configured !== true
         || health?.database?.ready !== true
-        || health?.database?.schemaVersion !== 7) {
+        || health?.database?.schemaVersion !== 8) {
       fail(
         'KEEPER_JOURNAL_NOT_READY',
-        'The authoritative keeper journal is not ready on schema version 7; no lease or write is permitted.',
+        'The authoritative keeper journal is not ready on schema version 8; no lease or write is permitted.',
       );
     }
     const response = await client.acquireLease({
