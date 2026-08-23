@@ -1,17 +1,13 @@
-import { spawn as nodeSpawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
 import { Interface, id as ethersId } from 'ethers';
+import { abi } from 'genlayer-js';
 
 import { createKeeperJournalClientFromEnvironment } from '../keeper-journal/client.mjs';
 import { requireKeeperJournalSignerAddress } from '../keeper-journal/config.mjs';
 import { keeperPrehashEvidenceDigest } from '../keeper-journal/schema.mjs';
 import { createAuthoritativeKeeperSession } from './authoritative-keeper-journal.mjs';
-import {
-  parseGenlayerCallOutput,
-  resolveGenlayerCommand,
-} from './genlayer-command.mjs';
 
 const OPERATION_ID = /^[0-9a-f]{64}$/;
 const ADDRESS = /^0x[0-9a-f]{40}$/;
@@ -22,7 +18,6 @@ const MAX_EVIDENCE_BYTES = 32 * 1024;
 const MAX_RPC_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_SCAN_BLOCK_SPAN = 512n;
 const RPC_TIMEOUT_MS = 10_000;
-const GENLAYER_CALL_TIMEOUT_MS = 30_000;
 const MAX_GENLAYER_CALL_OUTPUT_BYTES = 64 * 1024;
 export const BRADBURY_RECOVERY_RPC_URL = 'https://rpc-bradbury.genlayer.com';
 export const BRADBURY_RECOVERY_CHAIN_ID = 4_221n;
@@ -101,7 +96,14 @@ export function createBradburyRecoveryRpc({
     throw new Error('Bradbury RPC timeout is invalid.');
   }
   let requestId = 0;
-  return async (method, params) => {
+  return async (method, params, {
+    captureError = false,
+    maxResponseBytes = MAX_RPC_RESPONSE_BYTES,
+  } = {}) => {
+    if (typeof captureError !== 'boolean' || !Number.isSafeInteger(maxResponseBytes)
+        || maxResponseBytes < 1 || maxResponseBytes > MAX_RPC_RESPONSE_BYTES) {
+      recoveryFailure('Bradbury RPC response policy is invalid.');
+    }
     const id = ++requestId;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -115,15 +117,24 @@ export function createBradburyRecoveryRpc({
       });
       if (!response?.ok) recoveryFailure(`Bradbury RPC ${method} failed.`);
       const source = await response.text();
-      if (Buffer.byteLength(source, 'utf8') > MAX_RPC_RESPONSE_BYTES) {
+      if (Buffer.byteLength(source, 'utf8') > maxResponseBytes) {
         recoveryFailure(`Bradbury RPC ${method} response is too large.`);
       }
       let payload;
       try { payload = JSON.parse(source); } catch { recoveryFailure(`Bradbury RPC ${method} returned invalid JSON.`); }
+      const hasError = Object.hasOwn(payload || {}, 'error')
+        && payload.error !== null && payload.error !== undefined;
+      const hasResult = Object.hasOwn(payload || {}, 'result')
+        && payload.result !== null && payload.result !== undefined;
       if (!payload || payload.jsonrpc !== '2.0' || payload.id !== id
-          || Object.hasOwn(payload, 'error') || !Object.hasOwn(payload, 'result')) {
+          || hasError === hasResult) {
         recoveryFailure(`Bradbury RPC ${method} returned an invalid result.`);
       }
+      if (hasError) {
+        if (captureError) return Object.freeze({ ok: false, error: payload.error });
+        recoveryFailure(`Bradbury RPC ${method} returned an invalid result.`);
+      }
+      if (captureError) return Object.freeze({ ok: true, result: payload.result });
       return payload.result;
     } catch (error) {
       if (error?.code === 'KEEPER_PREHASH_CHAIN_EVIDENCE_INVALID') throw error;
@@ -199,7 +210,7 @@ export function assertEpochUnknownPostState(value, evidence) {
       || Object.keys(value).length !== 3
       || value.kind !== 'EXPECTED_CONTRACT_ERROR'
       || value.code !== 'EPOCH_UNKNOWN'
-      || value.message !== 'Epoch does not exist'
+      || value.message !== '[EXPECTED] EPOCH_UNKNOWN'
       || evidence.postStateStatus !== 'EPOCH_UNKNOWN') {
     recoveryFailure('Live target did not prove the exact EPOCH_UNKNOWN create_epoch pre-state.');
   }
@@ -215,102 +226,122 @@ export function assertAuditedEpochPostState(value, evidence) {
   recoveryFailure('Audited recovery method is not supported.');
 }
 
-function exactEpochUnknownFailure(source) {
-  const clean = String(source).replace(/\u001b\[[0-9;]*m/g, '').replace(/\r\n/g, '\n');
-  const marker = '[EXPECTED] EPOCH_UNKNOWN: Epoch does not exist';
-  return clean.split(marker).length === 2
-    && !/(?:^|\n).*\[EXPECTED\] [A-Z][A-Z0-9_]{0,79}:/.test(
-      clean.replace(marker, ''),
-    );
+function exactEpochUnknownGenvmError(error) {
+  if (!error || typeof error !== 'object' || Array.isArray(error)
+      || Object.keys(error).sort().join(',') !== 'code,data,message'
+      || error.code !== -32000
+      || typeof error.message !== 'string'
+      || !error.message.startsWith('execution failed: &genvm.VMResult{Kind:0x1, ReturnData:')
+      || !error.message.endsWith(': genvm execution error')
+      || typeof error.data !== 'string'
+      || error.data.length < 2 || error.data.length > MAX_GENLAYER_CALL_OUTPUT_BYTES * 2
+      || error.data.length % 2 !== 0 || !/^[0-9a-f]+$/.test(error.data)) return false;
+  let decoded;
+  const encoded = Buffer.from(error.data, 'hex');
+  try {
+    decoded = abi.calldata.decode(encoded);
+    if (!Buffer.from(abi.calldata.encode(decoded)).equals(encoded)) return false;
+  } catch {
+    return false;
+  }
+  if (!(decoded instanceof Map)
+      || [...decoded.keys()].sort().join(',') !== 'data,events,fingerprint,kind,storage_changes'
+      || decoded.get('data') !== '[EXPECTED] EPOCH_UNKNOWN'
+      || !Array.isArray(decoded.get('events')) || decoded.get('events').length !== 0
+      || !(decoded.get('fingerprint') instanceof Map)
+      || decoded.get('kind') !== 'UserError'
+      || !Array.isArray(decoded.get('storage_changes'))
+      || decoded.get('storage_changes').length !== 0) return false;
+  return true;
+}
+
+function plainCalldata(value) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'bigint') return value.toString();
+  if (Array.isArray(value)) return value.map(plainCalldata);
+  if (value instanceof Map) {
+    const result = {};
+    for (const [key, entry] of value) {
+      if (typeof key !== 'string' || !/^[a-z][a-z0-9_]{0,79}$/.test(key)
+          || Object.hasOwn(result, key)) recoveryFailure('Recovery GenLayer call returned invalid keys.');
+      result[key] = plainCalldata(entry);
+    }
+    return result;
+  }
+  recoveryFailure('Recovery GenLayer call returned an unsupported value.');
+}
+
+function decodedGenCallResult(result) {
+  let data;
+  if (typeof result === 'string') data = result;
+  else if (result && typeof result === 'object' && !Array.isArray(result)
+      && typeof result.data === 'string'
+      && (result.status === undefined
+        || (result.status && typeof result.status === 'object'
+          && !Array.isArray(result.status) && result.status.code === 0))) data = result.data;
+  else recoveryFailure('Recovery gen_call returned an invalid success result.');
+  if (data.length < 2 || data.length > MAX_GENLAYER_CALL_OUTPUT_BYTES * 2
+      || data.length % 2 !== 0 || !/^[0-9a-f]+$/.test(data)) {
+    recoveryFailure('Recovery gen_call returned invalid calldata.');
+  }
+  try {
+    const encoded = Buffer.from(data, 'hex');
+    const decoded = abi.calldata.decode(encoded);
+    if (!Buffer.from(abi.calldata.encode(decoded)).equals(encoded)) {
+      recoveryFailure('Recovery gen_call returned noncanonical calldata.');
+    }
+    return plainCalldata(decoded);
+  } catch (error) {
+    if (error?.code === 'KEEPER_PREHASH_CHAIN_EVIDENCE_INVALID') throw error;
+    recoveryFailure('Recovery gen_call returned undecodable calldata.');
+  }
 }
 
 export async function readBradburyRecoveryEpoch({
   contractAddress,
   subjectId,
-  invocation = resolveGenlayerCommand(),
-  spawnImpl = nodeSpawn,
-  timeoutMs = GENLAYER_CALL_TIMEOUT_MS,
+  rpcCall = createBradburyRecoveryRpc(),
 } = {}) {
   exactLowerAddress(contractAddress, 'recovery target contract');
   if (typeof subjectId !== 'string' || !DECIMAL.test(subjectId)) {
     recoveryFailure('Recovery epoch subject is invalid.');
   }
-  if (!invocation || typeof invocation.executable !== 'string'
-      || !Array.isArray(invocation.prefixArgs) || typeof spawnImpl !== 'function'
-      || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1
-      || timeoutMs > GENLAYER_CALL_TIMEOUT_MS) {
-    recoveryFailure('Recovery GenLayer call process configuration is invalid.');
-  }
-  const output = await new Promise((resolve, reject) => {
-    let child;
-    try {
-      child = spawnImpl(
-        invocation.executable,
-        [
-          ...invocation.prefixArgs,
-          'call',
-          contractAddress,
-          'get_epoch',
-          '--rpc',
-          BRADBURY_RECOVERY_RPC_URL,
-          '--args',
-          subjectId,
-        ],
-        { shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
-      );
-    } catch {
-      reject(recoveryError('Recovery GenLayer call process could not be started.'));
-      return;
-    }
-    let settled = false;
-    let source = '';
-    const finish = (error, value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error);
-      else resolve(value);
-    };
-    const append = (chunk) => {
-      if (settled) return;
-      source += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
-      if (Buffer.byteLength(source, 'utf8') > MAX_GENLAYER_CALL_OUTPUT_BYTES) {
-        child.kill?.();
-        finish(recoveryError('Recovery GenLayer call output exceeded its bound.'));
-      }
-    };
-    const timer = setTimeout(() => {
-      child.kill?.();
-      finish(recoveryError('Recovery GenLayer call timed out.'));
-    }, timeoutMs);
-    timer.unref?.();
-    child.stdout?.on('data', append);
-    child.stderr?.on('data', append);
-    child.once?.('error', () => {
-      finish(recoveryError('Recovery GenLayer call process failed.'));
-    });
-    child.once?.('close', (status) => {
-      if (status !== 0) {
-        if (exactEpochUnknownFailure(source)) {
-          finish(null, Object.freeze({
-            kind: 'EXPECTED_CONTRACT_ERROR',
-            code: 'EPOCH_UNKNOWN',
-            message: 'Epoch does not exist',
-          }));
-        } else {
-          finish(recoveryError('Recovery GenLayer call process exited unsuccessfully.'));
-        }
-      } else {
-        finish(null, Object.freeze({ kind: 'SUCCESS', source }));
-      }
-    });
-  });
-  if (output.kind === 'EXPECTED_CONTRACT_ERROR') return output;
+  if (typeof rpcCall !== 'function') recoveryFailure('Recovery gen_call transport is invalid.');
+  let data;
   try {
-    return parseGenlayerCallOutput(output.source);
+    data = abi.transactions.serialize([
+      abi.calldata.encode(abi.calldata.makeCalldataObject(
+        'get_epoch',
+        [BigInt(subjectId)],
+        undefined,
+      )),
+      false,
+    ]);
   } catch {
-    recoveryFailure('Recovery GenLayer call returned an invalid result.');
+    recoveryFailure('Recovery get_epoch calldata could not be encoded.');
   }
+  const response = await rpcCall('gen_call', [{
+    type: 'read',
+    to: contractAddress,
+    from: `0x${'0'.repeat(40)}`,
+    data,
+    transaction_hash_variant: 'latest-nonfinal',
+  }], { captureError: true, maxResponseBytes: MAX_GENLAYER_CALL_OUTPUT_BYTES });
+  if (!response || typeof response !== 'object' || Array.isArray(response)
+      || typeof response.ok !== 'boolean') {
+    recoveryFailure('Recovery gen_call transport returned an invalid envelope.');
+  }
+  if (response.ok === false) {
+    if (!exactEpochUnknownGenvmError(response.error)) {
+      recoveryFailure('Recovery gen_call did not prove exact EPOCH_UNKNOWN.');
+    }
+    return Object.freeze({
+      kind: 'EXPECTED_CONTRACT_ERROR',
+      code: 'EPOCH_UNKNOWN',
+      message: '[EXPECTED] EPOCH_UNKNOWN',
+    });
+  }
+  return decodedGenCallResult(response.result);
 }
 
 function assertReferenceCall(transaction, evidence) {
