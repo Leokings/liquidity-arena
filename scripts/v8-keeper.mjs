@@ -19,6 +19,7 @@ import {
 } from './authoritative-keeper-journal.mjs';
 import {
   assertFinalizedGenlayerExecution,
+  categorizeGenlayerFailure,
   createPasswordWritingSpawn,
   GENLAYER_BRADBURY_RPC_URL,
   getGenlayerDecidedReceipt,
@@ -62,6 +63,44 @@ const PAYOUT_ID = /^[0-9a-f]{64}$/;
 const ADDRESS = /^0x[0-9a-f]{40}$/;
 const TERMINAL_EPOCH_STATUSES = new Set(['RESOLVED', 'TIMED_OUT']);
 const PAYOUT_STATES = new Set(['PREPARING', 'DISPATCHED', 'FUNDED_IN_ESCROW', 'EOA_WITHDRAWN']);
+const EMPTY_OBJECTIVE_KEYS = Object.freeze([
+  'allocated_atto',
+  'allocated_not_funded_atto',
+  'epoch_id',
+  'funded_in_escrow_atto',
+  'funded_not_withdrawn_atto',
+  'losing_stake_atto',
+  'objective',
+  'paid_atto',
+  'participant_count',
+  'payout_pool_atto',
+  'platform_fee_atto',
+  'remaining_payout_atto',
+  'settlement_mode',
+  'total_stake_atto',
+  'unallocated_payout_atto',
+  'unclaimed_winning_stake_atto',
+  'winner_asset_id',
+  'winner_return_ppb',
+  'winning_stake_atto',
+].sort());
+const EMPTY_OBJECTIVE_ZERO_FIELDS = Object.freeze([
+  'allocated_atto',
+  'allocated_not_funded_atto',
+  'funded_in_escrow_atto',
+  'funded_not_withdrawn_atto',
+  'losing_stake_atto',
+  'paid_atto',
+  'participant_count',
+  'payout_pool_atto',
+  'platform_fee_atto',
+  'remaining_payout_atto',
+  'total_stake_atto',
+  'unallocated_payout_atto',
+  'unclaimed_winning_stake_atto',
+  'winner_return_ppb',
+  'winning_stake_atto',
+]);
 const NO_OUTPUT = () => {};
 export const V8_FACTORY_VIEW_ABI = Object.freeze([
   'function is_prepared(string payoutId,address recipient,uint256 amount) view returns (bool)',
@@ -465,11 +504,66 @@ function assertEpoch(config, value, epochEndTimestamp) {
 
 export function classifyOpenEpoch(epoch, nowEpochSeconds) {
   if (String(epoch?.status ?? '') !== 'OPEN') return null;
+  if (isProvablyEmptyEpoch(epoch)) return null;
   const timeout = safeInteger(chainField(epoch, 'timeout_refund_available_timestamp', 'timeoutRefundAvailableTimestamp'), 'timeout timestamp');
   const resolution = safeInteger(chainField(epoch, 'resolution_available_timestamp', 'resolutionAvailableTimestamp'), 'resolution timestamp');
   if (nowEpochSeconds >= timeout) return 'TIMEOUT';
   if (nowEpochSeconds >= resolution) return 'RESOLVE';
   return null;
+}
+
+function isExactEmptyObjective(value, epochId, objective) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+      || Object.keys(value).sort().join(',') !== EMPTY_OBJECTIVE_KEYS.join(',')) return false;
+  if (String(value.epoch_id ?? '') !== epochId
+      || value.objective !== objective
+      || value.settlement_mode !== 'PENDING'
+      || value.winner_asset_id !== '') return false;
+  try {
+    return EMPTY_OBJECTIVE_ZERO_FIELDS.every((field) => integerText(value[field], `objective.${field}`) === '0');
+  } catch {
+    return false;
+  }
+}
+
+export function isProvablyEmptyEpoch(epoch) {
+  if (!epoch || typeof epoch !== 'object' || Array.isArray(epoch)
+      || String(epoch.status ?? '') !== 'OPEN'
+      || String(chainField(epoch, 'result_status', 'resultStatus') ?? '') !== 'PENDING'
+      || String(chainField(epoch, 'resolution_digest', 'resolutionDigest') ?? '') !== '') return false;
+  let epochId;
+  try {
+    epochId = integerText(chainField(epoch, 'epoch_end_timestamp', 'epochEndTimestamp'), 'epoch.epoch_end_timestamp');
+  } catch {
+    return false;
+  }
+  return isExactEmptyObjective(epoch.high, epochId, 'HIGH')
+    && isExactEmptyObjective(epoch.low, epochId, 'LOW');
+}
+
+export function plannedDueEpochIds(dueEpochIds, budgetValue, rotationOrdinal = null) {
+  if (!Array.isArray(dueEpochIds)) fail('KEEPER_ARGUMENT', 'due epoch IDs must be an array');
+  const budget = safeInteger(budgetValue, 'epoch scan budget');
+  if (budget < 1) fail('KEEPER_ARGUMENT', 'epoch scan budget must be positive');
+  const ids = dueEpochIds.map((value) => safeInteger(value, 'due epoch ID'))
+    .sort((left, right) => left - right);
+  if (new Set(ids).size !== ids.length) fail('CHAIN_SCHEMA', 'due epoch IDs contain duplicates');
+  if (ids.length <= budget || rotationOrdinal === null || rotationOrdinal === undefined) {
+    return Object.freeze(ids.slice(-budget).reverse());
+  }
+
+  const ordinal = BigInt(integerText(rotationOrdinal, 'durable epoch rotation ordinal'));
+  if (ordinal < 1n) fail('KEEPER_ARGUMENT', 'durable epoch rotation ordinal must be positive');
+  const recentBudget = budget === 1 ? 0 : Math.floor(budget / 2);
+  const rotatingBudget = budget - recentBudget;
+  const older = ids.slice(0, ids.length - recentBudget);
+  const start = Number(((ordinal - 1n) * BigInt(rotatingBudget)) % BigInt(older.length));
+  const rotating = Array.from(
+    { length: rotatingBudget },
+    (_, index) => older[(start + index) % older.length],
+  );
+  const recent = recentBudget === 0 ? [] : ids.slice(-recentBudget);
+  return Object.freeze([...rotating, ...recent]);
 }
 
 export async function planV8KeeperRun(context) {
@@ -488,10 +582,14 @@ export async function planV8KeeperRun(context) {
     const action = classifyPayoutAction(payout, context.nowEpochSeconds, railState);
     if (action) actions.push(action);
   }
-  const due = epochIds.map(Number)
-    .filter((end) => end + V8_RESOLUTION_PUBLICATION_DELAY_SECONDS <= context.nowEpochSeconds)
-    .sort((left, right) => right - left)
-    .slice(0, context.config.operator.maxEpochReadsPerRun);
+  const dueEpochIds = epochIds.map(Number)
+    .filter((end) => end + V8_RESOLUTION_PUBLICATION_DELAY_SECONDS <= context.nowEpochSeconds);
+  const epochRotationOrdinal = context.journalSession?.lease?.fencingToken ?? null;
+  const due = plannedDueEpochIds(
+    dueEpochIds,
+    context.config.operator.maxEpochReadsPerRun,
+    epochRotationOrdinal,
+  );
   for (const epochEndTimestamp of due) {
     const epoch = assertEpoch(
       context.config,
@@ -506,7 +604,9 @@ export async function planV8KeeperRun(context) {
       if (!known.has(String(epochEndTimestamp))) actions.push(Object.freeze({ type: 'CREATE', epochEndTimestamp }));
     }
   }
-  const priority = { REFRESH: 0, CONFIRM: 1, RETRY_PAYOUT: 2, DISPATCH: 3, RETRY_PREPARE: 4, TIMEOUT: 5, RESOLVE: 6, CREATE: 7 };
+  // Missing planned epochs are coverage-critical: create them before spending
+  // this run's sole fresh-signature allowance on settlement or payout work.
+  const priority = { CREATE: 0, REFRESH: 1, CONFIRM: 2, RETRY_PAYOUT: 3, DISPATCH: 4, RETRY_PREPARE: 5, TIMEOUT: 6, RESOLVE: 7 };
   actions.sort((left, right) => priority[left.type] - priority[right.type]
     || String(left.payoutId ?? left.epochEndTimestamp).localeCompare(String(right.payoutId ?? right.epochEndTimestamp)));
   const suppressed = [];
@@ -528,6 +628,9 @@ export async function planV8KeeperRun(context) {
   const selected = eligible.slice(0, context.config.operator.maxWritesPerRun);
   return Object.freeze({
     knownEpochCount: epochIds.length,
+    dueEpochCount: dueEpochIds.length,
+    scannedDueEpochCount: due.length,
+    epochRotationOrdinal: epochRotationOrdinal === null ? null : String(epochRotationOrdinal),
     totalPayoutCount: payoutScan.total,
     scannedPayoutCount: payouts.length,
     payoutScanRanges: payoutScan.ranges,
@@ -632,6 +735,32 @@ function freshWriteBudgetMs(config) {
     + config.operator.postStateAttempts * config.operator.postStateIntervalMs;
 }
 
+function sanitizedDiagnosticText(value) {
+  return String(value ?? '')
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/https?:\/\/\S+/gi, '[redacted-url]')
+    .replace(/\b[A-Z][A-Z0-9_]*(?:PASSWORD|SECRET|PRIVATE_KEY|MNEMONIC|KEYSTORE|CREDENTIAL)[A-Z0-9_]*\s*[:=][^\r\n]*/g, '[redacted]')
+    .replace(/\b(?:authorization|credential|keystore|mnemonic|password|private[_ -]?key|secret)\b[^\r\n]*/gi, '[redacted]')
+    .replace(/\b(?:0x)?[0-9a-f]{64}\b/gi, '[redacted-64hex]')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function fixedLowerLevelReason(error) {
+  const source = String(`${error?.stderr ?? ''}\n${error?.stdout ?? ''}`);
+  if (/\binsufficient funds\b/i.test(source)) return 'INSUFFICIENT_FUNDS';
+  if (/\bnonce too low\b/i.test(source)) return 'NONCE_TOO_LOW';
+  if (/\bnonce too high\b/i.test(source)) return 'NONCE_TOO_HIGH';
+  if (/\breplacement transaction underpriced\b/i.test(source)) return 'REPLACEMENT_UNDERPRICED';
+  if (/\balready known\b/i.test(source)) return 'TRANSACTION_ALREADY_KNOWN';
+  if (/\bblockpubdatalimitreached\b/i.test(source)) return 'BLOCK_PUBDATA_LIMIT';
+  if (/\b(?:502|503|504)\b|\brpc\b.*\b(?:failed|unavailable)\b/i.test(source)) return 'RPC_UNAVAILABLE';
+  if (/\b(?:timed? out|timeout)\b/i.test(source)) return 'COMMAND_TIMEOUT';
+  if (Number.isInteger(error?.status) && error.status !== 0) return 'CLI_EXIT_NONZERO';
+  return 'UNCLASSIFIED';
+}
+
 function sanitizedSubmitFailure(error) {
   const rawCode = String(error?.code || error?.name || 'SUBMIT_FAILED').toUpperCase();
   const normalizedCode = rawCode.replace(/[^A-Z0-9_]/g, '_').slice(0, 80);
@@ -639,13 +768,15 @@ function sanitizedSubmitFailure(error) {
     ? normalizedCode
     : 'SUBMIT_FAILED';
   const rawMessage = error instanceof Error ? error.message : String(error || 'Submit failed.');
-  const failureMessage = rawMessage
-    .replace(/https?:\/\/\S+/gi, '[redacted-url]')
-    .replace(/\b(?:authorization|credential|mnemonic|password|private[_ -]?key|secret)\b\s*[:=]\s*\S+/gi, '[redacted]')
-    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
-    .trim()
-    .slice(0, 256) || 'Submit failed.';
-  return Object.freeze({ failureCode, failureMessage });
+  const failureMessage = sanitizedDiagnosticText(rawMessage).slice(0, 256) || 'Submit failed.';
+  const lowerLevelCategory = categorizeGenlayerFailure(error);
+  return Object.freeze({
+    failureCode,
+    failureMessage,
+    lowerLevelCategory,
+    lowerLevelReason: fixedLowerLevelReason(error),
+    ...(Number.isInteger(error?.status) ? { processStatus: error.status } : {}),
+  });
 }
 
 export async function assertAuditedRetryNonceGate({ operator, auditedRetryNonce }) {
@@ -739,7 +870,8 @@ async function executeAction(context, action, acceptedPredecessor = null) {
           evidenceVersion: 'LOCAL_PRESPAWN_FAILURE_V1',
           broadcastAttempted: false,
           transactionHashObserved: false,
-          ...failure,
+          failureCode: failure.failureCode,
+          failureMessage: failure.failureMessage,
           lowerLevelErrorRetained: true,
           operationId: operation.operationId,
           logicalOperationId: operation.logicalOperationId,

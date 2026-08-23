@@ -17,7 +17,13 @@ Startup fails closed unless live `get_config`, schema, roles, stake limits, fact
 
 ## Keeper operations
 
-Epoch work creates or resolves only bounded due epochs after exact state reconciliation.
+Epoch work creates or resolves only bounded due epochs after exact state reconciliation. Missing
+planned epochs are coverage-critical and run before settlement or payout writes. A due epoch whose
+exact HIGH and LOW objective records prove zero stake, zero participants, and zero accounting is
+left OPEN. A durable recent-plus-rotating due-epoch scan rechecks it without allowing a long empty
+backlog to starve an older funded round; any nonzero or malformed objective remains eligible for
+`resolve_epoch` or timeout handling. This avoids spending finality capacity on empty testnet rounds
+without treating the current zero state as permanently terminal.
 The production schedule runs at minutes 7, 22, 37, and 52 and keeps exactly the next two eligible
 UTC-hour epochs populated. GenLayer queues this account's transactions in submission order. The
 two-hour horizon therefore bootstraps safely, while each scheduled run signs at most one fresh
