@@ -8,6 +8,8 @@ import {
   assertV8Schema,
   classifyOpenEpoch,
   classifyPayoutAction,
+  isProvablyEmptyEpoch,
+  plannedDueEpochIds,
   plannedPayoutScanRanges,
   runV8KeeperOnce,
   V8_FACTORY_VIEW_ABI,
@@ -135,6 +137,39 @@ function epochRecord(end, overrides = {}) {
     resolution_digest: '',
     ...overrides,
   };
+}
+
+function emptyObjective(epochEndTimestamp, objective, overrides = {}) {
+  return {
+    epoch_id: String(epochEndTimestamp),
+    objective,
+    settlement_mode: 'PENDING',
+    winner_asset_id: '',
+    winner_return_ppb: '0',
+    payout_pool_atto: '0',
+    winning_stake_atto: '0',
+    losing_stake_atto: '0',
+    platform_fee_atto: '0',
+    total_stake_atto: '0',
+    participant_count: '0',
+    paid_atto: '0',
+    funded_in_escrow_atto: '0',
+    allocated_atto: '0',
+    remaining_payout_atto: '0',
+    unallocated_payout_atto: '0',
+    allocated_not_funded_atto: '0',
+    funded_not_withdrawn_atto: '0',
+    unclaimed_winning_stake_atto: '0',
+    ...overrides,
+  };
+}
+
+function provablyEmptyEpoch(end, overrides = {}) {
+  return epochRecord(end, {
+    high: emptyObjective(end, 'HIGH'),
+    low: emptyObjective(end, 'LOW'),
+    ...overrides,
+  });
 }
 
 function payoutRecord(overrides = {}) {
@@ -294,6 +329,61 @@ test('open epoch classifier resolves before timeout and activates timeout afterw
   assert.equal(classifyOpenEpoch({ ...epoch, status: 'RESOLVED' }, NOW), null);
 });
 
+test('exact zero-liability epochs stay open and are reconsidered when stake appears', () => {
+  const end = NOW - 120;
+  const empty = provablyEmptyEpoch(end);
+  assert.equal(isProvablyEmptyEpoch(empty), true);
+  assert.equal(classifyOpenEpoch(empty, NOW), null);
+  assert.equal(classifyOpenEpoch({ ...empty, timeout_refund_available_timestamp: NOW }, NOW), null);
+
+  const funded = structuredClone(empty);
+  funded.high.total_stake_atto = '100000000000000000';
+  funded.high.participant_count = '1';
+  assert.equal(isProvablyEmptyEpoch(funded), false);
+  assert.equal(classifyOpenEpoch(funded, NOW), 'RESOLVE');
+
+  const malformed = structuredClone(empty);
+  delete malformed.low.unclaimed_winning_stake_atto;
+  assert.equal(isProvablyEmptyEpoch(malformed), false);
+  assert.equal(classifyOpenEpoch(malformed, NOW), 'RESOLVE');
+
+  const mismatched = structuredClone(empty);
+  mismatched.low.objective = 'HIGH';
+  assert.equal(isProvablyEmptyEpoch(mismatched), false);
+  assert.equal(classifyOpenEpoch(mismatched, NOW), 'RESOLVE');
+});
+
+test('planner rechecks skipped empty epochs and prioritizes missing coverage once stake appears', async () => {
+  const dueEnd = NOW - 3_600;
+  let dueEpoch = provablyEmptyEpoch(dueEnd);
+  const operator = emptyExecutionOperator({
+    getEpochPage: async (offset, limit) => ({
+      offset,
+      next_offset: offset + Math.min(limit, 1 - offset),
+      total: 1,
+      epoch_ids: offset === 0 ? [String(dueEnd)] : [],
+    }),
+    getEpoch: async () => structuredClone(dueEpoch),
+  });
+  const options = {
+    config: config({ maxWritesPerRun: 5 }),
+    operator,
+    nowEpochSeconds: NOW,
+    logger: () => {},
+    sleep: async () => {},
+  };
+  const emptyPlan = await runV8KeeperOnce(options);
+  assert.equal(emptyPlan.actions.some(({ type }) => type === 'RESOLVE' || type === 'TIMEOUT'), false);
+  assert.ok(emptyPlan.actions.every(({ type }) => type === 'CREATE'));
+
+  dueEpoch = structuredClone(dueEpoch);
+  dueEpoch.low.total_stake_atto = '100000000000000000';
+  dueEpoch.low.participant_count = '1';
+  const fundedPlan = await runV8KeeperOnce(options);
+  assert.equal(fundedPlan.actions[0].type, 'CREATE');
+  assert.ok(fundedPlan.actions.some(({ type, epochEndTimestamp }) => type === 'RESOLVE' && epochEndTimestamp === dueEnd));
+});
+
 test('dry run scans final ABI pages and plans payout work before new risk', async () => {
   const state = payoutRecord();
   const operator = {
@@ -306,7 +396,8 @@ test('dry run scans final ABI pages and plans payout work before new risk', asyn
     getPayoutRailState: async () => ({ prepared: true, credited: false, withdrawn: false }),
   };
   const result = await runV8KeeperOnce({ config: config(), operator, nowEpochSeconds: NOW, logger: () => {}, sleep: async () => {} });
-  assert.equal(result.actions[0].type, 'DISPATCH');
+  assert.equal(result.actions[0].type, 'CREATE');
+  assert.ok(result.actions.some(({ type }) => type === 'DISPATCH'));
   assert.equal(result.actions.filter(({ type }) => type === 'CREATE').length, 2);
   assert.equal(result.execute, false);
 });
@@ -397,6 +488,21 @@ test('epoch reconciliation reads the newest due epochs first', async () => {
     sleep: async () => {},
   });
   assert.deepEqual(reads, epochIds.slice(-3).reverse());
+});
+
+test('durable epoch rotation keeps a recent lane and cannot starve old funded rounds', () => {
+  const epochIds = Array.from({ length: 60 }, (_, index) => NOW - (60 - index) * 3_600);
+  const budget = 12;
+  const recent = epochIds.slice(-6);
+  const visitedOlder = new Set();
+  for (let ordinal = 1; ordinal <= 9; ordinal += 1) {
+    const selected = plannedDueEpochIds(epochIds, budget, String(ordinal));
+    assert.equal(selected.length, budget);
+    assert.ok(recent.every((epochId) => selected.includes(epochId)));
+    for (const epochId of selected.filter((value) => !recent.includes(value))) visitedOlder.add(epochId);
+  }
+  assert.equal(visitedOlder.size, epochIds.length - recent.length);
+  assert.deepEqual(plannedDueEpochIds(epochIds, 3), epochIds.slice(-3).reverse());
 });
 
 test('execute PREPARE-binds and verifies a permissionless dispatch without vault withdrawal', async () => {
@@ -490,6 +596,12 @@ test('proven local pre-spawn failure is abandoned with telemetry and retried as 
   assert.equal(first.transactionHash, null);
   assert.equal(first.stateReasonCode, 'DEFINITE_LOCAL_PRESPAWN_FAILURE');
   assert.equal(first.prehashAbandonmentEvidence.broadcastAttempted, false);
+  assert.deepEqual(Object.keys(first.prehashAbandonmentEvidence).sort(), [
+    'arguments', 'broadcastAttempted', 'contractAddress', 'evidenceVersion',
+    'failureCode', 'failureMessage', 'logicalOperationId', 'lowerLevelErrorRetained',
+    'method', 'operationId', 'preparedAt', 'subjectId', 'subjectType',
+    'transactionHashObserved',
+  ].sort());
   assert.deepEqual(
     events.filter(({ event }) => event === 'V8_KEEPER_PREHASH_SUBMIT_FAILURE')
       .map(({ failureCode, failureMessage }) => ({ failureCode, failureMessage })),
@@ -534,8 +646,11 @@ test('ambiguous hashless CLI failure logs its cause and leaves PREPARED blocking
     getPayout: async () => payoutRecord(),
     getPayoutRailState: async () => ({ prepared: true, credited: false, withdrawn: false }),
     submitWrite: async () => {
-      throw Object.assign(new Error('CLI exited before printing a hash.'), {
+      throw Object.assign(new Error('GENLAYER_KEYSTORE_PASSWORD=hunter2\nCLI exited before printing a hash.'), {
         code: 'GENLAYER_PROCESS_ERROR',
+        status: 1,
+        stdout: 'Connecting to https://rpc.example.invalid with password=hunter2',
+        stderr: `Authorization: Bearer very-secret-token\nmnemonic: alpha beta gamma delta\nRPC 503 for 0x${'a'.repeat(64)}; retry later`,
       });
     },
   });
@@ -557,7 +672,18 @@ test('ambiguous hashless CLI failure logs its cause and leaves PREPARED blocking
   assert.equal(operation.prehashAbandonedAt, null);
   const telemetry = events.find(({ event }) => event === 'V8_KEEPER_PREHASH_SUBMIT_FAILURE');
   assert.equal(telemetry.failureCode, 'GENLAYER_PROCESS_ERROR');
-  assert.equal(telemetry.failureMessage, 'CLI exited before printing a hash.');
+  assert.equal(telemetry.failureMessage, '[redacted] CLI exited before printing a hash.');
+  assert.equal(telemetry.lowerLevelCategory, 'RETRYABLE_TRANSPORT');
+  assert.equal(telemetry.lowerLevelReason, 'RPC_UNAVAILABLE');
+  assert.equal(telemetry.processStatus, 1);
+  assert.doesNotMatch(
+    JSON.stringify({
+      failureMessage: telemetry.failureMessage,
+      lowerLevelCategory: telemetry.lowerLevelCategory,
+      lowerLevelReason: telemetry.lowerLevelReason,
+    }),
+    /hunter2|rpc\.example\.invalid|a{64}|very-secret-token|alpha beta gamma/i,
+  );
   assert.equal(telemetry.broadcastAttempted, null);
 });
 
