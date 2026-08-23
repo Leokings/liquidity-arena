@@ -219,6 +219,10 @@ function exactPrehashAbandonmentEvidence(value, reasonCode, requestedOperationId
     });
   }
   if (reasonCode === 'AUDITED_NO_BROADCAST') {
+    const auditedPostStateStatus = Object.freeze({
+      create_epoch: 'EPOCH_UNKNOWN',
+      resolve_epoch: 'TARGET_STATE_UNCHANGED',
+    })[evidence.method];
     exactObject(evidence, [
       'evidenceVersion', 'runId', 'failedAt', 'failureCode', 'failureMessage',
       'lowerLevelErrorRetained', 'transactionHashObserved', 'network', 'chainId',
@@ -239,8 +243,8 @@ function exactPrehashAbandonmentEvidence(value, reasonCode, requestedOperationId
         || evidence.chainId !== '4221'
         || evidence.matchingOuterTransactions !== '0'
         || evidence.postStateVerified !== true
-        || evidence.postStateStatus !== 'TARGET_STATE_UNCHANGED'
-        || evidence.method !== 'resolve_epoch'
+        || !auditedPostStateStatus
+        || evidence.postStateStatus !== auditedPostStateStatus
         || evidence.subjectType !== 'epoch'
         || String(evidence.operationId || '') !== requestedOperationId
         || !OPERATION_ID.test(String(evidence.logicalOperationId || ''))
@@ -352,7 +356,7 @@ function exactPrehashAbandonmentEvidence(value, reasonCode, requestedOperationId
         evidence.referenceCallRecipient,
         'evidence.referenceCallRecipient',
       ),
-      postStateStatus: 'TARGET_STATE_UNCHANGED',
+      postStateStatus: auditedPostStateStatus,
       auditedAt,
     };
     if (normalized.referenceOuterSender !== normalized.signerAddress

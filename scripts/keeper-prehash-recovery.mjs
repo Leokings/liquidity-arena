@@ -144,10 +144,13 @@ function assertEvidenceIdentityBeforeRpc(evidence, operationId, signerAddress) {
       || evidence.network !== 'bradbury' || evidence.chainId !== '4221') {
     recoveryFailure('Audited evidence is not for Bradbury chain 4221.');
   }
-  if (evidence.method !== 'resolve_epoch' || evidence.subjectType !== 'epoch'
+  if (!['create_epoch', 'resolve_epoch'].includes(evidence.method)
+      || evidence.subjectType !== 'epoch'
       || !Array.isArray(evidence.arguments) || evidence.arguments.length !== 1
-      || evidence.arguments[0] !== evidence.subjectId) {
-    recoveryFailure('Audited recovery is restricted to one exact resolve_epoch subject.');
+      || evidence.arguments[0] !== evidence.subjectId
+      || evidence.postStateStatus !== (evidence.method === 'create_epoch'
+        ? 'EPOCH_UNKNOWN' : 'TARGET_STATE_UNCHANGED')) {
+    recoveryFailure('Audited recovery is restricted to an exact create_epoch or resolve_epoch subject.');
   }
   const signer = exactLowerAddress(signerAddress, 'configured signer');
   if (exactLowerAddress(evidence.signerAddress, 'evidence.signerAddress') !== signer
@@ -189,6 +192,36 @@ export function assertResolvableEpochPostState(value, evidence) {
     highSettlementMode: 'PENDING',
     lowSettlementMode: 'PENDING',
   });
+}
+
+export function assertEpochUnknownPostState(value, evidence) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+      || Object.keys(value).length !== 3
+      || value.kind !== 'EXPECTED_CONTRACT_ERROR'
+      || value.code !== 'EPOCH_UNKNOWN'
+      || value.message !== 'Epoch does not exist'
+      || evidence.postStateStatus !== 'EPOCH_UNKNOWN') {
+    recoveryFailure('Live target did not prove the exact EPOCH_UNKNOWN create_epoch pre-state.');
+  }
+  return Object.freeze({
+    epochId: evidence.subjectId,
+    status: 'EPOCH_UNKNOWN',
+  });
+}
+
+export function assertAuditedEpochPostState(value, evidence) {
+  if (evidence.method === 'create_epoch') return assertEpochUnknownPostState(value, evidence);
+  if (evidence.method === 'resolve_epoch') return assertResolvableEpochPostState(value, evidence);
+  recoveryFailure('Audited recovery method is not supported.');
+}
+
+function exactEpochUnknownFailure(source) {
+  const clean = String(source).replace(/\u001b\[[0-9;]*m/g, '').replace(/\r\n/g, '\n');
+  const marker = '[EXPECTED] EPOCH_UNKNOWN: Epoch does not exist';
+  return clean.split(marker).length === 2
+    && !/(?:^|\n).*\[EXPECTED\] [A-Z][A-Z0-9_]{0,79}:/.test(
+      clean.replace(marker, ''),
+    );
 }
 
 export async function readBradburyRecoveryEpoch({
@@ -258,14 +291,23 @@ export async function readBradburyRecoveryEpoch({
     });
     child.once?.('close', (status) => {
       if (status !== 0) {
-        finish(recoveryError('Recovery GenLayer call process exited unsuccessfully.'));
+        if (exactEpochUnknownFailure(source)) {
+          finish(null, Object.freeze({
+            kind: 'EXPECTED_CONTRACT_ERROR',
+            code: 'EPOCH_UNKNOWN',
+            message: 'Epoch does not exist',
+          }));
+        } else {
+          finish(recoveryError('Recovery GenLayer call process exited unsuccessfully.'));
+        }
       } else {
-        finish(null, source);
+        finish(null, Object.freeze({ kind: 'SUCCESS', source }));
       }
     });
   });
+  if (output.kind === 'EXPECTED_CONTRACT_ERROR') return output;
   try {
-    return parseGenlayerCallOutput(output);
+    return parseGenlayerCallOutput(output.source);
   } catch {
     recoveryFailure('Recovery GenLayer call returned an invalid result.');
   }
@@ -459,10 +501,11 @@ export async function runKeeperPrehashRecovery({
     signerAddress,
     rpcCall: rpcCall || createBradburyRecoveryRpc(),
   });
-  assertResolvableEpochPostState(
+  assertAuditedEpochPostState(
     await targetStateReader({
       contractAddress: evidence.contractAddress,
       subjectId: evidence.subjectId,
+      method: evidence.method,
     }),
     evidence,
   );

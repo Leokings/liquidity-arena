@@ -63,6 +63,7 @@ function healthySchema(overrides = {}) {
     keeper_accepted_handoff_migration_valid: true,
     keeper_prehash_abandonment_migration_valid: true,
     keeper_prehash_legacy_constraint_cleanup_migration_valid: true,
+    keeper_create_prehash_recovery_migration_valid: true,
     no_future_migrations: true,
     active_deployment_count: 1,
     active_v8_count: 1,
@@ -103,18 +104,18 @@ test('Neon history repository remains lazy and build-safe without DATABASE_URL',
   assert.equal(imports, 0);
 });
 
-test('history health requires schema v8, one active Bradbury V8, and complete epoch and payout projections', async () => {
+test('history health requires schema v9, one active Bradbury V8, and complete epoch and payout projections', async () => {
   const { repository, calls } = repositoryWithResults([
     [healthySchema()],
     [healthyProjection()],
   ]);
   const health = await repository.health();
   assert.equal(health.ready, true);
-  assert.equal(health.schemaVersion, 8);
+  assert.equal(health.schemaVersion, 9);
   assert.deepEqual(health.integrity, {
     checked: true,
     ready: true,
-    journalSchemaVersion: 8,
+    journalSchemaVersion: 9,
     activeDeploymentCount: 1,
     activeV8Count: 1,
     activeLegacyCount: 0,
@@ -130,14 +131,14 @@ test('history health requires schema v8, one active Bradbury V8, and complete ep
     countsCapped: false,
   });
   assert.equal(calls.length, 2);
-  assert.equal(calls[0].params.length, 15);
+  assert.equal(calls[0].params.length, 16);
   assert.equal(calls[0].params[3], BRADBURY_V8_SCHEMA_CHECKSUM);
   assert.equal(calls[0].params[5], '0xc812709d267372ad7e06807bf0a4d451ed263a30');
   assert.equal(calls[0].params[6], 'c8545eea9398fa05c29edf719250402f2ffda99a98ad706ffd329e457d2d89c4');
   assert.equal(calls[0].params[7], testDeployment().deploymentId);
   assert.equal(calls[0].params[8], testDeployment().addressKey);
   assert.equal(calls[0].params[9], testDeployment().expectations.owner);
-  assert.match(calls[0].text, /version = 4[\s\S]*version = 5[\s\S]*version = 6[\s\S]*version = 7[\s\S]*version = 8/);
+  assert.match(calls[0].text, /version = 4[\s\S]*version = 5[\s\S]*version = 6[\s\S]*version = 7[\s\S]*version = 8[\s\S]*version = 9/);
   assert.match(calls[0].text, /active_v8_count/);
   assert.match(calls[1].text, /deployment_alias = 'v8'/);
   assert.match(calls[1].text, /operation\.network = 'bradbury'/);

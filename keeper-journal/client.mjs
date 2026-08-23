@@ -238,7 +238,7 @@ function validatedOperation(value) {
     && prehashAbandonmentEvidence.evidenceVersion === 'BRADBURY_KEEPER_EVM_SCAN_V1'
     && prehashAbandonmentEvidence.network === 'bradbury'
     && prehashAbandonmentEvidence.chainId === '4221'
-    && prehashAbandonmentEvidence.method === 'resolve_epoch'
+    && ['create_epoch', 'resolve_epoch'].includes(prehashAbandonmentEvidence.method)
     && prehashAbandonmentEvidence.subjectType === 'epoch'
     && prehashAbandonmentEvidence.signerAddress === value.signerAddress
     && prehashAbandonmentEvidence.operationId === value.operationId
@@ -282,7 +282,10 @@ function validatedOperation(value) {
     && prehashAbandonmentEvidence.preparedAt <= prehashAbandonmentEvidence.failedAt
     && prehashAbandonmentEvidence.failedAt <= prehashAbandonmentEvidence.scanEndTimestamp
     && prehashAbandonmentEvidence.scanEndTimestamp <= prehashAbandonmentEvidence.auditedAt
-    && prehashAbandonmentEvidence.postStateStatus === 'TARGET_STATE_UNCHANGED'
+    && prehashAbandonmentEvidence.postStateStatus === (
+      prehashAbandonmentEvidence.method === 'create_epoch'
+        ? 'EPOCH_UNKNOWN' : 'TARGET_STATE_UNCHANGED'
+    )
     && prehashAbandonmentEvidence.postStateVerified === true
     && prehashAbandonmentEvidence.transactionHashObserved === false
     && prehashAbandonmentEvidence.lowerLevelErrorRetained === false
@@ -480,7 +483,7 @@ function validatedSuccess(action, payload) {
       && payload.configuration.signerConfigured === true;
     const databaseReady = payload.database.configured === true
       && payload.database.ready === true
-      && payload.database.schemaVersion === 8;
+      && payload.database.schemaVersion === 9;
     if (!['ready', 'degraded'].includes(payload.status)
         || payload.service !== 'liquidity-arena-keeper-journal'
         || typeof payload.ready !== 'boolean'
@@ -491,7 +494,7 @@ function validatedSuccess(action, payload) {
         || typeof payload.configuration.signerConfigured !== 'boolean'
         || typeof payload.database.configured !== 'boolean'
         || typeof payload.database.ready !== 'boolean'
-      || ![null, 8].includes(payload.database.schemaVersion)
+      || ![null, 9].includes(payload.database.schemaVersion)
         || (payload.ready === true
           ? payload.status !== 'ready' || !configurationReady || !databaseReady
           : payload.status !== 'degraded')) {

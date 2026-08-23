@@ -168,7 +168,7 @@ export async function runOpsWatchdog({
       && result.body?.ready === true
       && result.body?.network === 'bradbury'
       && result.body?.chainId === '4221'
-      && result.body?.database?.schemaVersion === 8;
+      && result.body?.database?.schemaVersion === 9;
     results.push(check('authoritative keeper journal', ready, `HTTP ${result.status}; schema=${result.body?.database?.schemaVersion ?? 'unknown'}`));
   } catch (error) {
     results.push(check('authoritative keeper journal', false, error?.message || 'request failed'));

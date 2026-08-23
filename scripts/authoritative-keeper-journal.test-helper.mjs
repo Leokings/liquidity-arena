@@ -97,7 +97,7 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
           authenticationConfigured: true,
           signerConfigured: true,
         },
-        database: { configured: true, ready: true, schemaVersion: 8 },
+        database: { configured: true, ready: true, schemaVersion: 9 },
       };
     },
     async acquireLease(request) {

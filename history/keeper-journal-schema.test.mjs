@@ -215,6 +215,21 @@ test('audited ABANDON_PREHASH requires zero outer transactions and an unchanged 
   };
   const parsed = parseKeeperJournalRequest(request);
   assert.equal(parsed.evidence.signerAddress, SIGNER_MIXED.toLowerCase());
+  const createEvidence = {
+    ...evidence,
+    method: 'create_epoch',
+    postStateStatus: 'EPOCH_UNKNOWN',
+  };
+  createEvidence.queryResultSha256 = keeperPrehashEvidenceDigest(createEvidence);
+  const parsedCreate = parseKeeperJournalRequest({ ...request, evidence: createEvidence });
+  assert.equal(parsedCreate.evidence.method, 'create_epoch');
+  assert.equal(parsedCreate.evidence.postStateStatus, 'EPOCH_UNKNOWN');
+  const wrongCreateState = { ...createEvidence, postStateStatus: 'TARGET_STATE_UNCHANGED' };
+  wrongCreateState.queryResultSha256 = keeperPrehashEvidenceDigest(wrongCreateState);
+  assert.throws(
+    () => parseKeeperJournalRequest({ ...request, evidence: wrongCreateState }),
+    /EVM scan evidence/,
+  );
   assert.throws(
     () => parseKeeperJournalRequest({
       ...request,
