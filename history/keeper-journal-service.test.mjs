@@ -36,7 +36,7 @@ class MemoryRepository {
   }
 
   async health() {
-    return { configured: true, ready: true, schemaVersion: 7 };
+    return { configured: true, ready: true, schemaVersion: 8 };
   }
 
   async claimRequest({ keyHash, requestHash, action }) {

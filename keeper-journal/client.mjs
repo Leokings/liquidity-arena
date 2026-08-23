@@ -480,7 +480,7 @@ function validatedSuccess(action, payload) {
       && payload.configuration.signerConfigured === true;
     const databaseReady = payload.database.configured === true
       && payload.database.ready === true
-      && payload.database.schemaVersion === 7;
+      && payload.database.schemaVersion === 8;
     if (!['ready', 'degraded'].includes(payload.status)
         || payload.service !== 'liquidity-arena-keeper-journal'
         || typeof payload.ready !== 'boolean'
@@ -491,7 +491,7 @@ function validatedSuccess(action, payload) {
         || typeof payload.configuration.signerConfigured !== 'boolean'
         || typeof payload.database.configured !== 'boolean'
         || typeof payload.database.ready !== 'boolean'
-      || ![null, 7].includes(payload.database.schemaVersion)
+      || ![null, 8].includes(payload.database.schemaVersion)
         || (payload.ready === true
           ? payload.status !== 'ready' || !configurationReady || !databaseReady
           : payload.status !== 'degraded')) {

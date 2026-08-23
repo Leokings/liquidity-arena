@@ -37,7 +37,7 @@ The keeper never calls EVM `withdraw()` and has no recipient key.
 
 ## Durable journal
 
-Journal schema V7 supports epoch and payout subjects, a hard two-slot pipeline, immutable handoff
+Journal schema V8 supports epoch and payout subjects, a hard two-slot pipeline, immutable handoff
 lineage, same-subject exclusion, and narrowly gated revalidation of a finalized generic
 receipt-identity quarantine. An operation is prepared before broadcast and records the exact
 method, arguments, signer, contract, transaction identity, attempt, and receipts.
@@ -62,8 +62,8 @@ rechecks that attestation immediately before recording it.
 npm run keeper:v8:abandon-prehash -- --operation-id <64-hex-operation-id> --evidence-json <audited-evidence.json>
 ```
 
-Operational order is strict: apply migration 007, deploy the schema-v7 application, wait for
-journal health to report version 7, run the audited non-signing recovery, and only then permit the
+Operational order is strict: apply migrations 007 and 008, deploy the schema-v8 application, wait
+for journal health to report version 8, run the audited non-signing recovery, and only then permit the
 keeper to create attempt two. The watchdog remains disabled until the controlled retry and
 readiness checks pass.
 
@@ -98,7 +98,12 @@ keeper's hard 45-minute run deadline. Before signing any fresh write, the keeper
 budget plus the bounded post-state verification margin. After one fresh signature, every remaining
 action is deferred to the next scheduled run.
 
-Migration 004 checksum is `1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910`. Migration 005 (`keeper_receipt_identity_revalidation`) checksum is `a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59`. Migration 006 (`keeper_accepted_handoff`) checksum is `5b81d291c121cae31962b164608e5ad5fc65a19158bed95cd96fae0348e13bdf`. Migration 007 (`keeper_prehash_abandonment`) checksum is `4fa4e8103a1b3caa7022cff2ea1b4868ea6128a4f6b359cdb93a8a6320e0a8f3`. Keeper health requires exact migrations 001–007 and rejects any version newer than 7.
+Migration 004 checksum is `1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910`. Migration 005 (`keeper_receipt_identity_revalidation`) checksum is `a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59`. Migration 006 (`keeper_accepted_handoff`) checksum is `5b81d291c121cae31962b164608e5ad5fc65a19158bed95cd96fae0348e13bdf`. Migration 007 (`keeper_prehash_abandonment`) checksum is `4fa4e8103a1b3caa7022cff2ea1b4868ea6128a4f6b359cdb93a8a6320e0a8f3`. Migration 008 (`keeper_prehash_legacy_constraint_cleanup`) checksum is `030604d61f54ad9f6e388f497723d7eaa7118632866574cff976dd0bd43f680a`. Keeper health requires exact migrations 001–008 and rejects any version newer than 8.
+
+The isolated PostgreSQL regression for migration 008 is
+`migrations/regressions/008_keeper_prehash_legacy_constraint_cleanup.sql`. It recreates the exact
+legacy named constraint, proves that it rejects hashless `ABANDONED_PREHASH`, drops it, and proves
+the same update succeeds before rolling the test transaction back.
 
 ## Local dry run
 

@@ -39,20 +39,22 @@ The synchronizer uses a persisted rotating payout cursor plus bounded epoch work
 
 `GET /api/history-health` is ready only when:
 
-- migrations 001–007 have exact checksums;
-- no migration newer than version 7 exists;
+- migrations 001–008 have exact checksums;
+- no migration newer than version 8 exists;
 - exactly one configured Bradbury V8 deployment is active;
 - legacy deployments are inactive;
 - epoch and payout projections are complete;
 - required payout-stage evidence is present and internally consistent;
-- keeper journal schema V7 is healthy.
+- keeper journal schema V8 is healthy.
 
 Migration 004 is append-only and intentionally refuses a second application. Its checksum is `1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910`.
 Migration 005 (`keeper_receipt_identity_revalidation`) is likewise append-only and checksum-pinned at `a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59`.
 Migration 006 (`keeper_accepted_handoff`) is append-only and checksum-pinned at `5b81d291c121cae31962b164608e5ad5fc65a19158bed95cd96fae0348e13bdf`.
 Migration 007 (`keeper_prehash_abandonment`) is append-only and checksum-pinned at `4fa4e8103a1b3caa7022cff2ea1b4868ea6128a4f6b359cdb93a8a6320e0a8f3`.
+Migration 008 (`keeper_prehash_legacy_constraint_cleanup`) is append-only and checksum-pinned at `030604d61f54ad9f6e388f497723d7eaa7118632866574cff976dd0bd43f680a`.
 
-Schema V7 preserves every abandoned hashless attempt and its immutable evidence. Audited
+Schema V8 preserves every abandoned hashless attempt and its immutable evidence, and removes the
+legacy submission constraint that predated `ABANDONED_PREHASH`. Audited
 no-broadcast evidence additionally binds the target contract and is limited to an exact
 `resolve_epoch` operation. A PREPARE response always includes nullable `auditedRetryNonce`; it is
 non-null only for the newly inserted attempt-two child of an audited abandonment, allowing the

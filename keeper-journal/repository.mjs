@@ -8,6 +8,7 @@ export const KEEPER_JOURNAL_SCHEMA_V4_CHECKSUM = '1c713e2f54f873b6ffd8ae771ac9dd
 export const KEEPER_JOURNAL_SCHEMA_V5_CHECKSUM = 'a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59';
 export const KEEPER_JOURNAL_SCHEMA_V6_CHECKSUM = '5b81d291c121cae31962b164608e5ad5fc65a19158bed95cd96fae0348e13bdf';
 export const KEEPER_JOURNAL_SCHEMA_V7_CHECKSUM = '4fa4e8103a1b3caa7022cff2ea1b4868ea6128a4f6b359cdb93a8a6320e0a8f3';
+export const KEEPER_JOURNAL_SCHEMA_V8_CHECKSUM = '030604d61f54ad9f6e388f497723d7eaa7118632866574cff976dd0bd43f680a';
 export const KEEPER_JOURNAL_MAX_PIPELINE_DEPTH = 2;
 const QUERY_TIMEOUT_MS = 8_000;
 const LEASE_SCOPE = 'bradbury:4221:keeper';
@@ -214,6 +215,12 @@ export function createNeonKeeperJournalRepository({
                    'arena_keeper_operations_prehash_abandonment_v7_check'
                  )
             ) AS prehash_abandonment_constraints_exist,
+           NOT EXISTS (
+             SELECT 1
+               FROM pg_constraint
+              WHERE conrelid = 'public.arena_keeper_operations'::regclass
+                AND conname = 'arena_keeper_operations_check3'
+           ) AS legacy_prehash_submission_constraint_absent,
            EXISTS (
              SELECT 1 FROM arena_schema_migrations
               WHERE version = 2
@@ -249,9 +256,15 @@ export function createNeonKeeperJournalRepository({
               WHERE version = 7
                 AND name = 'keeper_prehash_abandonment'
                 AND schema_checksum = $6
+           ) AS v7_migration_valid,
+           EXISTS (
+             SELECT 1 FROM arena_schema_migrations
+              WHERE version = 8
+                AND name = 'keeper_prehash_legacy_constraint_cleanup'
+                AND schema_checksum = $7
            ) AS migration_valid,
            NOT EXISTS (
-             SELECT 1 FROM arena_schema_migrations WHERE version > 7
+             SELECT 1 FROM arena_schema_migrations WHERE version > 8
            ) AS no_unknown_migrations`,
         [
           KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM,
@@ -260,6 +273,7 @@ export function createNeonKeeperJournalRepository({
           KEEPER_JOURNAL_SCHEMA_V5_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_V6_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_V7_CHECKSUM,
+          KEEPER_JOURNAL_SCHEMA_V8_CHECKSUM,
         ],
         3_000,
       );
@@ -285,14 +299,16 @@ export function createNeonKeeperJournalRepository({
         && row.accepted_handoff_constraints_exist === true
         && row.prehash_abandonment_columns_exist === true
         && row.prehash_abandonment_constraints_exist === true
+        && row.legacy_prehash_submission_constraint_absent === true
         && row.base_migration_valid === true
         && row.attempt_migration_valid === true
         && row.v4_migration_valid === true
         && row.v5_migration_valid === true
         && row.v6_migration_valid === true
+        && row.v7_migration_valid === true
         && row.migration_valid === true
         && row.no_unknown_migrations === true;
-      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 7 : null });
+      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 8 : null });
     },
 
     async claimRequest({ keyHash, requestHash, action }) {

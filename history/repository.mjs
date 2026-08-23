@@ -6,6 +6,7 @@ import {
   KEEPER_JOURNAL_SCHEMA_V5_CHECKSUM,
   KEEPER_JOURNAL_SCHEMA_V6_CHECKSUM,
   KEEPER_JOURNAL_SCHEMA_V7_CHECKSUM,
+  KEEPER_JOURNAL_SCHEMA_V8_CHECKSUM,
 } from '../keeper-journal/repository.mjs';
 import {
   AUDITED_PAYOUT_FACTORY_4221,
@@ -356,8 +357,14 @@ export function createNeonHistoryRepository({
                 AND name = 'keeper_prehash_abandonment'
                 AND schema_checksum = $14
            ) AS keeper_prehash_abandonment_migration_valid,
+           EXISTS (
+             SELECT 1 FROM arena_schema_migrations
+              WHERE version = 8
+                AND name = 'keeper_prehash_legacy_constraint_cleanup'
+                AND schema_checksum = $15
+           ) AS keeper_prehash_legacy_constraint_cleanup_migration_valid,
            NOT EXISTS (
-             SELECT 1 FROM arena_schema_migrations WHERE version > 7
+             SELECT 1 FROM arena_schema_migrations WHERE version > 8
            ) AS no_future_migrations,
            (SELECT count(*)::integer FROM arena_deployments WHERE active) AS active_deployment_count,
            (SELECT count(*)::integer FROM arena_deployments
@@ -390,6 +397,7 @@ export function createNeonHistoryRepository({
           expectedDeployment.treasuryAddress,
           KEEPER_JOURNAL_SCHEMA_V6_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_V7_CHECKSUM,
+          KEEPER_JOURNAL_SCHEMA_V8_CHECKSUM,
         ],
         3_000,
       );
@@ -407,6 +415,7 @@ export function createNeonHistoryRepository({
         && state.keeper_revalidation_migration_valid === true
         && state.keeper_accepted_handoff_migration_valid === true
         && state.keeper_prehash_abandonment_migration_valid === true
+        && state.keeper_prehash_legacy_constraint_cleanup_migration_valid === true
         && state.no_future_migrations === true;
       const journalCompatible = state.journal_operations_exists === true
         && state.journal_base_migration_valid === true
@@ -415,6 +424,7 @@ export function createNeonHistoryRepository({
         && state.keeper_revalidation_migration_valid === true
         && state.keeper_accepted_handoff_migration_valid === true
         && state.keeper_prehash_abandonment_migration_valid === true
+        && state.keeper_prehash_legacy_constraint_cleanup_migration_valid === true
         && state.no_future_migrations === true;
       const deploymentCutoverReady = Number(state.active_deployment_count || 0) === 1
         && Number(state.active_v8_count || 0) === 1
@@ -422,7 +432,8 @@ export function createNeonHistoryRepository({
       let integrity = Object.freeze({
         checked: false,
         ready: false,
-        journalSchemaVersion: state.keeper_prehash_abandonment_migration_valid === true ? 7 : null,
+        journalSchemaVersion:
+          state.keeper_prehash_legacy_constraint_cleanup_migration_valid === true ? 8 : null,
         activeDeploymentCount: Number(state.active_deployment_count || 0),
         activeV8Count: Number(state.active_v8_count || 0),
         activeLegacyCount: Number(state.active_legacy_count || 0),
@@ -571,7 +582,7 @@ export function createNeonHistoryRepository({
             && missingDurablePayoutCount === 0
             && staleDurablePayoutCount === 0
             && missingDurablePayoutStageProofCount === 0,
-          journalSchemaVersion: 7,
+          journalSchemaVersion: 8,
           activeDeploymentCount: 1,
           activeV8Count: 1,
           activeLegacyCount: 0,
@@ -590,7 +601,7 @@ export function createNeonHistoryRepository({
       return Object.freeze({
         configured: true,
         ready: schemaReady && journalCompatible && deploymentCutoverReady && integrity.ready,
-        schemaVersion: schemaReady ? 7 : null,
+        schemaVersion: schemaReady ? 8 : null,
         integrity,
       });
     },
