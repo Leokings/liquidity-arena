@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
-import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
 import { Interface } from 'ethers';
+import { abi } from 'genlayer-js';
 
 import {
   assertAuditedEpochPostState,
@@ -178,7 +177,7 @@ test('create_epoch recovery accepts only an exact EPOCH_UNKNOWN contract failure
   const unknown = {
     kind: 'EXPECTED_CONTRACT_ERROR',
     code: 'EPOCH_UNKNOWN',
-    message: 'Epoch does not exist',
+    message: '[EXPECTED] EPOCH_UNKNOWN',
   };
   assert.equal(assertEpochUnknownPostState(unknown, evidence).status, 'EPOCH_UNKNOWN');
   assert.equal(assertAuditedEpochPostState(unknown, evidence).status, 'EPOCH_UNKNOWN');
@@ -189,40 +188,117 @@ test('create_epoch recovery accepts only an exact EPOCH_UNKNOWN contract failure
   ]) assert.throws(() => assertEpochUnknownPostState(invalid, evidence), /exact EPOCH_UNKNOWN/);
 });
 
-test('credential-free target read recognizes only the exact EPOCH_UNKNOWN failure', async () => {
-  const spawnFailure = (message) => {
-    const child = new EventEmitter();
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    child.kill = () => true;
-    queueMicrotask(() => {
-      child.stderr.write(message);
-      child.emit('close', 1);
-    });
-    return child;
+function encodedGenvmErrorData(overrides = {}) {
+  return Buffer.from(abi.calldata.encode(new Map([
+    ['data', '[EXPECTED] EPOCH_UNKNOWN'],
+    ['events', []],
+    ['fingerprint', new Map([['frames', []]])],
+    ['kind', 'UserError'],
+    ['storage_changes', []],
+    ...Object.entries(overrides),
+  ]))).toString('hex');
+}
+
+function genvmError(overrides = {}) {
+  return {
+    code: -32000,
+    message: 'execution failed: &genvm.VMResult{Kind:0x1, ReturnData:[]uint8{...}}: genvm execution error',
+    data: encodedGenvmErrorData(),
+    ...overrides,
   };
-  assert.deepEqual(
-    await readBradburyRecoveryEpoch({
-      contractAddress: TARGET,
-      subjectId: '1787500800',
-      invocation: { executable: 'genlayer-test', prefixArgs: [] },
-      spawnImpl: () => spawnFailure('Error: [EXPECTED] EPOCH_UNKNOWN: Epoch does not exist\n'),
-    }),
-    {
-      kind: 'EXPECTED_CONTRACT_ERROR',
-      code: 'EPOCH_UNKNOWN',
-      message: 'Epoch does not exist',
+}
+
+test('credential-free direct gen_call proves exact encoded EPOCH_UNKNOWN', async () => {
+  let observed;
+  const result = await readBradburyRecoveryEpoch({
+    contractAddress: TARGET,
+    subjectId: '1787500800',
+    rpcCall: async (method, params, options) => {
+      observed = { method, params, options };
+      return { ok: false, error: genvmError() };
     },
-  );
-  await assert.rejects(
-    readBradburyRecoveryEpoch({
-      contractAddress: TARGET,
-      subjectId: '1787500800',
-      invocation: { executable: 'genlayer-test', prefixArgs: [] },
-      spawnImpl: () => spawnFailure('Error: EPOCH_UNKNOWN\n'),
+  });
+  assert.deepEqual(result, {
+    kind: 'EXPECTED_CONTRACT_ERROR',
+    code: 'EPOCH_UNKNOWN',
+    message: '[EXPECTED] EPOCH_UNKNOWN',
+  });
+  const expectedData = abi.transactions.serialize([
+    abi.calldata.encode(abi.calldata.makeCalldataObject(
+      'get_epoch', [1787500800n], undefined,
+    )),
+    false,
+  ]);
+  assert.deepEqual(observed, {
+    method: 'gen_call',
+    params: [{
+      type: 'read',
+      to: TARGET,
+      from: `0x${'0'.repeat(40)}`,
+      data: expectedData,
+      transaction_hash_variant: 'latest-nonfinal',
+    }],
+    options: { captureError: true, maxResponseBytes: 64 * 1024 },
+  });
+});
+
+test('direct gen_call rejects malformed or lookalike GenVM errors', async () => {
+  const read = (error) => readBradburyRecoveryEpoch({
+    contractAddress: TARGET,
+    subjectId: '1787500800',
+    rpcCall: async () => ({ ok: false, error }),
+  });
+  const encoded = (entries) => Buffer.from(abi.calldata.encode(new Map(entries))).toString('hex');
+  const baseEntries = [
+    ['data', '[EXPECTED] EPOCH_UNKNOWN'],
+    ['events', []],
+    ['fingerprint', new Map()],
+    ['kind', 'UserError'],
+    ['storage_changes', []],
+  ];
+  const variants = [
+    genvmError({ code: -32001 }),
+    genvmError({ message: 'execution failed: EPOCH_UNKNOWN' }),
+    genvmError({ data: encoded(baseEntries.map(([key, value]) => (
+      key === 'data' ? [key, '[EXPECTED] EPOCH_DUPLICATE'] : [key, value]
+    ))) }),
+    genvmError({ data: encoded([...baseEntries, ['extra', true]]) }),
+    genvmError({ data: encoded(baseEntries.map(([key, value]) => (
+      key === 'events' ? [key, ['lookalike']] : [key, value]
+    ))) }),
+    genvmError({ data: encoded(baseEntries.map(([key, value]) => (
+      key === 'fingerprint' ? [key, 'not-a-map'] : [key, value]
+    ))) }),
+    genvmError({ data: '0' }),
+    genvmError({ data: `ae00${encodedGenvmErrorData().slice(2)}` }),
+    { ...genvmError(), extra: true },
+  ];
+  for (const error of variants) {
+    await assert.rejects(read(error), /did not prove exact EPOCH_UNKNOWN/);
+  }
+});
+
+test('credential-free direct gen_call decodes successful epoch calldata', async () => {
+  const epoch = new Map([
+    ['epoch_id', 1787432400n],
+    ['epoch_end_timestamp', 1787432400n],
+    ['status', 'OPEN'],
+    ['result_status', 'PENDING'],
+    ['resolution_digest', ''],
+    ['phase', 'RESOLVABLE'],
+    ['high', new Map([['settlement_mode', 'PENDING']])],
+    ['low', new Map([['settlement_mode', 'PENDING']])],
+  ]);
+  const result = await readBradburyRecoveryEpoch({
+    contractAddress: TARGET,
+    subjectId: '1787432400',
+    rpcCall: async () => ({
+      ok: true,
+      result: Buffer.from(abi.calldata.encode(epoch)).toString('hex'),
     }),
-    /exited unsuccessfully/,
-  );
+  });
+  assert.equal(result.epoch_id, '1787432400');
+  assert.equal(result.high.settlement_mode, 'PENDING');
 });
 
 test('create_epoch evidence retains the finalized scan and nonce proof', async () => {
@@ -235,25 +311,6 @@ test('create_epoch evidence retains the finalized scan and nonce proof', async (
   });
   assert.equal(result.scanEndBlock, '12');
   assert.equal(result.signerAddress, SIGNER);
-});
-
-test('live target read kills and rejects a stalled credential-free GenLayer call', async () => {
-  const child = new EventEmitter();
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  let killed = 0;
-  child.kill = () => { killed += 1; return true; };
-  await assert.rejects(
-    readBradburyRecoveryEpoch({
-      contractAddress: TARGET,
-      subjectId: '1787432400',
-      invocation: { executable: 'genlayer-test', prefixArgs: [] },
-      spawnImpl: () => child,
-      timeoutMs: 5,
-    }),
-    /timed out/,
-  );
-  assert.equal(killed, 1);
 });
 
 test('operation identity mismatch fails before the first RPC', async () => {
@@ -282,6 +339,27 @@ test('Bradbury RPC transport is fixed to the reviewed HTTPS endpoint', async () 
   assert.equal(await rpc('eth_chainId', []), '0x107d');
   assert.equal(observed.url, BRADBURY_RECOVERY_RPC_URL);
   assert.equal(new URL(observed.url).protocol, 'https:');
+});
+
+test('Bradbury RPC transport captures only bounded explicit error responses', async () => {
+  const error = genvmError();
+  const rpc = createBradburyRecoveryRpc({
+    fetchImpl: async (url, request) => {
+      const body = JSON.parse(request.body);
+      return {
+        ok: true,
+        text: async () => JSON.stringify({ jsonrpc: '2.0', id: body.id, result: null, error }),
+      };
+    },
+  });
+  assert.deepEqual(
+    await rpc('gen_call', [], { captureError: true, maxResponseBytes: 64 * 1024 }),
+    { ok: false, error },
+  );
+  await assert.rejects(
+    rpc('gen_call', [], { captureError: true, maxResponseBytes: 8 }),
+    /response is too large/,
+  );
 });
 
 test('Bradbury RPC transport aborts a hung request at its bounded timeout', async () => {
