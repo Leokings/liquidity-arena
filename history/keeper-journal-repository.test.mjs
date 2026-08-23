@@ -110,30 +110,34 @@ function healthySchemaRow(overrides = {}) {
     subject_columns_exist: true,
     accepted_handoff_columns_exist: true,
     accepted_handoff_constraints_exist: true,
+    prehash_abandonment_columns_exist: true,
+    prehash_abandonment_constraints_exist: true,
     base_migration_valid: true,
     attempt_migration_valid: true,
     v4_migration_valid: true,
     v5_migration_valid: true,
+    v6_migration_valid: true,
     migration_valid: true,
     no_unknown_migrations: true,
     ...overrides,
   };
 }
 
-test('health requires the exact version 6 accepted handoff schema and its v2-v5 prerequisites', async () => {
+test('health requires the exact version 7 pre-hash abandonment schema and its prerequisites', async () => {
   const { repository, calls } = fixture([[healthySchemaRow()]]);
-  assert.deepEqual(await repository.health(), { configured: true, ready: true, schemaVersion: 6 });
-  assert.match(calls[0].sql, /version = 2[\s\S]*version = 3[\s\S]*version = 4[\s\S]*version = 5[\s\S]*version = 6/);
+  assert.deepEqual(await repository.health(), { configured: true, ready: true, schemaVersion: 7 });
+  assert.match(calls[0].sql, /version = 2[\s\S]*version = 3[\s\S]*version = 4[\s\S]*version = 5[\s\S]*version = 6[\s\S]*version = 7/);
   assert.match(calls[0].sql, /logical_operation_id/);
   assert.match(calls[0].sql, /arena_keeper_operations_logical_attempt_key/);
   assert.match(calls[0].sql, /subject_type[\s\S]*subject_id/);
   assert.match(calls[0].sql, /accepted_at[\s\S]*acceptance_revalidated_at[\s\S]*acceptance_metadata/);
-  assert.match(calls[0].sql, /arena_keeper_journal_requests_request_action_check[\s\S]*ACCEPT_HANDOFF/);
-  assert.match(calls[0].sql, /NOT EXISTS \([\s\S]*version > 6/);
-  assert.equal(calls[0].params.length, 5);
+  assert.match(calls[0].sql, /arena_keeper_journal_requests_request_action_check[\s\S]*ABANDON_PREHASH/);
+  assert.match(calls[0].sql, /prehash_abandoned_at[\s\S]*prehash_abandonment_metadata/);
+  assert.match(calls[0].sql, /NOT EXISTS \([\s\S]*version > 7/);
+  assert.equal(calls[0].params.length, 6);
 });
 
-test('health rejects an otherwise valid database with a migration newer than V6', async () => {
+test('health rejects an otherwise valid database with a migration newer than V7', async () => {
   const { repository } = fixture([[healthySchemaRow({ no_unknown_migrations: false })]]);
   assert.deepEqual(await repository.health(), { configured: true, ready: false, schemaVersion: null });
 });
@@ -231,6 +235,64 @@ test('ACCEPT_HANDOFF atomically persists exact row-bound successful receipt evid
     'executionVerified', 'executionSucceeded',
   ]) assert.match(calls[0].sql, new RegExp(field));
   assert.equal(calls[0].params[5], JSON.stringify(evidence));
+  assertBradburyV8Isolation(calls[0].sql);
+});
+
+test('ABANDON_PREHASH terminalizes only a hashless PREPARED row under exact evidence', async () => {
+  const evidence = {
+    evidenceVersion: 'LOCAL_PRESPAWN_FAILURE_V1',
+    broadcastAttempted: false,
+    transactionHashObserved: false,
+    failureCode: 'GENLAYER_PROCESS_NOT_STARTED',
+    failureMessage: 'GenLayer process could not be started.',
+    lowerLevelErrorRetained: true,
+    operationId: OPERATION_ID,
+    logicalOperationId: OPERATION_ID,
+    contractAddress: '0xb2ae59ae641f571726ae81e30080f8c2192b15ef',
+    method: 'resolve_epoch',
+    arguments: ['1800014400'],
+    subjectType: 'epoch',
+    subjectId: '1800014400',
+    preparedAt: '2026-08-20T00:00:00.000Z',
+  };
+  const abandoned = operationRow({
+    state: 'ABANDONED_PREHASH',
+    transaction_hash: null,
+    lifecycle_status: null,
+    pipeline_slot: 0,
+    submitted_at: null,
+    prehash_abandoned_at: '2026-08-20T00:00:02.000Z',
+    prehash_abandonment_metadata: evidence,
+    state_reason_code: 'DEFINITE_LOCAL_PRESPAWN_FAILURE',
+  });
+  const { repository, calls } = fixture([[
+    {
+      lease_valid: true,
+      operation_exists: true,
+      attempt_frozen: false,
+      operation: abandoned,
+    },
+  ]]);
+  const result = await repository.abandonPrehash({
+    holderId: HOLDER,
+    signerAddress: SIGNER,
+    fencingToken: '9',
+    operationId: OPERATION_ID,
+    reasonCode: 'DEFINITE_LOCAL_PRESPAWN_FAILURE',
+    evidence,
+  });
+  assert.equal(result.state, 'ABANDONED_PREHASH');
+  assert.equal(result.transactionHash, null);
+  assert.deepEqual(result.prehashAbandonmentEvidence, evidence);
+  assert.match(calls[0].sql, /target\.state = 'PREPARED'/);
+  assert.match(calls[0].sql, /target\.transaction_hash IS NULL/);
+  assert.match(calls[0].sql, /broadcastAttempted.*false/);
+  assert.match(calls[0].sql, /'operationId' = target\.operation_id/);
+  assert.match(calls[0].sql, /'logicalOperationId' = target\.logical_operation_id/);
+  assert.match(calls[0].sql, /'method' = target\.method/);
+  assert.match(calls[0].sql, /'arguments' = target\.arguments/);
+  assert.match(calls[0].sql, /'preparedAt'\)::timestamptz = target\.prepared_at/);
+  assert.match(calls[0].sql, /matchingOuterTransactions.*'0'/);
   assertBradburyV8Isolation(calls[0].sql);
 });
 
@@ -386,6 +448,8 @@ test('PREPARE grants one-shot broadcast authorization only to the inserted attem
     submitted_at: null,
     prepared_fencing_token: '9',
     inserted_now: false,
+    prepared_at: '2026-08-20T00:00:00.000+00:00',
+    updated_at: '2026-08-20T00:00:00.000+00:00',
   });
   const { repository } = fixture([[{
     lease_valid: true,
@@ -411,9 +475,11 @@ test('PREPARE grants one-shot broadcast authorization only to the inserted attem
   });
   assert.equal(result.inserted, false);
   assert.equal(result.canBroadcast, false);
+  assert.equal(result.operation.preparedAt, '2026-08-20T00:00:00.000Z');
+  assert.equal(result.operation.updatedAt, '2026-08-20T00:00:00.000Z');
 });
 
-test('PREPARE appends after finalized failure or a verified repeatable V8 retry method only', async () => {
+test('PREPARE appends after finalized failure, pre-hash abandonment, or verified repeatable retry only', async () => {
   const retryOperationId = keeperAttemptOperationId(OPERATION_ID, '2');
   const preparedRetry = operationRow({
     operation_id: retryOperationId,
@@ -431,6 +497,7 @@ test('PREPARE appends after finalized failure or a verified repeatable V8 retry 
     lease_valid: true,
     operation_exists: true,
     unresolved_blocked: false,
+    audited_retry_nonce: '73',
     operation: preparedRetry,
   }]]);
   const result = await repository.prepare({
@@ -455,12 +522,14 @@ test('PREPARE appends after finalized failure or a verified repeatable V8 retry 
   assert.equal(result.operation.retryOfOperationId, OPERATION_ID);
   assert.equal(result.inserted, true);
   assert.equal(result.canBroadcast, true);
+  assert.equal(result.auditedRetryNonce, '73');
   assert.match(calls[0].sql, /exact_latest\.state = 'FINALIZED_FAILURE'/);
+  assert.match(calls[0].sql, /exact_latest\.state = 'ABANDONED_PREHASH'[\s\S]*exact_latest\.attempt_number = 1/);
   assert.match(calls[0].sql, /exact_latest\.state = 'VERIFIED'/);
   assert.match(calls[0].sql, /exact_latest\.method IN \('retry_prepare_payout', 'retry_payout'\)/);
   assert.match(calls[0].sql, /sha256\(convert_to/);
-  assert.match(calls[0].sql, /exact_latest\.state <> 'FINALIZED_FAILURE'/);
-  assert.doesNotMatch(calls[0].sql, /exact_latest\.state IN/);
+  assert.match(calls[0].sql, /exact_latest\.state NOT IN \('FINALIZED_FAILURE', 'ABANDONED_PREHASH'\)/);
+  assert.match(calls[0].sql, /prehash_abandonment_metadata ->> 'nonceAtStart'/);
 });
 
 test('a delayed parent quarantine is rejected after its retry attempt exists', async () => {

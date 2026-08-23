@@ -9,7 +9,9 @@ const OPERATION_ID = /^[0-9a-f]{64}$/;
 const RECOVERABLE_STATES = new Set([
   'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'QUARANTINED', 'STATE_SATISFIED_UNPROVEN',
 ]);
-const JOURNAL_STATES = new Set([...RECOVERABLE_STATES, 'VERIFIED', 'FINALIZED_FAILURE']);
+const JOURNAL_STATES = new Set([
+  ...RECOVERABLE_STATES, 'VERIFIED', 'FINALIZED_FAILURE', 'ABANDONED_PREHASH',
+]);
 const LIFECYCLE_STATUSES = new Set([
   'UNKNOWN', 'PENDING', 'PROPOSING', 'COMMITTING', 'REVEALING', 'ACCEPTED', 'FINALIZED',
 ]);
@@ -170,6 +172,7 @@ export function validateRecoveredKeeperOperation(operation) {
     fail('KEEPER_JOURNAL_SCHEMA', 'Recovered submitted operation has no transaction hash.');
   }
   const acceptanceEvidence = operation.acceptanceEvidence;
+  const prehashEvidence = operation.prehashAbandonmentEvidence;
   if ((RECOVERABLE_STATES.has(operation.state) && ![0, 1].includes(operation.pipelineSlot))
       || (operation.handoffPredecessorOperationId !== null
         && !OPERATION_ID.test(String(operation.handoffPredecessorOperationId || '')))
@@ -196,6 +199,17 @@ export function validateRecoveredKeeperOperation(operation) {
         || Date.parse(operation.acceptanceRevalidatedAt) < Date.parse(operation.acceptedAt)
       ))) {
     fail('KEEPER_JOURNAL_SCHEMA', 'Recovered operation handoff evidence is malformed.');
+  }
+  if ((operation.prehashAbandonedAt === null) !== (prehashEvidence === null)
+      || (operation.state === 'ABANDONED_PREHASH' && (
+        operation.transactionHash !== null
+        || operation.prehashAbandonedAt === null
+        || !['DEFINITE_LOCAL_PRESPAWN_FAILURE', 'AUDITED_NO_BROADCAST']
+          .includes(operation.stateReasonCode)
+      ))
+      || (operation.state !== 'ABANDONED_PREHASH'
+        && operation.prehashAbandonedAt !== null)) {
+    fail('KEEPER_JOURNAL_SCHEMA', 'Recovered operation pre-hash evidence is malformed.');
   }
   return Object.freeze({ ...operation, args: canonical.args });
 }
@@ -256,10 +270,10 @@ export function createAuthoritativeKeeperSession({
         || health?.configuration?.signerConfigured !== true
         || health?.database?.configured !== true
         || health?.database?.ready !== true
-        || health?.database?.schemaVersion !== 6) {
+        || health?.database?.schemaVersion !== 7) {
       fail(
         'KEEPER_JOURNAL_NOT_READY',
-        'The authoritative keeper journal is not ready on schema version 6; no lease or write is permitted.',
+        'The authoritative keeper journal is not ready on schema version 7; no lease or write is permitted.',
       );
     }
     const response = await client.acquireLease({
@@ -411,6 +425,15 @@ export function createAuthoritativeKeeperSession({
         operationId,
         acceptanceEvidence,
         idempotencyKey: key(`accept-${operationId}`),
+      });
+    },
+    async abandonPrehash(operationId, reasonCode, evidence) {
+      return client.abandonPrehash({
+        lease: requireLease(),
+        operationId,
+        reasonCode,
+        evidence,
+        idempotencyKey: key(`abandon-prehash-${operationId}-${reasonCode}`),
       });
     },
     async transition(operationId, targetState, { reasonCode = null, metadata = {} } = {}) {

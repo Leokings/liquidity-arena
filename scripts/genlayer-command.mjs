@@ -792,7 +792,12 @@ export function runGenlayerStreamingCommand({
         },
       );
     } catch (error) {
-      reject(error);
+      reject(new GenlayerCommandError('GenLayer process could not be started.', {
+        code: 'GENLAYER_PROCESS_NOT_STARTED',
+        cause: error,
+        broadcastAttempted: false,
+        transactionHash: null,
+      }));
       return;
     }
 
@@ -804,6 +809,7 @@ export function runGenlayerStreamingCommand({
     let callbackSettled = false;
     let closeResult;
     let processError;
+    let processSpawned = false;
     let settled = false;
 
     const finish = () => {
@@ -824,10 +830,12 @@ export function runGenlayerStreamingCommand({
       if (processError) {
         settled = true;
         reject(new GenlayerCommandError(processError.message, {
+          code: processSpawned ? 'GENLAYER_PROCESS_ERROR' : 'GENLAYER_PROCESS_NOT_STARTED',
           cause: processError,
           stdout,
           stderr,
           transactionHash,
+          ...(processSpawned ? {} : { broadcastAttempted: false }),
         }));
         return;
       }
@@ -894,6 +902,9 @@ export function runGenlayerStreamingCommand({
       stderr += value;
       writeStderr(value);
       inspectHash();
+    });
+    child.once('spawn', () => {
+      processSpawned = true;
     });
     child.once('error', (error) => {
       processError = error;

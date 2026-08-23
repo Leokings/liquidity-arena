@@ -68,6 +68,8 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       acceptedAt: null,
       acceptanceRevalidatedAt: null,
       acceptanceEvidence: null,
+      prehashAbandonedAt: null,
+      prehashAbandonmentEvidence: null,
       stateReasonCode: null,
       quarantineReason: null,
       preparedAt: now,
@@ -95,7 +97,7 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
           authenticationConfigured: true,
           signerConfigured: true,
         },
-        database: { configured: true, ready: true, schemaVersion: 6 },
+        database: { configured: true, ready: true, schemaVersion: 7 },
       };
     },
     async acquireLease(request) {
@@ -147,13 +149,17 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       const latest = attemptsFor(canonical.operationId)[0];
       const repeatableVerified = latest?.state === 'VERIFIED'
         && ['retry_prepare_payout', 'retry_payout'].includes(canonical.method);
-      if (latest && latest.state !== 'FINALIZED_FAILURE' && !repeatableVerified) {
+      const retryableAbandoned = latest?.state === 'ABANDONED_PREHASH'
+        && latest.attemptNumber === '1';
+      if (latest && latest.state !== 'FINALIZED_FAILURE' && !retryableAbandoned
+          && !repeatableVerified) {
         return {
           status: 'ok',
           action: 'PREPARE',
           operation: publicOperation(latest),
           canBroadcast: false,
           inserted: false,
+          auditedRetryNonce: null,
         };
       }
       const attention = [...operations.values()].filter((operation) => NONTERMINAL.has(operation.state));
@@ -205,6 +211,9 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
         operation: publicOperation(operation),
         canBroadcast: true,
         inserted: true,
+        auditedRetryNonce: latest?.stateReasonCode === 'AUDITED_NO_BROADCAST'
+          ? latest.prehashAbandonmentEvidence?.nonceAtStart ?? null
+          : null,
       };
     },
     async bindSubmission(request) {
@@ -262,6 +271,23 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       operation.updatedAt = operation.lifecycleObservedAt;
       operation.revision = String(Number(operation.revision) + 1);
       return { status: 'ok', action: 'ACCEPT_HANDOFF', ...responseOperation(operation) };
+    },
+    async abandonPrehash(request) {
+      calls.push({ method: 'abandonPrehash', request: structuredClone(request) });
+      assertLease(request.lease);
+      await hooks.abandonPrehash?.(request);
+      const operation = operations.get(request.operationId);
+      if (!operation || operation.state !== 'PREPARED'
+          || operation.transactionHash !== null) {
+        throw new Error('fake pre-hash abandonment rejected');
+      }
+      operation.state = 'ABANDONED_PREHASH';
+      operation.stateReasonCode = request.reasonCode;
+      operation.prehashAbandonedAt = timestamp();
+      operation.prehashAbandonmentEvidence = structuredClone(request.evidence);
+      operation.updatedAt = operation.prehashAbandonedAt;
+      operation.revision = String(Number(operation.revision) + 1);
+      return { status: 'ok', action: 'ABANDON_PREHASH', ...responseOperation(operation) };
     },
     async transition(request) {
       calls.push({ method: 'transition', request: structuredClone(request) });
@@ -346,6 +372,8 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       acceptedAt: null,
       acceptanceRevalidatedAt: null,
       acceptanceEvidence: null,
+      prehashAbandonedAt: state === 'ABANDONED_PREHASH' ? now : null,
+      prehashAbandonmentEvidence: null,
       stateReasonCode,
       quarantineReason,
       preparedAt: now,

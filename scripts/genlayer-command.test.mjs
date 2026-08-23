@@ -284,6 +284,24 @@ test('stream parser never joins a hash label and value across stdout and stderr'
   assert.equal(result.transactionHash, undefined);
 });
 
+test('synchronous process-start failure is the only hashless error marked definitely pre-broadcast', async () => {
+  await assert.rejects(
+    submitGenlayerWrite({
+      invocation: { executable: 'genlayer', prefixArgs: [] },
+      args: ['contract', 'method'],
+      spawnImpl: () => { throw new Error('ENOENT'); },
+      writeStdout: () => {},
+      writeStderr: () => {},
+    }),
+    (error) => {
+      assert.equal(error.code, 'GENLAYER_PROCESS_NOT_STARTED');
+      assert.equal(error.broadcastAttempted, false);
+      assert.equal(error.transactionHash, null);
+      return true;
+    },
+  );
+});
+
 test('write exit after broadcast returns the authoritative captured hash for resume', async () => {
   const captured = [];
   const result = await submitGenlayerWrite({
