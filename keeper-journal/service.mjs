@@ -100,6 +100,7 @@ export function createKeeperJournalService({
           operation: prepared.operation,
           canBroadcast: prepared.canBroadcast === true,
           inserted: prepared.inserted === true,
+          auditedRetryNonce: prepared.auditedRetryNonce ?? null,
         });
       }
       if (request.action === 'BIND_SUBMISSION') {
@@ -122,6 +123,13 @@ export function createKeeperJournalService({
           status: 'ok',
           action: request.action,
           operation: await repository.acceptHandoff(request),
+        });
+      }
+      if (request.action === 'ABANDON_PREHASH') {
+        return Object.freeze({
+          status: 'ok',
+          action: request.action,
+          operation: await repository.abandonPrehash(request),
         });
       }
       if (request.action === 'TRANSITION') {

@@ -45,6 +45,12 @@ const QUARANTINE_REASON_CODES = new Set([
 const RECOVERY_STATES = new Set([
   'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'QUARANTINED', 'STATE_SATISFIED_UNPROVEN',
 ]);
+const JOURNAL_STATES = new Set([
+  ...RECOVERY_STATES, 'VERIFIED', 'FINALIZED_FAILURE', 'ABANDONED_PREHASH',
+]);
+const PREHASH_ABANDONMENT_REASONS = new Set([
+  'DEFINITE_LOCAL_PRESPAWN_FAILURE', 'AUDITED_NO_BROADCAST',
+]);
 const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 function fail(message, code = 'KEEPER_JOURNAL_SCHEMA') {
@@ -83,7 +89,8 @@ function canonicalHash(value, label) {
 }
 
 function canonicalDecimal(value, label, maximum) {
-  const normalized = String(value ?? '');
+  if (typeof value !== 'string') fail(`${label} must be a canonical unsigned decimal string.`);
+  const normalized = value;
   if (!DECIMAL.test(normalized)) fail(`${label} must be a canonical unsigned decimal string.`);
   const parsed = BigInt(normalized);
   if (parsed > maximum) fail(`${label} is out of range.`);
@@ -151,6 +158,214 @@ function safeMetadata(value) {
     fail('metadata is too large.');
   }
   return Object.freeze(normalized);
+}
+
+function canonicalTimestamp(value, label) {
+  const normalized = String(value || '');
+  const parsed = new Date(normalized);
+  if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(normalized)
+      || Number.isNaN(parsed.getTime()) || parsed.toISOString() !== normalized) {
+    fail(`${label} must be an exact millisecond UTC timestamp.`);
+  }
+  return normalized;
+}
+
+function canonicalFailureMessage(value) {
+  const normalized = String(value || '');
+  if (normalized.length < 1 || normalized.length > 256
+      || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    fail('evidence.failureMessage is invalid.');
+  }
+  return normalized;
+}
+
+function exactPrehashAbandonmentEvidence(value, reasonCode, requestedOperationId) {
+  const evidence = safeMetadata(value);
+  if (reasonCode === 'DEFINITE_LOCAL_PRESPAWN_FAILURE') {
+    exactObject(evidence, [
+      'evidenceVersion', 'broadcastAttempted', 'transactionHashObserved',
+      'failureCode', 'failureMessage', 'lowerLevelErrorRetained',
+      'operationId', 'logicalOperationId', 'contractAddress', 'method', 'arguments',
+      'subjectType', 'subjectId', 'preparedAt',
+    ], 'evidence');
+    if (evidence.evidenceVersion !== 'LOCAL_PRESPAWN_FAILURE_V1'
+        || evidence.broadcastAttempted !== false
+        || evidence.transactionHashObserved !== false
+        || evidence.lowerLevelErrorRetained !== true
+        || String(evidence.operationId || '') !== requestedOperationId
+        || !OPERATION_ID.test(String(evidence.logicalOperationId || ''))
+        || !METHODS.has(String(evidence.method || ''))
+        || !['epoch', 'payout'].includes(String(evidence.subjectType || ''))
+        || (evidence.subjectType === 'epoch' && !EPOCH_METHODS.has(evidence.method))
+        || (evidence.subjectType === 'payout' && !PAYOUT_METHODS.has(evidence.method))
+        || !Array.isArray(evidence.arguments)
+        || evidence.arguments.length !== 1
+        || evidence.arguments[0] !== String(evidence.subjectId || '')
+        || !REASON_CODE.test(String(evidence.failureCode || ''))) {
+      fail('Automatic pre-hash abandonment requires exact local pre-spawn failure evidence.');
+    }
+    return Object.freeze({
+      ...evidence,
+      failureCode: String(evidence.failureCode),
+      failureMessage: canonicalFailureMessage(evidence.failureMessage),
+      operationId: String(evidence.operationId),
+      logicalOperationId: String(evidence.logicalOperationId),
+      contractAddress: canonicalAddress(evidence.contractAddress, 'evidence.contractAddress'),
+      method: String(evidence.method),
+      arguments: Object.freeze([...evidence.arguments]),
+      subjectType: String(evidence.subjectType),
+      subjectId: String(evidence.subjectId),
+      preparedAt: canonicalTimestamp(evidence.preparedAt, 'evidence.preparedAt'),
+    });
+  }
+  if (reasonCode === 'AUDITED_NO_BROADCAST') {
+    exactObject(evidence, [
+      'evidenceVersion', 'runId', 'failedAt', 'failureCode', 'failureMessage',
+      'lowerLevelErrorRetained', 'transactionHashObserved', 'network', 'chainId',
+      'signerAddress', 'operationId', 'logicalOperationId', 'contractAddress', 'method', 'arguments',
+      'subjectType', 'subjectId', 'preparedAt', 'scanStartBlock', 'scanEndBlock',
+      'scanStartTimestamp', 'scanEndTimestamp',
+      'matchingOuterTransactions', 'nonceAtStart', 'nonceAtEnd', 'latestNonce',
+      'pendingNonce', 'referenceEventTransactionId',
+      'referenceOuterTransactionHash', 'referenceOuterNonce', 'referenceOuterBlock',
+      'referenceOuterSender', 'referenceConsensusRecipient',
+      'referenceCallSender', 'referenceCallRecipient', 'queryResultSha256',
+      'postStateStatus', 'postStateVerified', 'auditedAt',
+    ], 'evidence');
+    if (evidence.evidenceVersion !== 'BRADBURY_KEEPER_EVM_SCAN_V1'
+        || evidence.lowerLevelErrorRetained !== false
+        || evidence.transactionHashObserved !== false
+        || evidence.network !== 'bradbury'
+        || evidence.chainId !== '4221'
+        || evidence.matchingOuterTransactions !== '0'
+        || evidence.postStateVerified !== true
+        || evidence.postStateStatus !== 'TARGET_STATE_UNCHANGED'
+        || evidence.method !== 'resolve_epoch'
+        || evidence.subjectType !== 'epoch'
+        || String(evidence.operationId || '') !== requestedOperationId
+        || !OPERATION_ID.test(String(evidence.logicalOperationId || ''))
+        || !METHODS.has(String(evidence.method || ''))
+        || !['epoch', 'payout'].includes(String(evidence.subjectType || ''))
+        || (evidence.subjectType === 'epoch' && !EPOCH_METHODS.has(evidence.method))
+        || (evidence.subjectType === 'payout' && !PAYOUT_METHODS.has(evidence.method))
+        || !Array.isArray(evidence.arguments)
+        || evidence.arguments.length !== 1
+        || typeof evidence.arguments[0] !== 'string'
+        || evidence.arguments[0] !== String(evidence.subjectId || '')
+        || !REASON_CODE.test(String(evidence.failureCode || ''))
+        || !REASON_CODE.test(String(evidence.postStateStatus || ''))
+        || !/^[0-9a-f]{64}$/.test(String(evidence.queryResultSha256 || ''))
+        || !HASH.test(String(evidence.referenceEventTransactionId || ''))
+        || !HASH.test(String(evidence.referenceOuterTransactionHash || ''))) {
+      fail('Audited pre-hash abandonment requires exact Bradbury EVM scan evidence.');
+    }
+    const failedAt = canonicalTimestamp(evidence.failedAt, 'evidence.failedAt');
+    const preparedAt = canonicalTimestamp(evidence.preparedAt, 'evidence.preparedAt');
+    const scanStartTimestamp = canonicalTimestamp(
+      evidence.scanStartTimestamp,
+      'evidence.scanStartTimestamp',
+    );
+    const scanEndTimestamp = canonicalTimestamp(
+      evidence.scanEndTimestamp,
+      'evidence.scanEndTimestamp',
+    );
+    const auditedAt = canonicalTimestamp(evidence.auditedAt, 'evidence.auditedAt');
+    const scanStartBlock = canonicalDecimal(
+      evidence.scanStartBlock,
+      'evidence.scanStartBlock',
+      BIGINT_MAX,
+    );
+    const scanEndBlock = canonicalDecimal(
+      evidence.scanEndBlock,
+      'evidence.scanEndBlock',
+      BIGINT_MAX,
+    );
+    const nonceAtStart = canonicalDecimal(evidence.nonceAtStart, 'evidence.nonceAtStart', BIGINT_MAX);
+    const nonceAtEnd = canonicalDecimal(evidence.nonceAtEnd, 'evidence.nonceAtEnd', BIGINT_MAX);
+    const latestNonce = canonicalDecimal(evidence.latestNonce, 'evidence.latestNonce', BIGINT_MAX);
+    const pendingNonce = canonicalDecimal(evidence.pendingNonce, 'evidence.pendingNonce', BIGINT_MAX);
+    const referenceOuterNonce = canonicalDecimal(
+      evidence.referenceOuterNonce,
+      'evidence.referenceOuterNonce',
+      BIGINT_MAX,
+    );
+    const referenceOuterBlock = canonicalDecimal(
+      evidence.referenceOuterBlock,
+      'evidence.referenceOuterBlock',
+      BIGINT_MAX,
+    );
+    if (BigInt(scanStartBlock) > BigInt(scanEndBlock)
+        || nonceAtStart !== nonceAtEnd || nonceAtStart !== latestNonce
+        || nonceAtStart !== pendingNonce
+        || BigInt(referenceOuterNonce) + 1n !== BigInt(nonceAtStart)
+        || !(scanStartTimestamp <= preparedAt && preparedAt <= failedAt
+          && failedAt <= scanEndTimestamp
+          && scanEndTimestamp <= auditedAt)) {
+      fail('Audited pre-hash abandonment evidence does not prove an unchanged signer nonce.');
+    }
+    const normalized = {
+      ...evidence,
+      runId: canonicalDecimal(evidence.runId, 'evidence.runId', BIGINT_MAX),
+      failedAt,
+      failureCode: String(evidence.failureCode),
+      failureMessage: canonicalFailureMessage(evidence.failureMessage),
+      signerAddress: canonicalAddress(evidence.signerAddress, 'evidence.signerAddress'),
+      operationId: String(evidence.operationId),
+      logicalOperationId: String(evidence.logicalOperationId),
+      contractAddress: canonicalAddress(evidence.contractAddress, 'evidence.contractAddress'),
+      method: String(evidence.method),
+      arguments: Object.freeze([...evidence.arguments]),
+      subjectType: String(evidence.subjectType),
+      subjectId: String(evidence.subjectId),
+      preparedAt,
+      scanStartBlock,
+      scanEndBlock,
+      scanStartTimestamp,
+      scanEndTimestamp,
+      nonceAtStart,
+      nonceAtEnd,
+      latestNonce,
+      pendingNonce,
+      referenceEventTransactionId: canonicalHash(
+        evidence.referenceEventTransactionId,
+        'evidence.referenceEventTransactionId',
+      ),
+      referenceOuterTransactionHash: canonicalHash(
+        evidence.referenceOuterTransactionHash,
+        'evidence.referenceOuterTransactionHash',
+      ),
+      referenceOuterNonce,
+      referenceOuterBlock,
+      referenceOuterSender: canonicalAddress(
+        evidence.referenceOuterSender,
+        'evidence.referenceOuterSender',
+      ),
+      referenceConsensusRecipient: canonicalAddress(
+        evidence.referenceConsensusRecipient,
+        'evidence.referenceConsensusRecipient',
+      ),
+      referenceCallSender: canonicalAddress(
+        evidence.referenceCallSender,
+        'evidence.referenceCallSender',
+      ),
+      referenceCallRecipient: canonicalAddress(
+        evidence.referenceCallRecipient,
+        'evidence.referenceCallRecipient',
+      ),
+      postStateStatus: 'TARGET_STATE_UNCHANGED',
+      auditedAt,
+    };
+    if (normalized.referenceOuterSender !== normalized.signerAddress
+        || normalized.referenceCallSender !== normalized.signerAddress
+        || normalized.referenceCallRecipient !== normalized.contractAddress
+        || normalized.referenceConsensusRecipient
+          !== '0x0112bf6e83497965a5fdd6dad1e447a6e004271d'
+        || keeperPrehashEvidenceDigest(normalized) !== normalized.queryResultSha256) {
+      fail('Audited pre-hash abandonment reference mapping or evidence digest is invalid.');
+    }
+    return Object.freeze(normalized);
+  }
+  fail('reasonCode is invalid for pre-hash abandonment.');
 }
 
 function exactTransitionMetadata(targetState, value, reasonCode) {
@@ -265,6 +480,16 @@ function stableJson(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+}
+
+export function keeperPrehashEvidenceDigest(value) {
+  const evidence = value && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : {};
+  const material = Object.fromEntries(
+    Object.entries(evidence).filter(([key]) => key !== 'queryResultSha256'),
+  );
+  return createHash('sha256').update(stableJson(material), 'utf8').digest('hex');
 }
 
 export function canonicalKeeperOperation(value) {
@@ -411,6 +636,25 @@ export function parseKeeperJournalRequest(value) {
       acceptanceEvidence: exactAcceptanceEvidence(value.acceptanceEvidence),
     });
   }
+  if (action === 'ABANDON_PREHASH') {
+    const lease = leaseIdentity(value, [
+      'action', 'holderId', 'signerAddress', 'fencingToken',
+      'operationId', 'reasonCode', 'evidence',
+    ]);
+    const operationId = String(value.operationId || '').toLowerCase();
+    const reasonCode = String(value.reasonCode || '');
+    if (!OPERATION_ID.test(operationId)) fail('operationId is invalid.');
+    if (!PREHASH_ABANDONMENT_REASONS.has(reasonCode)) {
+      fail('reasonCode is invalid for pre-hash abandonment.');
+    }
+    return Object.freeze({
+      action,
+      ...lease,
+      operationId,
+      reasonCode,
+      evidence: exactPrehashAbandonmentEvidence(value.evidence, reasonCode, operationId),
+    });
+  }
   if (action === 'TRANSITION') {
     const lease = leaseIdentity(value, [
       'action', 'holderId', 'signerAddress', 'fencingToken',
@@ -513,7 +757,7 @@ export function decodeRecoveryCursor(value) {
 
 export function publicKeeperOperation(row) {
   const state = String(row.state);
-  if (!RECOVERY_STATES.has(state) && !['VERIFIED', 'FINALIZED_FAILURE'].includes(state)) {
+  if (!JOURNAL_STATES.has(state)) {
     throw new KeeperJournalError(
       'KEEPER_JOURNAL_DATABASE_SHAPE',
       'Keeper journal returned an invalid operation state.',
@@ -554,17 +798,46 @@ export function publicKeeperOperation(row) {
   const handoffPredecessorOperationId = row.handoff_predecessor_operation_id === null
     ? null
     : String(row.handoff_predecessor_operation_id);
-  const acceptedAt = row.accepted_at || null;
-  const acceptanceRevalidatedAt = row.acceptance_revalidated_at || null;
+  const canonicalDatabaseTimestamp = (value, label) => {
+    if (value === null || value === undefined) return null;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new KeeperJournalError(
+        'KEEPER_JOURNAL_DATABASE_SHAPE',
+        `Keeper journal returned an invalid ${label} timestamp.`,
+        { statusCode: 503 },
+      );
+    }
+    return parsed.toISOString();
+  };
+  const acceptedAt = canonicalDatabaseTimestamp(row.accepted_at, 'accepted_at');
+  const acceptanceRevalidatedAt = canonicalDatabaseTimestamp(
+    row.acceptance_revalidated_at,
+    'acceptance_revalidated_at',
+  );
   const acceptanceEvidence = row.acceptance_metadata === null
     ? null
     : Object.freeze({ ...row.acceptance_metadata });
+  const prehashAbandonedAt = canonicalDatabaseTimestamp(
+    row.prehash_abandoned_at,
+    'prehash_abandoned_at',
+  );
+  const prehashAbandonmentEvidence = row.prehash_abandonment_metadata == null
+    ? null
+    : Object.freeze({ ...row.prehash_abandonment_metadata });
   if ((pipelineSlot !== null && ![0, 1].includes(pipelineSlot))
       || (RECOVERY_STATES.has(state) && pipelineSlot === null)
       || (handoffPredecessorOperationId !== null
         && !OPERATION_ID.test(handoffPredecessorOperationId))
       || ((acceptedAt === null) !== (acceptanceEvidence === null))
       || ((acceptanceRevalidatedAt === null) !== (acceptanceEvidence === null))
+      || ((prehashAbandonedAt === null) !== (prehashAbandonmentEvidence === null))
+      || (state === 'ABANDONED_PREHASH' && (
+        row.transaction_hash !== null
+        || prehashAbandonedAt === null
+        || !PREHASH_ABANDONMENT_REASONS.has(String(row.state_reason_code || ''))
+      ))
+      || (state !== 'ABANDONED_PREHASH' && prehashAbandonedAt !== null)
       || (acceptedAt !== null && (
         acceptanceEvidence.transactionHash !== String(row.transaction_hash)
         || acceptanceEvidence.contractAddress !== String(row.contract_address)
@@ -602,19 +875,21 @@ export function publicKeeperOperation(row) {
     state,
     transactionHash: row.transaction_hash === null ? null : String(row.transaction_hash),
     lifecycleStatus: row.lifecycle_status === null ? null : String(row.lifecycle_status),
-    lifecycleObservedAt: row.lifecycle_observed_at || null,
+    lifecycleObservedAt: canonicalDatabaseTimestamp(row.lifecycle_observed_at, 'lifecycle_observed_at'),
     pipelineSlot,
     handoffPredecessorOperationId,
     acceptedAt,
     acceptanceRevalidatedAt,
     acceptanceEvidence,
+    prehashAbandonedAt,
+    prehashAbandonmentEvidence,
     stateReasonCode: row.state_reason_code || null,
     quarantineReason: row.quarantine_reason || null,
-    preparedAt: row.prepared_at,
-    submittedAt: row.submitted_at || null,
-    finalizedAt: row.finalized_at || null,
-    verifiedAt: row.verified_at || null,
-    updatedAt: row.updated_at,
+    preparedAt: canonicalDatabaseTimestamp(row.prepared_at, 'prepared_at'),
+    submittedAt: canonicalDatabaseTimestamp(row.submitted_at, 'submitted_at'),
+    finalizedAt: canonicalDatabaseTimestamp(row.finalized_at, 'finalized_at'),
+    verifiedAt: canonicalDatabaseTimestamp(row.verified_at, 'verified_at'),
+    updatedAt: canonicalDatabaseTimestamp(row.updated_at, 'updated_at'),
     revision: String(row.revision),
   });
 }

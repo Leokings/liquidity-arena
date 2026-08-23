@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   assertV8ContractConfiguration,
   assertActionPostState,
+  assertAuditedRetryNonceGate,
   assertV8Schema,
   classifyOpenEpoch,
   classifyPayoutAction,
@@ -193,6 +194,37 @@ test('keeper pins the exhaustive V8 ABI and immutable contract configuration', (
   assert.equal(roles.keeper, KEEPER);
   assert.equal(roles.newRiskEnabled, true);
   assert.throws(() => assertV8ContractConfiguration(config(), chainConfig({ payout_vault_factory: TREASURY })), /payout_vault_factory/);
+});
+
+test('audited retry nonce gate requires exact latest and pending signer nonces', async () => {
+  let reads = 0;
+  const operator = {
+    getBradburySignerNonces: async () => {
+      reads += 1;
+      return { latestNonce: '73', pendingNonce: '73' };
+    },
+  };
+  assert.deepEqual(
+    await assertAuditedRetryNonceGate({ operator, auditedRetryNonce: '73' }),
+    { latestNonce: '73', pendingNonce: '73' },
+  );
+  assert.equal(reads, 1);
+  assert.equal(await assertAuditedRetryNonceGate({ operator, auditedRetryNonce: null }), null);
+  assert.equal(reads, 1);
+  await assert.rejects(
+    assertAuditedRetryNonceGate({
+      operator: { getBradburySignerNonces: async () => ({ latestNonce: '74', pendingNonce: '74' }) },
+      auditedRetryNonce: '73',
+    }),
+    /nonce changed/,
+  );
+  await assert.rejects(
+    assertAuditedRetryNonceGate({
+      operator: { getBradburySignerNonces: async () => ({ latestNonce: '73', pendingNonce: '74' }) },
+      auditedRetryNonce: '73',
+    }),
+    /nonce changed/,
+  );
 });
 
 test('payout classifier uses only V8 permissionless stages plus keeper-authorized retry', () => {
@@ -414,6 +446,150 @@ test('execute PREPARE-binds and verifies a permissionless dispatch without vault
   assert.equal([...journal.operations.values()][0].subjectType, 'payout');
   assert.equal([...journal.operations.values()][0].state, 'VERIFIED');
   assert.equal(submitted.method.includes('withdraw'), false);
+});
+
+test('proven local pre-spawn failure is abandoned with telemetry and retried as attempt two', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  let payout = payoutRecord();
+  const events = [];
+  const hash = `0x${'f'.repeat(64)}`;
+  const operator = emptyExecutionOperator({
+    journalClient: journal.client,
+    getConfig: async () => chainConfig({ new_risk_enabled: false }),
+    getPayoutPage: async (offset, limit) => ({
+      offset,
+      next_offset: offset + Math.min(limit, 1 - offset),
+      total: 1,
+      payouts: offset === 0 ? [structuredClone(payout)] : [],
+    }),
+    getPayout: async () => structuredClone(payout),
+    getPayoutRailState: async () => ({ prepared: true, credited: false, withdrawn: false }),
+    submitWrite: async () => {
+      throw Object.assign(new Error('GenLayer process could not be started.'), {
+        code: 'GENLAYER_PROCESS_NOT_STARTED',
+        broadcastAttempted: false,
+      });
+    },
+  });
+  const options = {
+    config: config({ maxWritesPerRun: 1 }),
+    execute: true,
+    operator,
+    journalClient: journal.client,
+    nowEpochSeconds: NOW,
+    logger: (event) => events.push(event),
+    sleep: async () => {},
+    journalSessionOptions: {
+      setIntervalImpl: () => ({ unref() {} }),
+      clearIntervalImpl: () => {},
+    },
+  };
+  await assert.rejects(runV8KeeperOnce(options), (error) => error.code === 'ACTION_FAILURES');
+  const first = [...journal.operations.values()][0];
+  assert.equal(first.state, 'ABANDONED_PREHASH');
+  assert.equal(first.transactionHash, null);
+  assert.equal(first.stateReasonCode, 'DEFINITE_LOCAL_PRESPAWN_FAILURE');
+  assert.equal(first.prehashAbandonmentEvidence.broadcastAttempted, false);
+  assert.deepEqual(
+    events.filter(({ event }) => event === 'V8_KEEPER_PREHASH_SUBMIT_FAILURE')
+      .map(({ failureCode, failureMessage }) => ({ failureCode, failureMessage })),
+    [{
+      failureCode: 'GENLAYER_PROCESS_NOT_STARTED',
+      failureMessage: 'GenLayer process could not be started.',
+    }],
+  );
+
+  operator.submitWrite = async (method, args, onHash) => {
+    await onHash(hash);
+    payout = payoutRecord({ state: 'DISPATCHED', attempt_count: 1, last_dispatch_timestamp: NOW });
+  };
+  operator.getTransactionStatus = async () => 'FINALIZED';
+  operator.waitFinalized = async () => ({
+    transactionHash: hash,
+    statusName: 'FINALIZED',
+    txExecutionResultName: 'FINISHED_WITH_RETURN',
+    recipient: CONTRACT,
+    txDataDecoded: { type: 'call', callData: { method: 'dispatch_payout', args: [PAYOUT] } },
+  });
+  const result = await runV8KeeperOnce(options);
+  assert.equal(result.completed[0].status, 'PAYOUT_DISPATCHED');
+  const attempts = [...journal.operations.values()];
+  assert.deepEqual(attempts.map(({ attemptNumber }) => attemptNumber), ['1', '2']);
+  assert.deepEqual(attempts.map(({ state }) => state), ['ABANDONED_PREHASH', 'VERIFIED']);
+  assert.equal(attempts[1].retryOfOperationId, attempts[0].operationId);
+});
+
+test('ambiguous hashless CLI failure logs its cause and leaves PREPARED blocking', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  const events = [];
+  const operator = emptyExecutionOperator({
+    journalClient: journal.client,
+    getConfig: async () => chainConfig({ new_risk_enabled: false }),
+    getPayoutPage: async (offset, limit) => ({
+      offset,
+      next_offset: offset + Math.min(limit, 1 - offset),
+      total: 1,
+      payouts: offset === 0 ? [payoutRecord()] : [],
+    }),
+    getPayout: async () => payoutRecord(),
+    getPayoutRailState: async () => ({ prepared: true, credited: false, withdrawn: false }),
+    submitWrite: async () => {
+      throw Object.assign(new Error('CLI exited before printing a hash.'), {
+        code: 'GENLAYER_PROCESS_ERROR',
+      });
+    },
+  });
+  await assert.rejects(runV8KeeperOnce({
+    config: config({ maxWritesPerRun: 1 }),
+    execute: true,
+    operator,
+    journalClient: journal.client,
+    nowEpochSeconds: NOW,
+    logger: (event) => events.push(event),
+    sleep: async () => {},
+    journalSessionOptions: {
+      setIntervalImpl: () => ({ unref() {} }),
+      clearIntervalImpl: () => {},
+    },
+  }), (error) => error.code === 'ACTION_FAILURES');
+  const operation = [...journal.operations.values()][0];
+  assert.equal(operation.state, 'PREPARED');
+  assert.equal(operation.prehashAbandonedAt, null);
+  const telemetry = events.find(({ event }) => event === 'V8_KEEPER_PREHASH_SUBMIT_FAILURE');
+  assert.equal(telemetry.failureCode, 'GENLAYER_PROCESS_ERROR');
+  assert.equal(telemetry.failureMessage, 'CLI exited before printing a hash.');
+  assert.equal(telemetry.broadcastAttempted, null);
+});
+
+test('an abandoned retry attempt cannot authorize attempt three', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  const input = {
+    deploymentAlias: 'v8',
+    chainId: '4221',
+    contractAddress: CONTRACT,
+    subjectType: 'epoch',
+    subjectId: '1800000000',
+    method: 'resolve_epoch',
+    args: ['1800000000'],
+    valueAtto: '0',
+  };
+  journal.seedOperation({ ...input, signerAddress: KEEPER, state: 'ABANDONED_PREHASH' });
+  journal.seedOperation({
+    ...input,
+    signerAddress: KEEPER,
+    state: 'ABANDONED_PREHASH',
+    attemptNumber: '2',
+  });
+  const lease = (await journal.client.acquireLease({
+    holderId: '123e4567-e89b-42d3-a456-426614174000',
+    signerAddress: KEEPER,
+    leaseSeconds: 900,
+  })).lease;
+  const prepared = await journal.client.prepareOperation({ lease, operation: input });
+  assert.equal(prepared.canBroadcast, false);
+  assert.equal(prepared.inserted, false);
+  assert.equal(prepared.operation.attemptNumber, '2');
+  assert.equal(journal.operations.size, 2);
 });
 
 test('production timing budget and structural gate sign at most one fresh write per run', async () => {

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { StrictKeeperJsonParser } from './http.mjs';
 import {
   canonicalKeeperOperation,
+  keeperPrehashEvidenceDigest,
   keeperAttemptOperationId,
   normalizedIdempotencyKey,
 } from './schema.mjs';
@@ -167,6 +168,7 @@ function validatedOperation(value) {
     'state', 'transactionHash', 'lifecycleStatus', 'lifecycleObservedAt',
     'pipelineSlot', 'handoffPredecessorOperationId', 'acceptedAt',
     'acceptanceRevalidatedAt', 'acceptanceEvidence',
+    'prehashAbandonedAt', 'prehashAbandonmentEvidence',
     'stateReasonCode', 'quarantineReason', 'preparedAt', 'submittedAt',
     'finalizedAt', 'verifiedAt', 'updatedAt', 'revision',
   ];
@@ -174,14 +176,127 @@ function validatedOperation(value) {
   const states = new Set([
     'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'VERIFIED',
     'FINALIZED_FAILURE', 'QUARANTINED', 'STATE_SATISFIED_UNPROVEN',
+    'ABANDONED_PREHASH',
   ]);
   const timestamp = (entry) => typeof entry === 'string' && !Number.isNaN(Date.parse(entry));
+  const canonicalTimestamp = (entry) => timestamp(entry)
+    && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(entry)
+    && new Date(entry).toISOString() === entry;
+  const canonicalUnsigned = (entry) => typeof entry === 'string'
+    && /^(?:0|[1-9]\d*)$/.test(entry);
   const nullableTimestamp = (entry) => entry === null || timestamp(entry);
   const lifecycleStatuses = new Set([
     'UNKNOWN', 'PENDING', 'PROPOSING', 'COMMITTING', 'REVEALING', 'ACCEPTED', 'FINALIZED',
   ]);
   const reasonCode = (entry) => entry === null || /^[A-Z][A-Z0-9_]{0,79}$/.test(entry);
   const acceptanceEvidence = value.acceptanceEvidence;
+  const prehashAbandonmentEvidence = value.prehashAbandonmentEvidence;
+  const prehashKeys = prehashAbandonmentEvidence && typeof prehashAbandonmentEvidence === 'object'
+    && !Array.isArray(prehashAbandonmentEvidence)
+    ? Object.keys(prehashAbandonmentEvidence).sort()
+    : [];
+  const exactPrehashKeys = (expected) => prehashKeys.length === expected.length
+    && [...expected].sort().every((key, index) => key === prehashKeys[index]);
+  const automaticPrehashEvidence = value.stateReasonCode === 'DEFINITE_LOCAL_PRESPAWN_FAILURE'
+    && exactPrehashKeys([
+      'evidenceVersion', 'broadcastAttempted', 'transactionHashObserved',
+      'failureCode', 'failureMessage', 'lowerLevelErrorRetained',
+      'operationId', 'logicalOperationId', 'contractAddress', 'method', 'arguments',
+      'subjectType', 'subjectId', 'preparedAt',
+    ])
+    && prehashAbandonmentEvidence.evidenceVersion === 'LOCAL_PRESPAWN_FAILURE_V1'
+    && prehashAbandonmentEvidence.broadcastAttempted === false
+    && prehashAbandonmentEvidence.transactionHashObserved === false
+    && prehashAbandonmentEvidence.lowerLevelErrorRetained === true
+    && prehashAbandonmentEvidence.operationId === value.operationId
+    && prehashAbandonmentEvidence.logicalOperationId === value.logicalOperationId
+    && prehashAbandonmentEvidence.contractAddress === value.contractAddress
+    && prehashAbandonmentEvidence.method === value.method
+    && JSON.stringify(prehashAbandonmentEvidence.arguments) === JSON.stringify(value.args)
+    && prehashAbandonmentEvidence.subjectType === value.subjectType
+    && prehashAbandonmentEvidence.subjectId === value.subjectId
+    && prehashAbandonmentEvidence.preparedAt === value.preparedAt
+    && canonicalTimestamp(prehashAbandonmentEvidence.preparedAt)
+    && /^[A-Z][A-Z0-9_]{0,79}$/.test(prehashAbandonmentEvidence.failureCode)
+    && typeof prehashAbandonmentEvidence.failureMessage === 'string'
+    && prehashAbandonmentEvidence.failureMessage.length >= 1
+    && prehashAbandonmentEvidence.failureMessage.length <= 256;
+  const auditedPrehashEvidence = value.stateReasonCode === 'AUDITED_NO_BROADCAST'
+    && exactPrehashKeys([
+      'evidenceVersion', 'runId', 'failedAt', 'failureCode', 'failureMessage',
+      'lowerLevelErrorRetained', 'transactionHashObserved', 'network', 'chainId',
+      'signerAddress', 'scanStartBlock', 'scanEndBlock', 'scanStartTimestamp',
+      'operationId', 'logicalOperationId', 'contractAddress', 'method', 'arguments',
+      'subjectType', 'subjectId', 'preparedAt',
+      'scanEndTimestamp', 'matchingOuterTransactions', 'nonceAtStart', 'nonceAtEnd',
+      'latestNonce', 'pendingNonce', 'referenceEventTransactionId',
+      'referenceOuterTransactionHash', 'referenceOuterNonce', 'referenceOuterBlock',
+      'referenceOuterSender', 'referenceConsensusRecipient', 'referenceCallSender',
+      'referenceCallRecipient', 'queryResultSha256', 'postStateStatus',
+      'postStateVerified', 'auditedAt',
+    ])
+    && prehashAbandonmentEvidence.evidenceVersion === 'BRADBURY_KEEPER_EVM_SCAN_V1'
+    && prehashAbandonmentEvidence.network === 'bradbury'
+    && prehashAbandonmentEvidence.chainId === '4221'
+    && prehashAbandonmentEvidence.method === 'resolve_epoch'
+    && prehashAbandonmentEvidence.subjectType === 'epoch'
+    && prehashAbandonmentEvidence.signerAddress === value.signerAddress
+    && prehashAbandonmentEvidence.operationId === value.operationId
+    && prehashAbandonmentEvidence.logicalOperationId === value.logicalOperationId
+    && prehashAbandonmentEvidence.contractAddress === value.contractAddress
+    && prehashAbandonmentEvidence.method === value.method
+    && JSON.stringify(prehashAbandonmentEvidence.arguments) === JSON.stringify(value.args)
+    && prehashAbandonmentEvidence.subjectType === value.subjectType
+    && prehashAbandonmentEvidence.subjectId === value.subjectId
+    && prehashAbandonmentEvidence.preparedAt === value.preparedAt
+    && prehashAbandonmentEvidence.referenceOuterSender === value.signerAddress
+    && prehashAbandonmentEvidence.referenceCallSender === value.signerAddress
+    && prehashAbandonmentEvidence.referenceCallRecipient === value.contractAddress
+    && prehashAbandonmentEvidence.referenceConsensusRecipient
+      === '0x0112bf6e83497965a5fdd6dad1e447a6e004271d'
+    && prehashAbandonmentEvidence.matchingOuterTransactions === '0'
+    && prehashAbandonmentEvidence.nonceAtStart === prehashAbandonmentEvidence.nonceAtEnd
+    && prehashAbandonmentEvidence.nonceAtStart === prehashAbandonmentEvidence.latestNonce
+    && prehashAbandonmentEvidence.nonceAtStart === prehashAbandonmentEvidence.pendingNonce
+    && typeof prehashAbandonmentEvidence.runId === 'string'
+    && /^[1-9]\d*$/.test(prehashAbandonmentEvidence.runId)
+    && canonicalUnsigned(prehashAbandonmentEvidence.scanStartBlock)
+    && canonicalUnsigned(prehashAbandonmentEvidence.scanEndBlock)
+    && BigInt(prehashAbandonmentEvidence.scanStartBlock)
+      <= BigInt(prehashAbandonmentEvidence.scanEndBlock)
+    && canonicalUnsigned(prehashAbandonmentEvidence.referenceOuterBlock)
+    && canonicalUnsigned(prehashAbandonmentEvidence.referenceOuterNonce)
+    && canonicalUnsigned(prehashAbandonmentEvidence.nonceAtStart)
+    && canonicalUnsigned(prehashAbandonmentEvidence.nonceAtEnd)
+    && canonicalUnsigned(prehashAbandonmentEvidence.latestNonce)
+    && canonicalUnsigned(prehashAbandonmentEvidence.pendingNonce)
+    && BigInt(prehashAbandonmentEvidence.referenceOuterNonce) + 1n
+      === BigInt(prehashAbandonmentEvidence.nonceAtStart)
+    && canonicalTimestamp(prehashAbandonmentEvidence.preparedAt)
+    && canonicalTimestamp(prehashAbandonmentEvidence.failedAt)
+    && canonicalTimestamp(prehashAbandonmentEvidence.scanStartTimestamp)
+    && canonicalTimestamp(prehashAbandonmentEvidence.scanEndTimestamp)
+    && canonicalTimestamp(prehashAbandonmentEvidence.auditedAt)
+    && prehashAbandonmentEvidence.scanStartTimestamp <= prehashAbandonmentEvidence.failedAt
+    && prehashAbandonmentEvidence.scanStartTimestamp <= prehashAbandonmentEvidence.preparedAt
+    && prehashAbandonmentEvidence.preparedAt <= prehashAbandonmentEvidence.failedAt
+    && prehashAbandonmentEvidence.failedAt <= prehashAbandonmentEvidence.scanEndTimestamp
+    && prehashAbandonmentEvidence.scanEndTimestamp <= prehashAbandonmentEvidence.auditedAt
+    && prehashAbandonmentEvidence.postStateStatus === 'TARGET_STATE_UNCHANGED'
+    && prehashAbandonmentEvidence.postStateVerified === true
+    && prehashAbandonmentEvidence.transactionHashObserved === false
+    && prehashAbandonmentEvidence.lowerLevelErrorRetained === false
+    && /^0x[0-9a-f]{64}$/.test(prehashAbandonmentEvidence.referenceEventTransactionId)
+    && /^0x[0-9a-f]{64}$/.test(prehashAbandonmentEvidence.referenceOuterTransactionHash)
+    && /^[0-9a-f]{64}$/.test(prehashAbandonmentEvidence.queryResultSha256)
+    && /^[A-Z][A-Z0-9_]{0,79}$/.test(prehashAbandonmentEvidence.failureCode)
+    && typeof prehashAbandonmentEvidence.failureMessage === 'string'
+    && prehashAbandonmentEvidence.failureMessage.length >= 1
+    && prehashAbandonmentEvidence.failureMessage.length <= 256
+    && keeperPrehashEvidenceDigest(prehashAbandonmentEvidence)
+      === prehashAbandonmentEvidence.queryResultSha256;
+  const validPrehashEvidence = prehashAbandonmentEvidence === null
+    || automaticPrehashEvidence || auditedPrehashEvidence;
   const validAcceptanceEvidence = acceptanceEvidence === null || (
     acceptanceEvidence && typeof acceptanceEvidence === 'object'
     && !Array.isArray(acceptanceEvidence)
@@ -233,6 +348,16 @@ function validatedOperation(value) {
       || (value.acceptedAt !== null
         && Date.parse(value.acceptanceRevalidatedAt) < Date.parse(value.acceptedAt))
       || !validAcceptanceEvidence
+      || !nullableTimestamp(value.prehashAbandonedAt)
+      || ((value.prehashAbandonedAt === null) !== (prehashAbandonmentEvidence === null))
+      || !validPrehashEvidence
+      || (value.state === 'ABANDONED_PREHASH' && (
+        value.transactionHash !== null
+        || value.prehashAbandonedAt === null
+        || !['DEFINITE_LOCAL_PRESPAWN_FAILURE', 'AUDITED_NO_BROADCAST']
+          .includes(value.stateReasonCode)
+      ))
+      || (value.state !== 'ABANDONED_PREHASH' && value.prehashAbandonedAt !== null)
       || !reasonCode(value.stateReasonCode)
       || !reasonCode(value.quarantineReason)
       || !/^[1-9]\d*$/.test(value.revision)
@@ -294,7 +419,20 @@ function validatedOperation(value) {
       'Keeper journal operation attempt identity does not match its canonical call.',
     );
   }
-  return Object.freeze({ ...value, args: Object.freeze([...value.args]) });
+  const canonicalTime = (entry) => entry === null ? null : new Date(entry).toISOString();
+  return Object.freeze({
+    ...value,
+    args: Object.freeze([...value.args]),
+    lifecycleObservedAt: canonicalTime(value.lifecycleObservedAt),
+    acceptedAt: canonicalTime(value.acceptedAt),
+    acceptanceRevalidatedAt: canonicalTime(value.acceptanceRevalidatedAt),
+    prehashAbandonedAt: canonicalTime(value.prehashAbandonedAt),
+    preparedAt: canonicalTime(value.preparedAt),
+    submittedAt: canonicalTime(value.submittedAt),
+    finalizedAt: canonicalTime(value.finalizedAt),
+    verifiedAt: canonicalTime(value.verifiedAt),
+    updatedAt: canonicalTime(value.updatedAt),
+  });
 }
 
 function assertPreparedResponseIdentity(result, requested, lease) {
@@ -342,7 +480,7 @@ function validatedSuccess(action, payload) {
       && payload.configuration.signerConfigured === true;
     const databaseReady = payload.database.configured === true
       && payload.database.ready === true
-      && payload.database.schemaVersion === 6;
+      && payload.database.schemaVersion === 7;
     if (!['ready', 'degraded'].includes(payload.status)
         || payload.service !== 'liquidity-arena-keeper-journal'
         || typeof payload.ready !== 'boolean'
@@ -353,7 +491,7 @@ function validatedSuccess(action, payload) {
         || typeof payload.configuration.signerConfigured !== 'boolean'
         || typeof payload.database.configured !== 'boolean'
         || typeof payload.database.ready !== 'boolean'
-      || ![null, 6].includes(payload.database.schemaVersion)
+      || ![null, 7].includes(payload.database.schemaVersion)
         || (payload.ready === true
           ? payload.status !== 'ready' || !configurationReady || !databaseReady
           : payload.status !== 'degraded')) {
@@ -380,14 +518,25 @@ function validatedSuccess(action, payload) {
     return Object.freeze(payload);
   }
   if (action === 'PREPARE') {
-    exactResponseKeys(payload, ['status', 'action', 'operation', 'canBroadcast', 'inserted'], 'prepare response');
+    exactResponseKeys(payload, [
+      'status', 'action', 'operation', 'canBroadcast', 'inserted', 'auditedRetryNonce',
+    ], 'prepare response');
     if (payload.status !== 'ok' || payload.action !== action
-        || typeof payload.canBroadcast !== 'boolean' || typeof payload.inserted !== 'boolean') {
+        || typeof payload.canBroadcast !== 'boolean' || typeof payload.inserted !== 'boolean'
+        || (payload.auditedRetryNonce !== null
+          && (typeof payload.auditedRetryNonce !== 'string'
+            || !/^(?:0|[1-9]\d*)$/.test(payload.auditedRetryNonce)
+            || payload.canBroadcast !== true || payload.inserted !== true))) {
       throw new KeeperJournalClientError('KEEPER_JOURNAL_RESPONSE_SHAPE', 'Keeper journal returned an invalid prepare response.');
     }
-    return Object.freeze({ ...payload, operation: validatedOperation(payload.operation) });
+    const operation = validatedOperation(payload.operation);
+    if (payload.auditedRetryNonce !== null && operation.attemptNumber !== '2') {
+      throw new KeeperJournalClientError('KEEPER_JOURNAL_RESPONSE_SHAPE', 'Keeper journal returned an invalid audited retry nonce.');
+    }
+    return Object.freeze({ ...payload, operation });
   }
-  if (['BIND_SUBMISSION', 'TRANSITION', 'OBSERVE_LIFECYCLE', 'ACCEPT_HANDOFF'].includes(action)) {
+  if (['BIND_SUBMISSION', 'TRANSITION', 'OBSERVE_LIFECYCLE', 'ACCEPT_HANDOFF',
+    'ABANDON_PREHASH'].includes(action)) {
     const keys = action === 'OBSERVE_LIFECYCLE'
       ? ['status', 'action', 'operation', 'receiptIdentityVerified']
       : ['status', 'action', 'operation'];
@@ -588,6 +737,25 @@ export function createKeeperJournalClient({
         throw new KeeperJournalClientError(
           'KEEPER_JOURNAL_RESPONSE_IDENTITY',
           'Keeper journal ACCEPTED handoff response identity does not match the request.',
+        );
+      }
+      return result;
+    },
+
+    async abandonPrehash({ lease, operationId, reasonCode, evidence, idempotencyKey }) {
+      const result = await post({
+        action: 'ABANDON_PREHASH',
+        ...leaseFields(lease),
+        operationId,
+        reasonCode,
+        evidence,
+      }, idempotencyKey);
+      if (result.operation.operationId !== String(operationId).toLowerCase()
+          || result.operation.state !== 'ABANDONED_PREHASH'
+          || result.operation.stateReasonCode !== String(reasonCode || '')) {
+        throw new KeeperJournalClientError(
+          'KEEPER_JOURNAL_RESPONSE_IDENTITY',
+          'Keeper journal pre-hash abandonment response identity does not match the request.',
         );
       }
       return result;

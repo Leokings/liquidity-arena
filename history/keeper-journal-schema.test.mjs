@@ -7,6 +7,7 @@ import {
   decodeRecoveryCursor,
   encodeRecoveryCursor,
   keeperAttemptOperationId,
+  keeperPrehashEvidenceDigest,
   normalizedIdempotencyKey,
   parseKeeperJournalRequest,
 } from '../keeper-journal/schema.mjs';
@@ -107,6 +108,145 @@ test('journal request canonicalizes RPC address casing and binds signer plus fen
   assert.equal(request.signerAddress, SIGNER_MIXED.toLowerCase());
   assert.equal(request.operation.contractAddress, CONTRACT_MIXED.toLowerCase());
   assert.match(request.operation.operationId, /^[0-9a-f]{64}$/);
+});
+
+test('ABANDON_PREHASH accepts only structurally proven local pre-spawn failures', () => {
+  const base = {
+    action: 'ABANDON_PREHASH',
+    holderId: HOLDER,
+    signerAddress: SIGNER_MIXED,
+    fencingToken: '7',
+    operationId: 'b'.repeat(64),
+    reasonCode: 'DEFINITE_LOCAL_PRESPAWN_FAILURE',
+    evidence: {
+      evidenceVersion: 'LOCAL_PRESPAWN_FAILURE_V1',
+      broadcastAttempted: false,
+      transactionHashObserved: false,
+      failureCode: 'GENLAYER_PROCESS_NOT_STARTED',
+      failureMessage: 'GenLayer process could not be started.',
+      lowerLevelErrorRetained: true,
+      operationId: 'b'.repeat(64),
+      logicalOperationId: 'c'.repeat(64),
+      contractAddress: CONTRACT_MIXED.toLowerCase(),
+      method: 'resolve_epoch',
+      arguments: [EPOCH],
+      subjectType: 'epoch',
+      subjectId: EPOCH,
+      preparedAt: '2026-08-22T21:31:43.558Z',
+    },
+  };
+  const parsed = parseKeeperJournalRequest(base);
+  assert.equal(parsed.action, 'ABANDON_PREHASH');
+  assert.equal(parsed.evidence.broadcastAttempted, false);
+  assert.throws(
+    () => parseKeeperJournalRequest({
+      ...base,
+      evidence: { ...base.evidence, broadcastAttempted: true },
+    }),
+    /pre-spawn failure evidence/,
+  );
+  assert.throws(
+    () => parseKeeperJournalRequest({
+      ...base,
+      evidence: { ...base.evidence, extra: 'ambiguous' },
+    }),
+    /unexpected fields/,
+  );
+  assert.throws(
+    () => parseKeeperJournalRequest({
+      ...base,
+      evidence: { ...base.evidence, preparedAt: null },
+    }),
+    /millisecond UTC timestamp/,
+  );
+});
+
+test('audited ABANDON_PREHASH requires zero outer transactions and an unchanged signer nonce', () => {
+  const evidence = {
+    evidenceVersion: 'BRADBURY_KEEPER_EVM_SCAN_V1',
+    runId: '32599800265',
+    failedAt: '2026-08-22T21:31:45.725Z',
+    failureCode: 'ACTION_FAILURES',
+    failureMessage: '1 V8 keeper action(s) failed',
+    lowerLevelErrorRetained: false,
+    transactionHashObserved: false,
+    network: 'bradbury',
+    chainId: '4221',
+    signerAddress: SIGNER_MIXED.toLowerCase(),
+    operationId: 'b'.repeat(64),
+    logicalOperationId: 'c'.repeat(64),
+    contractAddress: CONTRACT_MIXED.toLowerCase(),
+    method: 'resolve_epoch',
+    arguments: [EPOCH],
+    subjectType: 'epoch',
+    subjectId: EPOCH,
+    preparedAt: '2026-08-22T21:31:43.558Z',
+    scanStartBlock: '18649024',
+    scanEndBlock: '18649264',
+    scanStartTimestamp: '2026-08-22T21:30:42.000Z',
+    scanEndTimestamp: '2026-08-22T21:32:22.000Z',
+    matchingOuterTransactions: '0',
+    nonceAtStart: '73',
+    nonceAtEnd: '73',
+    latestNonce: '73',
+    pendingNonce: '73',
+    referenceEventTransactionId: `0x${'c'.repeat(64)}`,
+    referenceOuterTransactionHash: `0x${'d'.repeat(64)}`,
+    referenceOuterNonce: '72',
+    referenceOuterBlock: '18640142',
+    referenceOuterSender: SIGNER_MIXED.toLowerCase(),
+    referenceConsensusRecipient: '0x0112bf6e83497965a5fdd6dad1e447a6e004271d',
+    referenceCallSender: SIGNER_MIXED.toLowerCase(),
+    referenceCallRecipient: CONTRACT_MIXED.toLowerCase(),
+    queryResultSha256: '',
+    postStateStatus: 'TARGET_STATE_UNCHANGED',
+    postStateVerified: true,
+    auditedAt: '2026-08-23T10:30:00.000Z',
+  };
+  evidence.queryResultSha256 = keeperPrehashEvidenceDigest(evidence);
+  const request = {
+    action: 'ABANDON_PREHASH',
+    holderId: HOLDER,
+    signerAddress: SIGNER_MIXED,
+    fencingToken: '7',
+    operationId: 'b'.repeat(64),
+    reasonCode: 'AUDITED_NO_BROADCAST',
+    evidence,
+  };
+  const parsed = parseKeeperJournalRequest(request);
+  assert.equal(parsed.evidence.signerAddress, SIGNER_MIXED.toLowerCase());
+  assert.throws(
+    () => parseKeeperJournalRequest({
+      ...request,
+      evidence: { ...evidence, pendingNonce: '74' },
+    }),
+    /unchanged signer nonce/,
+  );
+  assert.throws(
+    () => parseKeeperJournalRequest({
+      ...request,
+      evidence: { ...evidence, matchingOuterTransactions: '1' },
+    }),
+    /EVM scan evidence/,
+  );
+  const wrongTarget = { ...evidence, contractAddress: SIGNER_MIXED.toLowerCase() };
+  wrongTarget.queryResultSha256 = keeperPrehashEvidenceDigest(wrongTarget);
+  assert.throws(
+    () => parseKeeperJournalRequest({ ...request, evidence: wrongTarget }),
+    /reference mapping/,
+  );
+  const numericRunId = { ...evidence, runId: 32599800265 };
+  numericRunId.queryResultSha256 = keeperPrehashEvidenceDigest(numericRunId);
+  assert.throws(
+    () => parseKeeperJournalRequest({ ...request, evidence: numericRunId }),
+    /canonical unsigned decimal string/,
+  );
+  const replay = { ...evidence, operationId: 'f'.repeat(64) };
+  replay.queryResultSha256 = keeperPrehashEvidenceDigest(replay);
+  assert.throws(
+    () => parseKeeperJournalRequest({ ...request, evidence: replay }),
+    /EVM scan evidence/,
+  );
 });
 
 test('journal schema fails closed for payable calls, legacy deployments, and secret metadata', () => {

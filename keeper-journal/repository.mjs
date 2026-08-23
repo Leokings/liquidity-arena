@@ -7,6 +7,7 @@ export const KEEPER_JOURNAL_SCHEMA_CHECKSUM = '9af77d57fe7bd9317b8a2723bfc0d74ad
 export const KEEPER_JOURNAL_SCHEMA_V4_CHECKSUM = '1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910';
 export const KEEPER_JOURNAL_SCHEMA_V5_CHECKSUM = 'a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59';
 export const KEEPER_JOURNAL_SCHEMA_V6_CHECKSUM = '5b81d291c121cae31962b164608e5ad5fc65a19158bed95cd96fae0348e13bdf';
+export const KEEPER_JOURNAL_SCHEMA_V7_CHECKSUM = '4fa4e8103a1b3caa7022cff2ea1b4868ea6128a4f6b359cdb93a8a6320e0a8f3';
 export const KEEPER_JOURNAL_MAX_PIPELINE_DEPTH = 2;
 const QUERY_TIMEOUT_MS = 8_000;
 const LEASE_SCOPE = 'bradbury:4221:keeper';
@@ -121,6 +122,9 @@ export function createNeonKeeperJournalRepository({
                 AND request_action_constraint.conname =
                     'arena_keeper_journal_requests_request_action_check'
                 AND position(
+                  '''ABANDON_PREHASH''' IN pg_get_constraintdef(request_action_constraint.oid)
+                ) > 0
+                AND position(
                   '''ACCEPT_HANDOFF''' IN pg_get_constraintdef(request_action_constraint.oid)
                 ) > 0
            ) AS request_action_constraint_valid,
@@ -191,6 +195,25 @@ export function createNeonKeeperJournalRepository({
                    'arena_keeper_operations_acceptance_evidence_v6_check'
                  )
             ) AS accepted_handoff_constraints_exist,
+            (
+              SELECT count(*) = 2
+                FROM information_schema.columns
+               WHERE table_schema = 'public'
+                 AND table_name = 'arena_keeper_operations'
+                 AND column_name IN (
+                   'prehash_abandoned_at', 'prehash_abandonment_metadata'
+                 )
+            ) AS prehash_abandonment_columns_exist,
+            (
+              SELECT count(*) = 3
+                FROM pg_constraint
+               WHERE conrelid = 'public.arena_keeper_operations'::regclass
+                 AND conname IN (
+                   'arena_keeper_operations_state_v7_check',
+                   'arena_keeper_operations_submission_v7_check',
+                   'arena_keeper_operations_prehash_abandonment_v7_check'
+                 )
+            ) AS prehash_abandonment_constraints_exist,
            EXISTS (
              SELECT 1 FROM arena_schema_migrations
               WHERE version = 2
@@ -220,9 +243,15 @@ export function createNeonKeeperJournalRepository({
               WHERE version = 6
                 AND name = 'keeper_accepted_handoff'
                 AND schema_checksum = $5
+           ) AS v6_migration_valid,
+           EXISTS (
+             SELECT 1 FROM arena_schema_migrations
+              WHERE version = 7
+                AND name = 'keeper_prehash_abandonment'
+                AND schema_checksum = $6
            ) AS migration_valid,
            NOT EXISTS (
-             SELECT 1 FROM arena_schema_migrations WHERE version > 6
+             SELECT 1 FROM arena_schema_migrations WHERE version > 7
            ) AS no_unknown_migrations`,
         [
           KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM,
@@ -230,6 +259,7 @@ export function createNeonKeeperJournalRepository({
           KEEPER_JOURNAL_SCHEMA_V4_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_V5_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_V6_CHECKSUM,
+          KEEPER_JOURNAL_SCHEMA_V7_CHECKSUM,
         ],
         3_000,
       );
@@ -253,13 +283,16 @@ export function createNeonKeeperJournalRepository({
         && row.subject_columns_exist === true
         && row.accepted_handoff_columns_exist === true
         && row.accepted_handoff_constraints_exist === true
+        && row.prehash_abandonment_columns_exist === true
+        && row.prehash_abandonment_constraints_exist === true
         && row.base_migration_valid === true
         && row.attempt_migration_valid === true
         && row.v4_migration_valid === true
         && row.v5_migration_valid === true
+        && row.v6_migration_valid === true
         && row.migration_valid === true
         && row.no_unknown_migrations === true;
-      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 6 : null });
+      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 7 : null });
     },
 
     async claimRequest({ keyHash, requestHash, action }) {
@@ -467,6 +500,10 @@ export function createNeonKeeperJournalRepository({
                exact_latest.operation_id IS NULL
                 OR exact_latest.state = 'FINALIZED_FAILURE'
                 OR (
+                  exact_latest.state = 'ABANDONED_PREHASH'
+                  AND exact_latest.attempt_number = 1
+                )
+                OR (
                   exact_latest.state = 'VERIFIED'
                   AND exact_latest.method IN ('retry_prepare_payout', 'retry_payout')
                 )
@@ -551,7 +588,7 @@ export function createNeonKeeperJournalRepository({
            UNION ALL
            SELECT exact_latest.*, false AS inserted_now FROM exact_latest
             WHERE NOT EXISTS (SELECT 1 FROM inserted)
-              AND exact_latest.state <> 'FINALIZED_FAILURE'
+              AND exact_latest.state NOT IN ('FINALIZED_FAILURE', 'ABANDONED_PREHASH')
          )
          SELECT
            EXISTS (SELECT 1 FROM active) AS lease_valid,
@@ -586,6 +623,15 @@ export function createNeonKeeperJournalRepository({
                      'revision', selected.revision::text
                    )
               FROM selected LIMIT 1) AS operation
+          ,(SELECT parent.prehash_abandonment_metadata ->> 'nonceAtStart'
+              FROM selected
+              JOIN arena_keeper_operations parent
+                ON parent.operation_id = selected.retry_of_operation_id
+             WHERE selected.inserted_now = true
+               AND selected.attempt_number = 2
+               AND parent.state = 'ABANDONED_PREHASH'
+               AND parent.state_reason_code = 'AUDITED_NO_BROADCAST'
+             LIMIT 1) AS audited_retry_nonce
         `,
         [
           LEASE_SCOPE,
@@ -637,13 +683,27 @@ export function createNeonKeeperJournalRepository({
         );
       }
       const operationPublic = publicKeeperOperation(operationRow);
+      const canBroadcast = operationRow.inserted_now === true
+        && operationPublic.state === 'PREPARED'
+        && operationPublic.transactionHash === null
+        && String(operationRow.prepared_fencing_token) === String(fencingToken);
+      const auditedRetryNonce = row.audited_retry_nonce == null
+        ? null
+        : String(row.audited_retry_nonce);
+      if (auditedRetryNonce !== null
+          && (!/^(?:0|[1-9]\d*)$/.test(auditedRetryNonce)
+            || operationPublic.attemptNumber !== '2' || canBroadcast !== true)) {
+        throw new KeeperJournalError(
+          'KEEPER_JOURNAL_DATABASE_SHAPE',
+          'Keeper journal returned an invalid audited retry nonce.',
+          { statusCode: 503 },
+        );
+      }
       return Object.freeze({
         operation: operationPublic,
-        canBroadcast: operationRow.inserted_now === true
-          && operationPublic.state === 'PREPARED'
-          && operationPublic.transactionHash === null
-          && String(operationRow.prepared_fencing_token) === String(fencingToken),
+        canBroadcast,
         inserted: operationRow.inserted_now === true,
+        auditedRetryNonce,
       });
     },
 
@@ -971,6 +1031,180 @@ export function createNeonKeeperJournalRepository({
         throw new KeeperJournalError(
           'KEEPER_JOURNAL_ACCEPTANCE_CONFLICT',
           'Keeper ACCEPTED handoff evidence was rejected.',
+          { statusCode: 409 },
+        );
+      }
+      return operation;
+    },
+
+    async abandonPrehash({
+      holderId,
+      signerAddress,
+      fencingToken,
+      operationId,
+      reasonCode,
+      evidence,
+    }) {
+      const rows = await query(
+        `WITH active AS (
+           SELECT fencing_token
+             FROM arena_keeper_signer_leases
+            WHERE lease_scope = $1
+              AND signer_address = $2
+              AND holder_id = $3::uuid
+              AND fencing_token = $4::bigint
+              AND released_at IS NULL
+              AND lease_expires_at > now()
+            FOR UPDATE
+         ), target AS (
+           SELECT operation.*
+             FROM arena_keeper_operations operation, active
+            WHERE operation.operation_id = $5
+              AND operation.signer_address = $2
+              AND operation.deployment_alias = 'v8'
+              AND operation.network = 'bradbury'
+              AND operation.chain_id = 4221
+              AND NOT EXISTS (
+                SELECT 1 FROM arena_keeper_operations later
+                 WHERE later.logical_operation_id = operation.logical_operation_id
+                   AND later.attempt_number > operation.attempt_number
+              )
+            FOR UPDATE OF operation
+         ), updated AS (
+           UPDATE arena_keeper_operations operation SET
+             state = 'ABANDONED_PREHASH',
+             state_reason_code = $6,
+             prehash_abandoned_at = COALESCE(target.prehash_abandoned_at, now()),
+             prehash_abandonment_metadata = $7::jsonb,
+             last_fencing_token = active.fencing_token
+           FROM target, active
+           WHERE operation.operation_id = target.operation_id
+             AND target.transaction_hash IS NULL
+             AND target.submitted_at IS NULL
+             AND target.lifecycle_status IS NULL
+             AND target.lifecycle_observed_at IS NULL
+             AND target.accepted_at IS NULL
+             AND target.acceptance_revalidated_at IS NULL
+             AND target.acceptance_metadata IS NULL
+             AND (
+               target.state = 'PREPARED'
+               OR (
+                 target.state = 'ABANDONED_PREHASH'
+                 AND target.state_reason_code = $6
+                 AND target.prehash_abandonment_metadata = $7::jsonb
+               )
+             )
+             AND (
+               (
+                 $6 = 'DEFINITE_LOCAL_PRESPAWN_FAILURE'
+                 AND $7::jsonb ->> 'evidenceVersion' = 'LOCAL_PRESPAWN_FAILURE_V1'
+                 AND $7::jsonb @> '{"broadcastAttempted":false,"transactionHashObserved":false,"lowerLevelErrorRetained":true}'::jsonb
+                 AND $7::jsonb ->> 'operationId' = target.operation_id
+                 AND $7::jsonb ->> 'logicalOperationId' = target.logical_operation_id
+                 AND $7::jsonb ->> 'contractAddress' = target.contract_address
+                 AND $7::jsonb ->> 'method' = target.method
+                 AND $7::jsonb -> 'arguments' = target.arguments
+                 AND $7::jsonb ->> 'subjectType' = target.subject_type
+                 AND $7::jsonb ->> 'subjectId' = target.subject_id
+                 AND ($7::jsonb ->> 'preparedAt')::timestamptz = target.prepared_at
+               )
+               OR (
+                 $6 = 'AUDITED_NO_BROADCAST'
+                 AND $7::jsonb ->> 'evidenceVersion' = 'BRADBURY_KEEPER_EVM_SCAN_V1'
+                 AND $7::jsonb ->> 'network' = 'bradbury'
+                 AND $7::jsonb ->> 'chainId' = '4221'
+                 AND target.method = 'resolve_epoch'
+                 AND target.subject_type = 'epoch'
+                 AND $7::jsonb ->> 'signerAddress' = target.signer_address
+                 AND $7::jsonb ->> 'operationId' = target.operation_id
+                 AND $7::jsonb ->> 'logicalOperationId' = target.logical_operation_id
+                 AND $7::jsonb ->> 'contractAddress' = target.contract_address
+                 AND $7::jsonb ->> 'method' = target.method
+                 AND $7::jsonb -> 'arguments' = target.arguments
+                 AND $7::jsonb ->> 'subjectType' = target.subject_type
+                 AND $7::jsonb ->> 'subjectId' = target.subject_id
+                 AND ($7::jsonb ->> 'preparedAt')::timestamptz = target.prepared_at
+                 AND $7::jsonb ->> 'referenceOuterSender' = target.signer_address
+                 AND $7::jsonb ->> 'referenceCallSender' = target.signer_address
+                 AND $7::jsonb ->> 'referenceCallRecipient' = target.contract_address
+                 AND $7::jsonb ->> 'referenceConsensusRecipient' = '0x0112bf6e83497965a5fdd6dad1e447a6e004271d'
+                 AND $7::jsonb ->> 'matchingOuterTransactions' = '0'
+                 AND $7::jsonb ->> 'nonceAtStart' = $7::jsonb ->> 'nonceAtEnd'
+                 AND $7::jsonb ->> 'nonceAtStart' = $7::jsonb ->> 'latestNonce'
+                 AND $7::jsonb ->> 'nonceAtStart' = $7::jsonb ->> 'pendingNonce'
+                 AND ($7::jsonb ->> 'referenceOuterNonce')::numeric + 1
+                   = ($7::jsonb ->> 'nonceAtStart')::numeric
+                 AND ($7::jsonb ->> 'scanStartTimestamp')::timestamptz
+                   <= ($7::jsonb ->> 'preparedAt')::timestamptz
+                 AND ($7::jsonb ->> 'preparedAt')::timestamptz
+                   <= ($7::jsonb ->> 'failedAt')::timestamptz
+                 AND ($7::jsonb ->> 'failedAt')::timestamptz
+                   <= ($7::jsonb ->> 'scanEndTimestamp')::timestamptz
+                 AND ($7::jsonb ->> 'scanEndTimestamp')::timestamptz
+                   <= ($7::jsonb ->> 'auditedAt')::timestamptz
+                 AND $7::jsonb ->> 'postStateStatus' = 'TARGET_STATE_UNCHANGED'
+                 AND $7::jsonb @> '{"transactionHashObserved":false,"lowerLevelErrorRetained":false,"postStateVerified":true}'::jsonb
+               )
+             )
+           RETURNING operation.*
+         )
+         SELECT
+           EXISTS (SELECT 1 FROM active) AS lease_valid,
+           EXISTS (
+             SELECT 1 FROM arena_keeper_operations
+              WHERE operation_id = $5
+                AND signer_address = $2
+                AND deployment_alias = 'v8'
+                AND network = 'bradbury'
+                AND chain_id = 4221
+           ) AS operation_exists,
+           EXISTS (
+             SELECT 1
+               FROM arena_keeper_operations operation
+               JOIN arena_keeper_operations later
+                 ON later.logical_operation_id = operation.logical_operation_id
+                AND later.attempt_number > operation.attempt_number
+              WHERE operation.operation_id = $5
+                AND operation.signer_address = $2
+                AND operation.deployment_alias = 'v8'
+                AND operation.network = 'bradbury'
+                AND operation.chain_id = 4221
+           ) AS attempt_frozen,
+           (SELECT to_jsonb(updated)
+                   || jsonb_build_object(
+                     'chain_id', updated.chain_id::text,
+                     'value_atto', updated.value_atto::text,
+                     'attempt_number', updated.attempt_number::text,
+                     'prepared_fencing_token', updated.prepared_fencing_token::text,
+                     'last_fencing_token', updated.last_fencing_token::text,
+                     'revision', updated.revision::text
+                   )
+              FROM updated LIMIT 1) AS operation`,
+        [
+          LEASE_SCOPE,
+          signerAddress,
+          holderId,
+          fencingToken,
+          operationId,
+          reasonCode,
+          JSON.stringify(evidence),
+        ],
+      );
+      const row = rows[0] || {};
+      if (row.lease_valid !== true) leaseRejected();
+      if (row.operation_exists !== true) {
+        throw new KeeperJournalError(
+          'KEEPER_JOURNAL_OPERATION_NOT_FOUND',
+          'Keeper operation was not found.',
+          { statusCode: 404 },
+        );
+      }
+      if (row.attempt_frozen === true) attemptFrozen();
+      const operation = operationResult(row);
+      if (!operation || operation.state !== 'ABANDONED_PREHASH') {
+        throw new KeeperJournalError(
+          'KEEPER_JOURNAL_PREHASH_ABANDONMENT_CONFLICT',
+          'Keeper pre-hash abandonment evidence was rejected.',
           { statusCode: 409 },
         );
       }

@@ -632,6 +632,45 @@ function freshWriteBudgetMs(config) {
     + config.operator.postStateAttempts * config.operator.postStateIntervalMs;
 }
 
+function sanitizedSubmitFailure(error) {
+  const rawCode = String(error?.code || error?.name || 'SUBMIT_FAILED').toUpperCase();
+  const normalizedCode = rawCode.replace(/[^A-Z0-9_]/g, '_').slice(0, 80);
+  const failureCode = /^[A-Z][A-Z0-9_]{0,79}$/.test(normalizedCode)
+    ? normalizedCode
+    : 'SUBMIT_FAILED';
+  const rawMessage = error instanceof Error ? error.message : String(error || 'Submit failed.');
+  const failureMessage = rawMessage
+    .replace(/https?:\/\/\S+/gi, '[redacted-url]')
+    .replace(/\b(?:authorization|credential|mnemonic|password|private[_ -]?key|secret)\b\s*[:=]\s*\S+/gi, '[redacted]')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .trim()
+    .slice(0, 256) || 'Submit failed.';
+  return Object.freeze({ failureCode, failureMessage });
+}
+
+export async function assertAuditedRetryNonceGate({ operator, auditedRetryNonce }) {
+  if (auditedRetryNonce === null) return null;
+  if (typeof auditedRetryNonce !== 'string' || !/^(?:0|[1-9]\d*)$/.test(auditedRetryNonce)
+      || typeof operator?.getBradburySignerNonces !== 'function') {
+    fail('KEEPER_AUDITED_RETRY_NONCE_GATE', 'audited retry nonce gate is unavailable or malformed');
+  }
+  const observed = await operator.getBradburySignerNonces();
+  if (!observed || typeof observed !== 'object' || Array.isArray(observed)
+      || Object.keys(observed).sort().join(',') !== 'latestNonce,pendingNonce'
+      || typeof observed.latestNonce !== 'string'
+      || typeof observed.pendingNonce !== 'string'
+      || !/^(?:0|[1-9]\d*)$/.test(observed.latestNonce)
+      || !/^(?:0|[1-9]\d*)$/.test(observed.pendingNonce)
+      || observed.latestNonce !== auditedRetryNonce
+      || observed.pendingNonce !== auditedRetryNonce) {
+    fail(
+      'KEEPER_AUDITED_RETRY_NONCE_CHANGED',
+      'Bradbury keeper signer nonce changed after audited no-broadcast recovery',
+    );
+  }
+  return Object.freeze({ ...observed });
+}
+
 async function executeAction(context, action, acceptedPredecessor = null) {
   if (acceptedPredecessor) {
     const predecessor = await reconcileAuthoritativeOperation({
@@ -666,13 +705,65 @@ async function executeAction(context, action, acceptedPredecessor = null) {
       || operation.logicalOperationId !== identity.logicalOperationId
       || operation.subjectId !== identity.operation.subjectId) fail('KEEPER_JOURNAL_IDENTITY', 'prepared operation does not match the intended V8 write');
   await context.journalSession.renew();
-  let transactionHash;
-  await context.operator.submitWrite(identity.call.method, identity.call.args, async (hash) => {
-    transactionHash = hash;
-    const bound = await context.journalSession.bind(operation.operationId, hash);
-    operation = validateRecoveredKeeperOperation(bound?.operation);
-    if (operation.state !== 'SUBMITTED' || operation.transactionHash !== String(hash).toLowerCase()) fail('KEEPER_JOURNAL_IDENTITY', 'submission hash was not durably bound');
+  await assertAuditedRetryNonceGate({
+    operator: context.operator,
+    auditedRetryNonce: prepared.auditedRetryNonce ?? null,
   });
+  let transactionHash;
+  try {
+    await context.operator.submitWrite(identity.call.method, identity.call.args, async (hash) => {
+      transactionHash = hash;
+      const bound = await context.journalSession.bind(operation.operationId, hash);
+      operation = validateRecoveredKeeperOperation(bound?.operation);
+      if (operation.state !== 'SUBMITTED' || operation.transactionHash !== String(hash).toLowerCase()) fail('KEEPER_JOURNAL_IDENTITY', 'submission hash was not durably bound');
+    });
+  } catch (error) {
+    const failure = sanitizedSubmitFailure(error);
+    const transactionHashObserved = Boolean(transactionHash || error?.transactionHash);
+    const broadcastDefinitelyNotAttempted = error?.broadcastAttempted === false;
+    context.logger({
+      event: 'V8_KEEPER_PREHASH_SUBMIT_FAILURE',
+      operationId: operation.operationId,
+      method: operation.method,
+      subjectType: operation.subjectType,
+      subjectId: operation.subjectId,
+      ...failure,
+      transactionHashObserved,
+      broadcastAttempted: broadcastDefinitelyNotAttempted ? false : null,
+    });
+    if (!transactionHashObserved && broadcastDefinitelyNotAttempted) {
+      const abandoned = await context.journalSession.abandonPrehash(
+        operation.operationId,
+        'DEFINITE_LOCAL_PRESPAWN_FAILURE',
+        {
+          evidenceVersion: 'LOCAL_PRESPAWN_FAILURE_V1',
+          broadcastAttempted: false,
+          transactionHashObserved: false,
+          ...failure,
+          lowerLevelErrorRetained: true,
+          operationId: operation.operationId,
+          logicalOperationId: operation.logicalOperationId,
+          contractAddress: operation.contractAddress,
+          method: operation.method,
+          arguments: [...operation.args],
+          subjectType: operation.subjectType,
+          subjectId: operation.subjectId,
+          preparedAt: operation.preparedAt,
+        },
+      );
+      operation = validateRecoveredKeeperOperation(abandoned?.operation);
+      if (operation.state !== 'ABANDONED_PREHASH') {
+        fail('KEEPER_JOURNAL_IDENTITY', 'pre-hash abandonment was not durably recorded');
+      }
+      context.logger({
+        event: 'V8_KEEPER_PREHASH_ABANDONED',
+        operationId: operation.operationId,
+        reasonCode: operation.stateReasonCode,
+        ...failure,
+      });
+    }
+    throw error;
+  }
   if (!/^0x[0-9a-f]{64}$/i.test(String(transactionHash || ''))) fail('TRANSACTION_HASH_NOT_DURABLE', 'write exited without a durable transaction hash');
   const reconciled = await reconcileAuthoritativeOperation({ ...recoveryOptions(context), operation });
   if (reconciled.accepted) {
@@ -875,6 +966,22 @@ export function createCliV8KeeperOperator({ config, environment = process.env } 
       return Object.freeze({ prepared: prepared === true, credited: credited === true, withdrawn: withdrawn === true });
     },
     getTransactionStatus: (transactionHash) => getGenlayerTransactionStatus({ rpcUrl: GENLAYER_BRADBURY_RPC_URL, transactionHash }),
+    getBradburySignerNonces: async () => {
+      const [latest, pending] = await Promise.all([
+        evmProvider.send('eth_getTransactionCount', [config.expected.keeperAddress, 'latest']),
+        evmProvider.send('eth_getTransactionCount', [config.expected.keeperAddress, 'pending']),
+      ]);
+      const canonical = (value, label) => {
+        if (typeof value !== 'string' || !/^0x(?:0|[1-9a-f][0-9a-f]*)$/i.test(value)) {
+          fail('KEEPER_AUDITED_RETRY_NONCE_GATE', `Bradbury ${label} nonce response is invalid`);
+        }
+        return BigInt(value).toString();
+      };
+      return Object.freeze({
+        latestNonce: canonical(latest, 'latest'),
+        pendingNonce: canonical(pending, 'pending'),
+      });
+    },
     getAcceptedReceipt: (transactionHash) => getGenlayerDecidedReceipt({
       invocation,
       transactionHash,
@@ -903,7 +1010,7 @@ export function createCliV8KeeperOperator({ config, environment = process.env } 
 }
 
 function usage() {
-  return 'Reconcile Liquidity Arena V8 epochs and EVM-backed payouts on Bradbury.\n\nUsage:\n  node scripts/v8-keeper.mjs --config <file> [--execute]\n\nThe default is a read-only plan. --execute requires the fenced V8 keeper, schema-v6 journal, and exact testnet-bradbury network. The keeper never calls an EVM vault withdrawal; only recipients can withdraw.';
+  return 'Reconcile Liquidity Arena V8 epochs and EVM-backed payouts on Bradbury.\n\nUsage:\n  node scripts/v8-keeper.mjs --config <file> [--execute]\n\nThe default is a read-only plan. --execute requires the fenced V8 keeper, schema-v7 journal, and exact testnet-bradbury network. The keeper never calls an EVM vault withdrawal; only recipients can withdraw.';
 }
 
 function parseArguments(argv) {

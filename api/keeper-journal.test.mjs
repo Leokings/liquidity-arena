@@ -108,7 +108,7 @@ test('health is authenticated but does not require an idempotency key', async ()
   assert.equal(res.headers['cache-control'], 'no-store');
 });
 
-test('client readiness requires the exact Bradbury version 6 journal schema', async () => {
+test('client readiness requires the exact Bradbury version 7 journal schema', async () => {
   const ready = {
     status: 'ready',
     service: 'liquidity-arena-keeper-journal',
@@ -120,7 +120,7 @@ test('client readiness requires the exact Bradbury version 6 journal schema', as
       authenticationConfigured: true,
       signerConfigured: true,
     },
-    database: { configured: true, ready: true, schemaVersion: 6 },
+    database: { configured: true, ready: true, schemaVersion: 7 },
   };
   const client = createKeeperJournalClient({
     endpoint: 'https://example.test/api/keeper-journal',
@@ -130,7 +130,7 @@ test('client readiness requires the exact Bradbury version 6 journal schema', as
       headers: { 'content-type': 'application/json' },
     }),
   });
-  assert.equal((await client.health()).database.schemaVersion, 6);
+  assert.equal((await client.health()).database.schemaVersion, 7);
 
   const staleClient = createKeeperJournalClient({
     endpoint: 'https://example.test/api/keeper-journal',
@@ -271,6 +271,8 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
     acceptedAt: null,
     acceptanceRevalidatedAt: null,
     acceptanceEvidence: null,
+    prehashAbandonedAt: null,
+    prehashAbandonmentEvidence: null,
     stateReasonCode: null,
     quarantineReason: null,
     preparedAt: '2026-08-20T00:00:00.000Z',
@@ -288,6 +290,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
       authorization = options.headers.authorization;
       return new Response(JSON.stringify({
         status: 'ok', action: 'PREPARE', operation, canBroadcast: true, inserted: true,
+        auditedRetryNonce: null,
       }), { status: 200, headers: { 'content-type': 'application/json' } });
     },
   });
@@ -311,6 +314,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
     secret: SECRET,
     fetchImpl: async () => new Response(JSON.stringify({
       status: 'ok', action: 'PREPARE', operation: retryOperation, canBroadcast: true, inserted: true,
+      auditedRetryNonce: '73',
     }), { status: 200, headers: { 'content-type': 'application/json' } }),
   });
   const retry = await retryClient.prepareOperation({
@@ -321,6 +325,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
   assert.equal(retry.operation.logicalOperationId, logicalOperationId);
   assert.equal(retry.operation.attemptNumber, '2');
   assert.equal(retry.operation.retryOfOperationId, operation.operationId);
+  assert.equal(retry.auditedRetryNonce, '73');
 
   const changedCallClient = createKeeperJournalClient({
     endpoint: 'https://example.test/api/keeper-journal',
@@ -331,6 +336,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
       operation: { ...operation, method: 'activate_timeout_refund' },
       canBroadcast: true,
       inserted: true,
+      auditedRetryNonce: null,
     }), { status: 200, headers: { 'content-type': 'application/json' } }),
   });
   await assert.rejects(
@@ -357,6 +363,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
     secret: SECRET,
     fetchImpl: async () => new Response(JSON.stringify({
       status: 'ok', action: 'PREPARE', operation: submitted, canBroadcast: true, inserted: false,
+      auditedRetryNonce: null,
     }), { status: 200, headers: { 'content-type': 'application/json' } }),
   });
   await assert.rejects(
@@ -373,6 +380,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
     secret: SECRET,
     fetchImpl: async () => new Response(JSON.stringify({
       status: 'ok', action: 'PREPARE', operation, canBroadcast: true, inserted: false,
+      auditedRetryNonce: null,
     }), { status: 200, headers: { 'content-type': 'application/json' } }),
   });
   await assert.rejects(
