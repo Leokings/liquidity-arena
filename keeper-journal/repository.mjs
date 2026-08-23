@@ -9,6 +9,7 @@ export const KEEPER_JOURNAL_SCHEMA_V5_CHECKSUM = 'a9473b780b659ea6bf04809d8c1b59
 export const KEEPER_JOURNAL_SCHEMA_V6_CHECKSUM = '5b81d291c121cae31962b164608e5ad5fc65a19158bed95cd96fae0348e13bdf';
 export const KEEPER_JOURNAL_SCHEMA_V7_CHECKSUM = '4fa4e8103a1b3caa7022cff2ea1b4868ea6128a4f6b359cdb93a8a6320e0a8f3';
 export const KEEPER_JOURNAL_SCHEMA_V8_CHECKSUM = '030604d61f54ad9f6e388f497723d7eaa7118632866574cff976dd0bd43f680a';
+export const KEEPER_JOURNAL_SCHEMA_V9_CHECKSUM = '5be4175a165d872112f97b88323f3ed013b47eb0aca37b17c2e8c6953cde6694';
 export const KEEPER_JOURNAL_MAX_PIPELINE_DEPTH = 2;
 const QUERY_TIMEOUT_MS = 8_000;
 const LEASE_SCOPE = 'bradbury:4221:keeper';
@@ -209,12 +210,39 @@ export function createNeonKeeperJournalRepository({
               SELECT count(*) = 3
                 FROM pg_constraint
                WHERE conrelid = 'public.arena_keeper_operations'::regclass
-                 AND conname IN (
-                   'arena_keeper_operations_state_v7_check',
-                   'arena_keeper_operations_submission_v7_check',
-                   'arena_keeper_operations_prehash_abandonment_v7_check'
-                 )
-            ) AS prehash_abandonment_constraints_exist,
+                  AND conname IN (
+                    'arena_keeper_operations_state_v7_check',
+                    'arena_keeper_operations_submission_v7_check',
+                    'arena_keeper_operations_prehash_abandonment_v9_check'
+                  )
+             ) AS prehash_abandonment_constraints_exist,
+            EXISTS (
+              SELECT 1
+                FROM pg_constraint finalized_state_constraint
+               WHERE finalized_state_constraint.conrelid =
+                     'public.arena_keeper_operations'::regclass
+                 AND finalized_state_constraint.conname =
+                     'arena_keeper_operations_finalized_state_v9_check'
+                 AND finalized_state_constraint.convalidated
+                 AND position(
+                   '''FINALIZED_SUCCESS''' IN pg_get_constraintdef(finalized_state_constraint.oid)
+                 ) > 0
+                 AND position(
+                   '''VERIFIED''' IN pg_get_constraintdef(finalized_state_constraint.oid)
+                 ) > 0
+                 AND position(
+                   '''FINALIZED_FAILURE''' IN pg_get_constraintdef(finalized_state_constraint.oid)
+                 ) > 0
+                 AND position(
+                   '''FINALIZED''' IN pg_get_constraintdef(finalized_state_constraint.oid)
+                 ) > 0
+                 AND position(
+                   'finalized_at IS NOT NULL' IN pg_get_constraintdef(finalized_state_constraint.oid)
+                 ) > 0
+                 AND position(
+                   'IS TRUE' IN pg_get_constraintdef(finalized_state_constraint.oid)
+                 ) > 0
+            ) AS finalized_state_constraint_valid,
            NOT EXISTS (
              SELECT 1
                FROM pg_constraint
@@ -262,9 +290,15 @@ export function createNeonKeeperJournalRepository({
               WHERE version = 8
                 AND name = 'keeper_prehash_legacy_constraint_cleanup'
                 AND schema_checksum = $7
+           ) AS v8_migration_valid,
+           EXISTS (
+             SELECT 1 FROM arena_schema_migrations
+              WHERE version = 9
+                AND name = 'keeper_create_prehash_recovery'
+                AND schema_checksum = $8
            ) AS migration_valid,
            NOT EXISTS (
-             SELECT 1 FROM arena_schema_migrations WHERE version > 8
+             SELECT 1 FROM arena_schema_migrations WHERE version > 9
            ) AS no_unknown_migrations`,
         [
           KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM,
@@ -274,6 +308,7 @@ export function createNeonKeeperJournalRepository({
           KEEPER_JOURNAL_SCHEMA_V6_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_V7_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_V8_CHECKSUM,
+          KEEPER_JOURNAL_SCHEMA_V9_CHECKSUM,
         ],
         3_000,
       );
@@ -299,6 +334,7 @@ export function createNeonKeeperJournalRepository({
         && row.accepted_handoff_constraints_exist === true
         && row.prehash_abandonment_columns_exist === true
         && row.prehash_abandonment_constraints_exist === true
+        && row.finalized_state_constraint_valid === true
         && row.legacy_prehash_submission_constraint_absent === true
         && row.base_migration_valid === true
         && row.attempt_migration_valid === true
@@ -306,9 +342,10 @@ export function createNeonKeeperJournalRepository({
         && row.v5_migration_valid === true
         && row.v6_migration_valid === true
         && row.v7_migration_valid === true
+        && row.v8_migration_valid === true
         && row.migration_valid === true
         && row.no_unknown_migrations === true;
-      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 8 : null });
+      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 9 : null });
     },
 
     async claimRequest({ keyHash, requestHash, action }) {
@@ -1129,7 +1166,7 @@ export function createNeonKeeperJournalRepository({
                  AND $7::jsonb ->> 'evidenceVersion' = 'BRADBURY_KEEPER_EVM_SCAN_V1'
                  AND $7::jsonb ->> 'network' = 'bradbury'
                  AND $7::jsonb ->> 'chainId' = '4221'
-                 AND target.method = 'resolve_epoch'
+                 AND target.method IN ('create_epoch', 'resolve_epoch')
                  AND target.subject_type = 'epoch'
                  AND $7::jsonb ->> 'signerAddress' = target.signer_address
                  AND $7::jsonb ->> 'operationId' = target.operation_id
@@ -1158,7 +1195,10 @@ export function createNeonKeeperJournalRepository({
                    <= ($7::jsonb ->> 'scanEndTimestamp')::timestamptz
                  AND ($7::jsonb ->> 'scanEndTimestamp')::timestamptz
                    <= ($7::jsonb ->> 'auditedAt')::timestamptz
-                 AND $7::jsonb ->> 'postStateStatus' = 'TARGET_STATE_UNCHANGED'
+                 AND $7::jsonb ->> 'postStateStatus' = CASE target.method
+                   WHEN 'resolve_epoch' THEN 'TARGET_STATE_UNCHANGED'
+                   WHEN 'create_epoch' THEN 'EPOCH_UNKNOWN'
+                 END
                  AND $7::jsonb @> '{"transactionHashObserved":false,"lowerLevelErrorRetained":false,"postStateVerified":true}'::jsonb
                )
              )

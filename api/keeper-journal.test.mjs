@@ -108,7 +108,7 @@ test('health is authenticated but does not require an idempotency key', async ()
   assert.equal(res.headers['cache-control'], 'no-store');
 });
 
-test('client readiness requires the exact Bradbury version 8 journal schema', async () => {
+test('client readiness requires the exact Bradbury version 9 journal schema', async () => {
   const ready = {
     status: 'ready',
     service: 'liquidity-arena-keeper-journal',
@@ -120,7 +120,7 @@ test('client readiness requires the exact Bradbury version 8 journal schema', as
       authenticationConfigured: true,
       signerConfigured: true,
     },
-    database: { configured: true, ready: true, schemaVersion: 8 },
+    database: { configured: true, ready: true, schemaVersion: 9 },
   };
   const client = createKeeperJournalClient({
     endpoint: 'https://example.test/api/keeper-journal',
@@ -130,7 +130,7 @@ test('client readiness requires the exact Bradbury version 8 journal schema', as
       headers: { 'content-type': 'application/json' },
     }),
   });
-  assert.equal((await client.health()).database.schemaVersion, 8);
+  assert.equal((await client.health()).database.schemaVersion, 9);
 
   const staleClient = createKeeperJournalClient({
     endpoint: 'https://example.test/api/keeper-journal',

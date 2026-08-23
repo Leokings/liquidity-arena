@@ -6,6 +6,8 @@ import test from 'node:test';
 import { Interface } from 'ethers';
 
 import {
+  assertAuditedEpochPostState,
+  assertEpochUnknownPostState,
   assertResolvableEpochPostState,
   BRADBURY_CONSENSUS_ADDRESS,
   BRADBURY_RECOVERY_RPC_URL,
@@ -40,7 +42,7 @@ function block(number, transactions = []) {
   };
 }
 
-function fixture() {
+function fixture({ method = 'resolve_epoch' } = {}) {
   const evidence = {
     evidenceVersion: 'BRADBURY_KEEPER_EVM_SCAN_V1',
     runId: '32599800265',
@@ -55,7 +57,7 @@ function fixture() {
     operationId: OPERATION,
     logicalOperationId: OPERATION,
     contractAddress: TARGET,
-    method: 'resolve_epoch',
+    method,
     arguments: ['1787432400'],
     subjectType: 'epoch',
     subjectId: '1787432400',
@@ -78,7 +80,7 @@ function fixture() {
     referenceCallSender: SIGNER,
     referenceCallRecipient: TARGET,
     queryResultSha256: '7'.repeat(64),
-    postStateStatus: 'TARGET_STATE_UNCHANGED',
+    postStateStatus: method === 'create_epoch' ? 'EPOCH_UNKNOWN' : 'TARGET_STATE_UNCHANGED',
     postStateVerified: true,
     auditedAt: '2027-01-15T12:00:00.000Z',
   };
@@ -169,6 +171,70 @@ test('live target attestation accepts only the exact unchanged resolvable epoch'
     { ...epoch, high: { settlement_mode: 'PARIMUTUEL' } },
     { ...epoch, resolution_digest: 'changed' },
   ]) assert.throws(() => assertResolvableEpochPostState(invalid, evidence), /OPEN\/RESOLVABLE/);
+});
+
+test('create_epoch recovery accepts only an exact EPOCH_UNKNOWN contract failure', () => {
+  const evidence = fixture({ method: 'create_epoch' }).evidence;
+  const unknown = {
+    kind: 'EXPECTED_CONTRACT_ERROR',
+    code: 'EPOCH_UNKNOWN',
+    message: 'Epoch does not exist',
+  };
+  assert.equal(assertEpochUnknownPostState(unknown, evidence).status, 'EPOCH_UNKNOWN');
+  assert.equal(assertAuditedEpochPostState(unknown, evidence).status, 'EPOCH_UNKNOWN');
+  for (const invalid of [
+    { ...unknown, code: 'EPOCH_DUPLICATE' },
+    { ...unknown, message: 'lookalike' },
+    { ...unknown, extra: true },
+  ]) assert.throws(() => assertEpochUnknownPostState(invalid, evidence), /exact EPOCH_UNKNOWN/);
+});
+
+test('credential-free target read recognizes only the exact EPOCH_UNKNOWN failure', async () => {
+  const spawnFailure = (message) => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    queueMicrotask(() => {
+      child.stderr.write(message);
+      child.emit('close', 1);
+    });
+    return child;
+  };
+  assert.deepEqual(
+    await readBradburyRecoveryEpoch({
+      contractAddress: TARGET,
+      subjectId: '1787500800',
+      invocation: { executable: 'genlayer-test', prefixArgs: [] },
+      spawnImpl: () => spawnFailure('Error: [EXPECTED] EPOCH_UNKNOWN: Epoch does not exist\n'),
+    }),
+    {
+      kind: 'EXPECTED_CONTRACT_ERROR',
+      code: 'EPOCH_UNKNOWN',
+      message: 'Epoch does not exist',
+    },
+  );
+  await assert.rejects(
+    readBradburyRecoveryEpoch({
+      contractAddress: TARGET,
+      subjectId: '1787500800',
+      invocation: { executable: 'genlayer-test', prefixArgs: [] },
+      spawnImpl: () => spawnFailure('Error: EPOCH_UNKNOWN\n'),
+    }),
+    /exited unsuccessfully/,
+  );
+});
+
+test('create_epoch evidence retains the finalized scan and nonce proof', async () => {
+  const value = fixture({ method: 'create_epoch' });
+  const result = await verifyAuditedPrehashChainEvidence({
+    evidence: value.evidence,
+    operationId: OPERATION,
+    signerAddress: SIGNER,
+    rpcCall: value.rpcCall,
+  });
+  assert.equal(result.scanEndBlock, '12');
+  assert.equal(result.signerAddress, SIGNER);
 });
 
 test('live target read kills and rejects a stalled credential-free GenLayer call', async () => {

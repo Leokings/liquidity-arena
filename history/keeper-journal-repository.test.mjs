@@ -112,6 +112,7 @@ function healthySchemaRow(overrides = {}) {
     accepted_handoff_constraints_exist: true,
     prehash_abandonment_columns_exist: true,
     prehash_abandonment_constraints_exist: true,
+    finalized_state_constraint_valid: true,
     legacy_prehash_submission_constraint_absent: true,
     base_migration_valid: true,
     attempt_migration_valid: true,
@@ -119,16 +120,17 @@ function healthySchemaRow(overrides = {}) {
     v5_migration_valid: true,
     v6_migration_valid: true,
     v7_migration_valid: true,
+    v8_migration_valid: true,
     migration_valid: true,
     no_unknown_migrations: true,
     ...overrides,
   };
 }
 
-test('health requires exact schema v8 and the legacy pre-hash constraint cleanup', async () => {
+test('health requires exact schema v9, create pre-hash recovery, and finalized-state defense', async () => {
   const { repository, calls } = fixture([[healthySchemaRow()]]);
-  assert.deepEqual(await repository.health(), { configured: true, ready: true, schemaVersion: 8 });
-  assert.match(calls[0].sql, /version = 2[\s\S]*version = 3[\s\S]*version = 4[\s\S]*version = 5[\s\S]*version = 6[\s\S]*version = 7[\s\S]*version = 8/);
+  assert.deepEqual(await repository.health(), { configured: true, ready: true, schemaVersion: 9 });
+  assert.match(calls[0].sql, /version = 2[\s\S]*version = 3[\s\S]*version = 4[\s\S]*version = 5[\s\S]*version = 6[\s\S]*version = 7[\s\S]*version = 8[\s\S]*version = 9/);
   assert.match(calls[0].sql, /logical_operation_id/);
   assert.match(calls[0].sql, /arena_keeper_operations_logical_attempt_key/);
   assert.match(calls[0].sql, /subject_type[\s\S]*subject_id/);
@@ -136,18 +138,31 @@ test('health requires exact schema v8 and the legacy pre-hash constraint cleanup
   assert.match(calls[0].sql, /arena_keeper_journal_requests_request_action_check[\s\S]*ABANDON_PREHASH/);
   assert.match(calls[0].sql, /prehash_abandoned_at[\s\S]*prehash_abandonment_metadata/);
   assert.match(calls[0].sql, /arena_keeper_operations_check3/);
-  assert.match(calls[0].sql, /NOT EXISTS \([\s\S]*version > 8/);
-  assert.equal(calls[0].params.length, 7);
+  assert.match(calls[0].sql, /arena_keeper_operations_finalized_state_v9_check/);
+  assert.match(calls[0].sql, /finalized_at IS NOT NULL[\s\S]*IS TRUE/);
+  assert.match(calls[0].sql, /NOT EXISTS \([\s\S]*version > 9/);
+  assert.equal(calls[0].params.length, 8);
 });
 
-test('health rejects an otherwise valid database with a migration newer than V8', async () => {
+test('health rejects an otherwise valid database with a migration newer than V9', async () => {
   const { repository } = fixture([[healthySchemaRow({ no_unknown_migrations: false })]]);
   assert.deepEqual(await repository.health(), { configured: true, ready: false, schemaVersion: null });
 });
 
-test('health rejects schema v8 while the legacy pre-hash submission constraint remains', async () => {
+test('health rejects schema v9 while the legacy pre-hash submission constraint remains', async () => {
   const { repository } = fixture([[
     healthySchemaRow({ legacy_prehash_submission_constraint_absent: false }),
+  ]]);
+  assert.deepEqual(await repository.health(), {
+    configured: true,
+    ready: false,
+    schemaVersion: null,
+  });
+});
+
+test('health rejects schema v9 without the named validated finalized-state defense', async () => {
+  const { repository } = fixture([[
+    healthySchemaRow({ finalized_state_constraint_valid: false }),
   ]]);
   assert.deepEqual(await repository.health(), {
     configured: true,
@@ -307,6 +322,8 @@ test('ABANDON_PREHASH terminalizes only a hashless PREPARED row under exact evid
   assert.match(calls[0].sql, /'arguments' = target\.arguments/);
   assert.match(calls[0].sql, /'preparedAt'\)::timestamptz = target\.prepared_at/);
   assert.match(calls[0].sql, /matchingOuterTransactions.*'0'/);
+  assert.match(calls[0].sql, /target\.method IN \('create_epoch', 'resolve_epoch'\)/);
+  assert.match(calls[0].sql, /WHEN 'create_epoch' THEN 'EPOCH_UNKNOWN'/);
   assertBradburyV8Isolation(calls[0].sql);
 });
 
