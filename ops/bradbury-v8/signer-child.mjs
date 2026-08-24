@@ -12,6 +12,7 @@ import {
   ACTIVATION_TERMINAL_STAGE,
   BRADBURY_CHAIN_ID,
   BRADBURY_RPC_URL,
+  assertCleanUnsignedTopupPreparation,
   assertExactPauseAccountingIdentity,
   assertExactSchema,
   assertExactPlannedConsensusCalldata,
@@ -24,12 +25,14 @@ import {
   loadState,
   readAndVerifyDeployment,
   readAndVerifyPauseState,
+  readAndVerifyReserveTopupPreSignState,
   readAndVerifyResumePreSignState,
   reconcileEvmSubmission,
   recordEvmReceiptEvidence,
   recordSignedOperation,
   recordSubmittedOperation,
   resolveKeychainSecretWithFallback,
+  reviewedReserveTopupAtto,
   sha256,
   signAfterFreshAccountPreflight,
   verifyLocalCandidate,
@@ -69,8 +72,8 @@ function parseArguments(argv) {
     } else fail(`unknown option ${option}`);
   }
   if (!options.broadcast) fail('the internal signer requires explicit --broadcast');
-  if (!['deploy', 'fund', 'activate', 'pause', 'resume'].includes(options.action)) {
-    fail('action must be deploy, fund, activate, pause, or resume');
+  if (!['deploy', 'fund', 'topup', 'activate', 'pause', 'resume'].includes(options.action)) {
+    fail('action must be deploy, fund, topup, activate, pause, or resume');
   }
   if (!options.configPath || !options.statePath || !options.nonce) {
     fail('--config, --state, and --nonce are required');
@@ -180,6 +183,7 @@ function statePreflight(state, action, nonce) {
   const expectedStage = {
     deploy: 'DEPLOY_PREPARED',
     fund: 'RESERVE_FUND_PREPARED',
+    topup: 'RESERVE_TOPUP_PREPARED',
     activate: 'ACTIVATION_PREPARED',
     pause: 'PAUSE_PREPARED',
     resume: 'RESUME_PREPARED',
@@ -191,6 +195,11 @@ function statePreflight(state, action, nonce) {
   if (action === 'resume' && operation.preparedFromStage !== ACTIVATION_TERMINAL_STAGE) {
     fail('resume PREPARED state is not derived from the exact risk-paused terminal stage');
   }
+  if (action === 'topup'
+      && operation.preparedFromStage !== ACTIVATION_TERMINAL_STAGE) {
+    fail(`topup PREPARED state is not derived from exact ${ACTIVATION_TERMINAL_STAGE} state`);
+  }
+  if (action === 'topup') assertCleanUnsignedTopupPreparation(state);
   if (action !== 'deploy' && !ADDRESS_PATTERN.test(String(state.contractAddress || ''))) {
     fail(`${action} requires the exact recorded contract address`);
   }
@@ -216,6 +225,14 @@ async function livePreflight({ options, config, state, local, reader }) {
       newRiskEnabled: false,
       availableReserveAtto: '0',
     });
+  } else if (options.action === 'topup') {
+    await readAndVerifyReserveTopupPreSignState(
+      reader,
+      state.contractAddress,
+      local,
+      config,
+      state.operations.topup,
+    );
   } else if (options.action === 'activate') {
     await readAndVerifyDeployment(reader, state.contractAddress, local, config, {
       payoutsEnabled: false,
@@ -263,8 +280,10 @@ function withDurablePreSign(account, {
         state,
         local,
       });
-      const expectedValue = options.action === 'fund'
-        ? config.reserve.initialFundingAtto
+      const expectedValue = ['fund', 'topup'].includes(options.action)
+        ? (options.action === 'topup'
+          ? reviewedReserveTopupAtto(config)
+          : config.reserve.initialFundingAtto)
         : '0';
       const beforeFreshAccountPreflight = options.action === 'resume'
         ? () => readAndVerifyResumePreSignState(
@@ -274,10 +293,18 @@ function withDurablePreSign(account, {
           config,
           state.operations.resume,
         )
+        : options.action === 'topup'
+          ? () => readAndVerifyReserveTopupPreSignState(
+            reader,
+            state.contractAddress,
+            local,
+            config,
+            state.operations.topup,
+          )
         : undefined;
-      // Resume first rechecks its exact durable snapshot. The fresh account
-      // gate then detects external-owner activity, pins the SDK nonce, caps
-      // spend, and remains the final awaited network work before signing.
+      // Resume or top-up first rechecks its exact durable snapshot. The fresh
+      // account gate then detects external-owner activity, pins the SDK nonce,
+      // caps spend, and remains the final awaited network work before signing.
       const { signedEvmTransaction, accountPreflight } = await signAfterFreshAccountPreflight({
         reader,
         ownerAddress: config.expected.ownerAddress,
@@ -332,6 +359,7 @@ async function broadcast(signingClient, action, state, local, config) {
   }
   const method = {
     fund: 'fund_delivery_reserve',
+    topup: 'fund_delivery_reserve',
     activate: 'activate_payouts',
     pause: 'pause_new_risk',
     resume: 'resume_new_risk',
@@ -340,7 +368,11 @@ async function broadcast(signingClient, action, state, local, config) {
     address: state.contractAddress,
     functionName: method,
     args: [],
-    value: action === 'fund' ? BigInt(config.reserve.initialFundingAtto) : 0n,
+    value: ['fund', 'topup'].includes(action)
+      ? BigInt(action === 'topup'
+        ? reviewedReserveTopupAtto(config)
+        : config.reserve.initialFundingAtto)
+      : 0n,
     leaderOnly: false,
   });
 }

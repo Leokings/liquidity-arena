@@ -54,6 +54,7 @@ export const PAYOUT_PROTOCOL_VERSION = 'IDEMPOTENT_EVM_VAULT_V1';
 export const BIND_REQUEST_SCHEMA = 'liquidity-arena-bradbury-bind-request-v1';
 export const ACTIVATION_TERMINAL_STAGE = 'PAYOUTS_ACTIVE_RISK_PAUSED';
 export const RISK_ACTIVE_STAGE = 'RISK_ACTIVE';
+export const RESERVE_TOPUP_ATTO = 600_000_000_000_000_000n;
 export const MAX_TRANSACTION_GAS_COST_ATTO = 30_000_000_000_000_000n;
 // Read-only Bradbury probes on 2026-08-22 placed the current transaction
 // pubdata boundary between 53,316 and 53,348 outer calldata bytes. These are
@@ -972,6 +973,218 @@ export async function readAndVerifyResumePreSignState(
   return current;
 }
 
+export function reviewedReserveTopupAtto(config) {
+  const amount = exactDecimal(
+    config?.reserve?.initialFundingAtto,
+    'reviewed reserve top-up amount',
+    { positive: true, maximum: RESERVE_TOPUP_ATTO },
+  );
+  if (BigInt(amount) !== RESERVE_TOPUP_ATTO) {
+    fail(`reviewed reserve top-up amount must be exactly ${RESERVE_TOPUP_ATTO}`);
+  }
+  return amount;
+}
+
+const RESERVE_TOPUP_IDENTITY_FIELDS = Object.freeze([
+  'accounting', 'contractBalanceAtto', 'sha256',
+]);
+
+function reserveLedgerBalanceAtto(accounting) {
+  const reserve = accounting.reserve;
+  return (
+    BigInt(reserve.player_liability_atto)
+    + BigInt(reserve.accrued_platform_fees_atto)
+    + BigInt(reserve.reserved_platform_fees_atto)
+    + BigInt(reserve.available_reserve_atto)
+    + BigInt(reserve.committed_reserve_atto)
+  );
+}
+
+export function normalizeReserveTopupIdentity(
+  value,
+  field = 'reserve top-up identity',
+) {
+  const raw = plainObject(value, field);
+  exactObject(
+    Object.keys(raw).sort(),
+    [...RESERVE_TOPUP_IDENTITY_FIELDS].sort(),
+    `${field} fields`,
+  );
+  const accounting = normalizePauseAccountingIdentity(
+    raw.accounting,
+    `${field} accounting`,
+  );
+  const contractBalanceAtto = normalizedDecimalLike(
+    raw.contractBalanceAtto,
+    `${field} contract balance`,
+  );
+  const identity = Object.freeze({ accounting, contractBalanceAtto });
+  const identitySha256 = sha256(stableStringify(identity));
+  const suppliedSha256 = requiredText(raw.sha256, `${field}.sha256`).toLowerCase();
+  if (!SHA256_PATTERN.test(suppliedSha256) || suppliedSha256 !== identitySha256) {
+    fail(`${field} hash does not match its exact canonical contents`);
+  }
+  if (BigInt(contractBalanceAtto) !== reserveLedgerBalanceAtto(accounting)) {
+    fail(`${field} contract balance does not equal the complete V8 accounting ledger`);
+  }
+  return Object.freeze({ ...identity, sha256: identitySha256 });
+}
+
+function reserveTopupIdentity(accounting, contractBalanceAtto) {
+  const identity = Object.freeze({
+    accounting: normalizePauseAccountingIdentity(accounting),
+    contractBalanceAtto: normalizedDecimalLike(
+      contractBalanceAtto,
+      'reserve top-up contract balance',
+    ),
+  });
+  return normalizeReserveTopupIdentity({
+    ...identity,
+    sha256: sha256(stableStringify(identity)),
+  });
+}
+
+export function assertExactReserveTopupIdentity(expectedValue, actualValue) {
+  const expected = normalizeReserveTopupIdentity(
+    expectedValue,
+    'recorded pre-top-up identity',
+  );
+  const actual = normalizeReserveTopupIdentity(
+    actualValue,
+    'live pre-top-up identity',
+  );
+  exactObject(actual, expected, 'pre-top-up identity continuity');
+  return actual;
+}
+
+export function assertReserveTopupPostcondition(
+  accountingValue,
+  minimumAvailableReserveAtto = RESERVE_TOPUP_ATTO.toString(),
+) {
+  const accounting = normalizePauseAccountingIdentity(
+    accountingValue,
+    'post-top-up paused accounting identity',
+  );
+  const minimum = exactDecimal(
+    minimumAvailableReserveAtto,
+    'post-top-up minimum available reserve',
+    { positive: true, maximum: RESERVE_TOPUP_ATTO },
+  );
+  if (BigInt(minimum) !== RESERVE_TOPUP_ATTO) {
+    fail(`post-top-up minimum available reserve must be exactly ${RESERVE_TOPUP_ATTO}`);
+  }
+  if (accounting.reserve.payouts_enabled !== true
+      || accounting.reserve.new_risk_enabled !== false) {
+    fail('reserve top-up postcondition requires payout-on risk-paused state');
+  }
+  if (BigInt(accounting.reserve.available_reserve_atto) < BigInt(minimum)) {
+    fail(`live available reserve remains below the reviewed ${RESERVE_TOPUP_ATTO} minimum`);
+  }
+  return Object.freeze({ accounting, minimumAvailableReserveAtto: minimum });
+}
+
+export async function readAndVerifyReserveTopupState(
+  reader,
+  contractAddress,
+  local,
+  config,
+) {
+  if (typeof reader?.evmRequest !== 'function') {
+    fail('Bradbury reader cannot inspect the V8 contract balance');
+  }
+  const current = await readAndVerifyPauseState(
+    reader,
+    contractAddress,
+    local,
+    config,
+    { newRiskEnabled: false },
+  );
+  const rawBalance = await reader.evmRequest(
+    'eth_getBalance',
+    [current.address, 'latest'],
+  );
+  const contractBalanceAtto = BigInt(exactEvmQuantity(
+    rawBalance,
+    'V8 contract balance',
+  )).toString();
+  return Object.freeze({
+    ...current,
+    topupIdentity: reserveTopupIdentity(current.accounting, contractBalanceAtto),
+  });
+}
+
+export async function readAndVerifyReserveTopupPreSignState(
+  reader,
+  contractAddress,
+  local,
+  config,
+  operation,
+) {
+  const exactOperation = plainObject(operation, 'reserve top-up pre-sign operation');
+  if (exactOperation.preparedFromStage !== ACTIVATION_TERMINAL_STAGE) {
+    fail(`reserve top-up PREPARED state is not derived from exact ${ACTIVATION_TERMINAL_STAGE} state`);
+  }
+  const current = await readAndVerifyReserveTopupState(
+    reader,
+    contractAddress,
+    local,
+    config,
+  );
+  assertExactReserveTopupIdentity(
+    exactOperation.topupIdentity,
+    current.topupIdentity,
+  );
+  return current;
+}
+
+export async function readReserveTopupOwnerReadiness(reader, config) {
+  if (typeof reader?.evmRequest !== 'function') {
+    fail('Bradbury reader cannot inspect the configured reserve top-up owner');
+  }
+  const ownerAddress = config.expected.ownerAddress;
+  const [latestNonceRaw, pendingNonceRaw, pendingBalanceRaw] = await Promise.all([
+    reader.evmRequest('eth_getTransactionCount', [ownerAddress, 'latest']),
+    reader.evmRequest('eth_getTransactionCount', [ownerAddress, 'pending']),
+    reader.evmRequest('eth_getBalance', [ownerAddress, 'pending']),
+  ]);
+  const latestNonce = BigInt(exactEvmQuantity(
+    latestNonceRaw,
+    'reserve top-up owner latest nonce',
+  )).toString();
+  const pendingNonce = BigInt(exactEvmQuantity(
+    pendingNonceRaw,
+    'reserve top-up owner pending nonce',
+  )).toString();
+  const pendingBalanceAtto = BigInt(exactEvmQuantity(
+    pendingBalanceRaw,
+    'reserve top-up owner pending balance',
+  )).toString();
+  if (latestNonce !== pendingNonce) {
+    fail('configured reserve top-up owner has an external pending EVM transaction');
+  }
+  const amountAtto = reviewedReserveTopupAtto(config);
+  const maximumGasCostAtto = (
+    BigInt(config.operator.maxEvmGasLimit) * BigInt(config.operator.maxEvmGasPriceWei)
+  ).toString();
+  const requiredWorstCaseBalanceAtto = (
+    BigInt(amountAtto) + BigInt(maximumGasCostAtto)
+  ).toString();
+  if (BigInt(pendingBalanceAtto) < BigInt(requiredWorstCaseBalanceAtto)) {
+    fail(
+      'configured reserve top-up owner pending balance cannot cover exact 0.6 GEN '
+      + 'plus the reviewed maximum gas ceiling',
+    );
+  }
+  return Object.freeze({
+    ownerAddress,
+    latestNonce,
+    pendingNonce,
+    pendingBalanceAtto,
+    maximumGasCostAtto,
+    requiredWorstCaseBalanceAtto,
+  });
+}
+
 function uniqueReceiptField(receipt, names, field, { required = true } = {}) {
   const values = names
     .map((name) => receipt?.[name])
@@ -1136,6 +1349,116 @@ export function assertExactSignedEvmEnvelope(operation, config) {
     fail('stored signed operation is not bound to sufficient exact pending-balance evidence');
   }
   return transaction;
+}
+
+export async function assertFinalizedCanonicalStoredEvmSubmission(
+  reader,
+  operation,
+  config,
+) {
+  if (typeof reader?.evmRequest !== 'function') {
+    fail('Bradbury reader cannot prove finalized canonical EVM submission');
+  }
+  const evmTransactionHash = exactHash(
+    operation?.evmTransactionHash,
+    'stored finalized EVM transaction hash',
+  );
+  const [receipt, transaction, finalizedBlock] = await Promise.all([
+    reader.evmRequest('eth_getTransactionReceipt', [evmTransactionHash]),
+    reader.evmRequest('eth_getTransactionByHash', [evmTransactionHash]),
+    reader.evmRequest('eth_getBlockByNumber', ['finalized', false]),
+  ]);
+  plainObject(receipt, 'finalized top-up EVM receipt');
+  plainObject(transaction, 'finalized top-up EVM transaction');
+  plainObject(finalizedBlock, 'Bradbury finalized head');
+  const evidence = assertExactEvmSubmissionReceipt(receipt, { evmTransactionHash });
+  assertStoredEvmEvidence(operation, evidence);
+  const blockNumber = exactEvmQuantity(receipt.blockNumber, 'top-up receipt blockNumber');
+  const blockHash = exactHash(receipt.blockHash, 'top-up receipt blockHash');
+  const finalizedBlockNumber = exactEvmQuantity(
+    finalizedBlock.number,
+    'Bradbury finalized head number',
+  );
+  if (exactHash(finalizedBlock.hash, 'Bradbury finalized head hash')
+        === `0x${'0'.repeat(64)}`
+      || BigInt(finalizedBlockNumber) < BigInt(blockNumber)) {
+    fail('reserve top-up outer transaction has not reached Bradbury EVM finality');
+  }
+  const canonicalBlock = await reader.evmRequest(
+    'eth_getBlockByNumber',
+    [blockNumber, false],
+  );
+  plainObject(canonicalBlock, 'reserve top-up canonical block');
+  const transactionIndex = exactEvmQuantity(
+    receipt.transactionIndex,
+    'reserve top-up receipt transactionIndex',
+  );
+  if (exactHash(canonicalBlock.hash, 'reserve top-up canonical block hash') !== blockHash
+      || exactEvmQuantity(canonicalBlock.number, 'reserve top-up canonical block number')
+        !== blockNumber
+      || !Array.isArray(canonicalBlock.transactions)
+      || BigInt(transactionIndex) > BigInt(Number.MAX_SAFE_INTEGER)
+      || exactHash(
+        canonicalBlock.transactions[Number(BigInt(transactionIndex))],
+        'reserve top-up canonical transaction entry',
+      ) !== evmTransactionHash
+      || canonicalBlock.transactions.filter(
+        (entry) => String(entry).toLowerCase() === evmTransactionHash,
+      ).length !== 1) {
+    fail('reserve top-up receipt is not in its exact canonical Bradbury block');
+  }
+
+  const signed = assertExactSignedEvmEnvelope(operation, config);
+  const transactionInput = uniqueReceiptField(
+    transaction,
+    ['input', 'data'],
+    'reserve top-up EVM transaction input',
+  )?.toLowerCase();
+  if (exactHash(transaction.hash, 'reserve top-up transaction hash') !== evmTransactionHash
+      || normalizedAddressLike(transaction.from, 'reserve top-up transaction sender')
+        !== config.expected.ownerAddress
+      || normalizedAddressLike(transaction.to, 'reserve top-up transaction recipient')
+        !== BRADBURY_CONSENSUS_ADDRESS
+      || exactEvmQuantity(transaction.chainId, 'reserve top-up transaction chainId')
+        !== `0x${BRADBURY_CHAIN_ID.toString(16)}`
+      || BigInt(exactEvmQuantity(transaction.type, 'reserve top-up transaction type')) !== 0n
+      || BigInt(exactEvmQuantity(transaction.nonce, 'reserve top-up transaction nonce'))
+        !== BigInt(signed.nonce)
+      || BigInt(exactEvmQuantity(transaction.value, 'reserve top-up transaction value'))
+        !== signed.value
+      || BigInt(exactEvmQuantity(transaction.gas, 'reserve top-up transaction gas'))
+        !== signed.gasLimit
+      || BigInt(exactEvmQuantity(transaction.gasPrice, 'reserve top-up transaction gasPrice'))
+        !== signed.gasPrice
+      || transactionInput !== signed.data.toLowerCase()
+      || exactHash(transaction.blockHash, 'reserve top-up transaction blockHash') !== blockHash
+      || exactEvmQuantity(transaction.blockNumber, 'reserve top-up transaction blockNumber')
+        !== blockNumber
+      || exactEvmQuantity(transaction.transactionIndex, 'reserve top-up transactionIndex')
+        !== transactionIndex) {
+    fail('live reserve top-up EVM transaction differs from its durable signed envelope');
+  }
+  const exactConsensusLogs = receipt.logs.filter((log) => (
+    log
+      && normalizedAddressLike(log.address, 'reserve top-up receipt log address')
+        === BRADBURY_CONSENSUS_ADDRESS
+      && Array.isArray(log.topics)
+      && String(log.topics[0] ?? '').toLowerCase() === evidence.eventTopic
+      && String(log.logIndex ?? '').toLowerCase() === evidence.logIndex
+  ));
+  if (exactConsensusLogs.length !== 1
+      || exactConsensusLogs[0].removed !== false
+      || exactEvmQuantity(
+        exactConsensusLogs[0].transactionIndex,
+        'reserve top-up event transactionIndex',
+      ) !== transactionIndex) {
+    fail('reserve top-up consensus event is not one exact non-removed canonical log');
+  }
+  return Object.freeze({
+    ...evidence,
+    finalizedBlockNumber,
+    transactionIndex,
+  });
 }
 
 function nonnegativeTransactionQuantity(value, field) {
@@ -1388,6 +1711,7 @@ function expectedInnerTransactionData(action, config, local) {
   }
   const method = {
     fund: 'fund_delivery_reserve',
+    topup: 'fund_delivery_reserve',
     activate: 'activate_payouts',
     pause: 'pause_new_risk',
     resume: 'resume_new_risk',
@@ -1435,7 +1759,7 @@ export function assertExactPlannedConsensusCalldata(data, {
   if (canonicalOuter !== encoded) {
     fail('outer consensus calldata is not the canonical exact-byte encoding');
   }
-  if (!['deploy', 'fund', 'activate', 'pause', 'resume'].includes(action)) {
+  if (!['deploy', 'fund', 'topup', 'activate', 'pause', 'resume'].includes(action)) {
     fail(`unknown planned consensus action ${action}`);
   }
   const expectedRecipient = action === 'deploy'
@@ -1509,6 +1833,7 @@ export function assertExactPlannedConsensusCalldata(data, {
   const call = decodeGenVmCalldata(elements[0], `planned ${action} call`);
   const expectedMethod = {
     fund: 'fund_delivery_reserve',
+    topup: 'fund_delivery_reserve',
     activate: 'activate_payouts',
     pause: 'pause_new_risk',
     resume: 'resume_new_risk',
@@ -2522,6 +2847,7 @@ export function writeStateAtomic(statePath, state, {
 const PREPARED_STAGE = Object.freeze({
   deploy: 'DEPLOY_PREPARED',
   fund: 'RESERVE_FUND_PREPARED',
+  topup: 'RESERVE_TOPUP_PREPARED',
   activate: 'ACTIVATION_PREPARED',
   pause: 'PAUSE_PREPARED',
   resume: 'RESUME_PREPARED',
@@ -2529,6 +2855,7 @@ const PREPARED_STAGE = Object.freeze({
 const SUBMITTED_STAGE = Object.freeze({
   deploy: 'DEPLOY_SUBMITTED',
   fund: 'RESERVE_FUND_SUBMITTED',
+  topup: 'RESERVE_TOPUP_SUBMITTED',
   activate: 'ACTIVATION_SUBMITTED',
   pause: 'PAUSE_SUBMITTED',
   resume: 'RESUME_SUBMITTED',
@@ -2536,6 +2863,7 @@ const SUBMITTED_STAGE = Object.freeze({
 const SIGNED_STAGE = Object.freeze({
   deploy: 'DEPLOY_SIGNED',
   fund: 'RESERVE_FUND_SIGNED',
+  topup: 'RESERVE_TOPUP_SIGNED',
   activate: 'ACTIVATION_SIGNED',
   pause: 'PAUSE_SIGNED',
   resume: 'RESUME_SIGNED',
@@ -2543,6 +2871,7 @@ const SIGNED_STAGE = Object.freeze({
 const EVM_CONFIRMED_STAGE = Object.freeze({
   deploy: 'DEPLOY_EVM_CONFIRMED',
   fund: 'RESERVE_FUND_EVM_CONFIRMED',
+  topup: 'RESERVE_TOPUP_EVM_CONFIRMED',
   activate: 'ACTIVATION_EVM_CONFIRMED',
   pause: 'PAUSE_EVM_CONFIRMED',
   resume: 'RESUME_EVM_CONFIRMED',
@@ -2600,6 +2929,7 @@ export function prepareOperation(
   {
     pauseAccountingIdentity,
     resumeAccountingIdentity,
+    topupIdentity,
     supersedePreparedResume = false,
   } = {},
 ) {
@@ -2622,6 +2952,7 @@ export function prepareOperation(
   }
   let exactPauseAccountingIdentity;
   let exactResumeAccountingIdentity;
+  let exactTopupIdentity;
   if (type === 'pause') {
     exactPauseAccountingIdentity = normalizePauseAccountingIdentity(
       pauseAccountingIdentity,
@@ -2645,6 +2976,20 @@ export function prepareOperation(
     }
   } else if (resumeAccountingIdentity !== undefined) {
     fail(`${type} cannot record resume accounting evidence`);
+  }
+  if (type === 'topup') {
+    exactTopupIdentity = normalizeReserveTopupIdentity(
+      topupIdentity,
+      'reserve top-up PREPARED identity',
+    );
+    if (exactTopupIdentity.accounting.reserve.payouts_enabled !== true
+        || exactTopupIdentity.accounting.reserve.new_risk_enabled !== false
+        || BigInt(exactTopupIdentity.accounting.reserve.available_reserve_atto)
+          >= RESERVE_TOPUP_ATTO) {
+      fail('reserve top-up can be prepared only from exact payout-on risk-paused state below the reviewed reserve minimum');
+    }
+  } else if (topupIdentity !== undefined) {
+    fail(`${type} cannot record reserve top-up evidence`);
   }
   if (supersedePreparedResume !== false) {
     if (supersedePreparedResume !== true || type !== 'pause') {
@@ -2686,6 +3031,9 @@ export function prepareOperation(
   if (type === 'resume' && !reusesPrepared && state.stage !== ACTIVATION_TERMINAL_STAGE) {
     fail(`resume is allowed only after ${ACTIVATION_TERMINAL_STAGE}`);
   }
+  if (type === 'topup' && !reusesPrepared && state.stage !== ACTIVATION_TERMINAL_STAGE) {
+    fail(`reserve top-up is allowed only from ${ACTIVATION_TERMINAL_STAGE}`);
+  }
   if (reusesPrepared) {
     if (type === 'pause') {
       const recorded = normalizePauseAccountingIdentity(
@@ -2713,6 +3061,13 @@ export function prepareOperation(
         'reused resume PREPARED accounting identity',
       );
     }
+    if (type === 'topup') {
+      if (state.stage !== PREPARED_STAGE.topup
+          || previous.preparedFromStage !== ACTIVATION_TERMINAL_STAGE) {
+        fail(`reused reserve top-up PREPARED state is not derived from exact ${ACTIVATION_TERMINAL_STAGE} state`);
+      }
+      assertExactReserveTopupIdentity(previous.topupIdentity, exactTopupIdentity);
+    }
     // The signing hook is the only path to eth_sendRawTransaction, and it
     // persists SIGNED before returning. In the documented process-crash model,
     // PREPARED therefore proves no payload reached the SDK broadcaster. After
@@ -2726,6 +3081,10 @@ export function prepareOperation(
   if (type === 'pause') operation.pauseAccountingIdentity = exactPauseAccountingIdentity;
   if (type === 'resume') {
     operation.resumeAccountingIdentity = exactResumeAccountingIdentity;
+    operation.preparedFromStage = ACTIVATION_TERMINAL_STAGE;
+  }
+  if (type === 'topup') {
+    operation.topupIdentity = exactTopupIdentity;
     operation.preparedFromStage = ACTIVATION_TERMINAL_STAGE;
   }
   return writeStateAtomic(statePath, {
@@ -2839,6 +3198,9 @@ export function recordSignedOperation(
   if (type === 'resume') {
     assertResumePreparedOrigin(current, 'resume operation before signing evidence');
   }
+  if (type === 'topup' && current.preparedFromStage !== ACTIVATION_TERMINAL_STAGE) {
+    fail(`reserve top-up signing evidence is not derived from exact ${ACTIVATION_TERMINAL_STAGE} state`);
+  }
   const raw = String(signedEvmTransaction || '').toLowerCase();
   if (!/^0x[\da-f]+$/.test(raw) || raw.length % 2 !== 0 || raw.length > 512 * 1024) {
     fail(`${type} signed EVM transaction is malformed`);
@@ -2910,7 +3272,14 @@ export function recordSignedOperation(
   });
 }
 
-function finalizeOperation(statePath, state, type, stage, extra = {}) {
+function finalizeOperation(
+  statePath,
+  state,
+  type,
+  stage,
+  extra = {},
+  operationEvidence = {},
+) {
   const current = state.operations[type];
   if (!current || current.status !== 'SUBMITTED' || !current.transactionHash) {
     fail(`state does not contain a submitted ${type} operation`);
@@ -2921,9 +3290,194 @@ function finalizeOperation(statePath, state, type, stage, extra = {}) {
     stage,
     operations: {
       ...state.operations,
-      [type]: { ...current, status: 'FINALIZED' },
+      [type]: { ...current, ...operationEvidence, status: 'FINALIZED' },
     },
   });
+}
+
+const CLEAN_TOPUP_PREPARED_FIELDS = Object.freeze([
+  'nonce', 'preparedFromStage', 'status', 'topupIdentity', 'transactionHash',
+]);
+const REFRESHED_TOPUP_PREPARED_FIELDS = Object.freeze([
+  ...CLEAN_TOPUP_PREPARED_FIELDS, 'preparedRefreshEvidence',
+]);
+
+function normalizePreparedRefreshEvidence(value) {
+  const raw = plainObject(value, 'top-up PREPARED refresh evidence');
+  const fields = [
+    'action', 'evidenceSha256', 'previousNonce', 'previousRefreshEvidenceSha256',
+    'previousTopupIdentitySha256', 'refreshSequence', 'refreshedAt',
+  ];
+  exactObject(Object.keys(raw).sort(), fields.sort(), 'top-up PREPARED refresh evidence fields');
+  const evidence = {
+    action: requiredText(raw.action, 'top-up refresh action'),
+    previousNonce: requiredText(raw.previousNonce, 'top-up refresh previous nonce'),
+    previousTopupIdentitySha256: exactSha256(
+      raw.previousTopupIdentitySha256,
+      'top-up refresh previous identity hash',
+    ),
+    previousRefreshEvidenceSha256: raw.previousRefreshEvidenceSha256 === null
+      ? null
+      : exactSha256(
+        raw.previousRefreshEvidenceSha256,
+        'top-up previous refresh evidence hash',
+      ),
+    refreshSequence: normalizedDecimalLike(
+      raw.refreshSequence,
+      'top-up refresh sequence',
+    ),
+    refreshedAt: exactUtcTimestamp(raw.refreshedAt, 'top-up refresh timestamp'),
+  };
+  if (evidence.action !== 'REFRESH_UNSIGNED_TOPUP_PREPARED'
+      || BigInt(evidence.refreshSequence) <= 0n) {
+    fail('top-up PREPARED refresh evidence action or sequence is invalid');
+  }
+  const evidenceSha256 = exactSha256(
+    raw.evidenceSha256,
+    'top-up refresh evidence SHA-256',
+  );
+  if (sha256(stableStringify(evidence)) !== evidenceSha256) {
+    fail('top-up PREPARED refresh evidence hash does not match');
+  }
+  return Object.freeze({ ...evidence, evidenceSha256 });
+}
+
+export function assertCleanUnsignedTopupPreparation(state) {
+  if (!isCleanPreparedOperation(state, 'topup')) {
+    fail('top-up operation is not one exact clean unsigned PREPARED record');
+  }
+  const operation = plainObject(state.operations.topup, 'clean top-up PREPARED operation');
+  const expectedFields = operation.preparedRefreshEvidence === undefined
+    ? CLEAN_TOPUP_PREPARED_FIELDS
+    : REFRESHED_TOPUP_PREPARED_FIELDS;
+  exactObject(
+    Object.keys(operation).sort(),
+    [...expectedFields].sort(),
+    'clean unsigned top-up PREPARED fields',
+  );
+  if (operation.status !== 'PREPARED' || operation.transactionHash !== null
+      || operation.preparedFromStage !== ACTIVATION_TERMINAL_STAGE) {
+    fail(`clean top-up PREPARED record must originate from ${ACTIVATION_TERMINAL_STAGE}`);
+  }
+  requiredText(operation.nonce, 'clean top-up PREPARED nonce');
+  normalizeReserveTopupIdentity(operation.topupIdentity, 'clean top-up PREPARED identity');
+  if (operation.preparedRefreshEvidence !== undefined) {
+    normalizePreparedRefreshEvidence(operation.preparedRefreshEvidence);
+  }
+  return operation;
+}
+
+function isCleanUnsignedTopupPreparation(state) {
+  try {
+    assertCleanUnsignedTopupPreparation(state);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function assertTopupMutationLocks({
+  config, statePath, lockToken, ownerLockToken,
+}) {
+  assertStateLockOwnership(resolve(statePath), lockToken);
+  assertOwnerLockOwnership(config, ownerLockToken);
+}
+
+export function refreshCleanUnsignedTopupPreparation(context, liveTopupIdentity) {
+  assertTopupMutationLocks(context);
+  const previous = assertCleanUnsignedTopupPreparation(context.state);
+  const live = normalizeReserveTopupIdentity(
+    liveTopupIdentity,
+    'refreshed live top-up PREPARED identity',
+  );
+  if (live.accounting.reserve.payouts_enabled !== true
+      || live.accounting.reserve.new_risk_enabled !== false
+      || BigInt(live.accounting.reserve.available_reserve_atto) >= RESERVE_TOPUP_ATTO) {
+    fail('unsigned top-up PREPARED refresh requires paused live reserve below 0.6 GEN');
+  }
+  if (previous.topupIdentity.sha256 === live.sha256) {
+    return Object.freeze({ state: context.state, refreshed: false });
+  }
+  const previousRefresh = previous.preparedRefreshEvidence === undefined
+    ? null
+    : normalizePreparedRefreshEvidence(previous.preparedRefreshEvidence);
+  const nonce = randomUUID();
+  const refreshBase = {
+    action: 'REFRESH_UNSIGNED_TOPUP_PREPARED',
+    previousNonce: previous.nonce,
+    previousTopupIdentitySha256: previous.topupIdentity.sha256,
+    previousRefreshEvidenceSha256: previousRefresh?.evidenceSha256 ?? null,
+    refreshSequence: (BigInt(previousRefresh?.refreshSequence ?? '0') + 1n).toString(),
+    refreshedAt: new Date().toISOString(),
+  };
+  const preparedRefreshEvidence = Object.freeze({
+    ...refreshBase,
+    evidenceSha256: sha256(stableStringify(refreshBase)),
+  });
+  const state = writeStateAtomic(context.statePath, {
+    ...context.state,
+    stage: PREPARED_STAGE.topup,
+    operations: {
+      ...context.state.operations,
+      topup: {
+        status: 'PREPARED',
+        nonce,
+        transactionHash: null,
+        topupIdentity: live,
+        preparedFromStage: ACTIVATION_TERMINAL_STAGE,
+        preparedRefreshEvidence,
+      },
+    },
+  });
+  return Object.freeze({ state, refreshed: true });
+}
+
+export function closeCleanUnsignedTopupPreparation(context, liveTopupIdentity) {
+  assertTopupMutationLocks(context);
+  const previous = assertCleanUnsignedTopupPreparation(context.state);
+  const live = normalizeReserveTopupIdentity(
+    liveTopupIdentity,
+    'closing live top-up PREPARED identity',
+  );
+  const availableReserveAtto = live.accounting.reserve.available_reserve_atto;
+  if (live.accounting.reserve.payouts_enabled !== true
+      || live.accounting.reserve.new_risk_enabled !== false
+      || BigInt(availableReserveAtto) < RESERVE_TOPUP_ATTO) {
+    fail('unsigned top-up PREPARED closure requires paused live reserve at or above 0.6 GEN');
+  }
+  const evidenceBase = {
+    action: 'CLOSE_UNSIGNED_TOPUP_PREPARED_NO_TRANSFER',
+    availableReserveAtto,
+    closedAt: new Date().toISOString(),
+    liveTopupIdentitySha256: live.sha256,
+    minimumAvailableReserveAtto: RESERVE_TOPUP_ATTO.toString(),
+    preparedNonce: previous.nonce,
+    preparedTopupIdentitySha256: previous.topupIdentity.sha256,
+    broadcastEvidenceAbsent: true,
+    signedAtAbsent: true,
+    signedHashAbsent: true,
+    signedRawAbsent: true,
+    transferSubmitted: false,
+  };
+  const noTransferEvidence = Object.freeze({
+    ...evidenceBase,
+    evidenceSha256: sha256(stableStringify(evidenceBase)),
+  });
+  const state = writeStateAtomic(context.statePath, {
+    ...context.state,
+    stage: ACTIVATION_TERMINAL_STAGE,
+    operations: {
+      ...context.state.operations,
+      topup: {
+        ...previous,
+        status: 'FAILED',
+        failure: 'UNSIGNED_TOPUP_PREPARATION_CLOSED_NO_TRANSFER; REPLAY_PROHIBITED',
+        replayProhibited: true,
+        noTransferEvidence,
+      },
+    },
+  });
+  return Object.freeze({ state, noTransferEvidence });
 }
 
 function finalizeFailedResumeOperation(statePath, state) {
@@ -3027,6 +3581,93 @@ const sleep = (milliseconds) => new Promise((resolvePromise) => {
   setTimeout(resolvePromise, milliseconds);
 });
 
+function assertExactObservedTopupOuterTransaction(
+  transactionValue,
+  operation,
+  envelope,
+  config,
+) {
+  const transaction = plainObject(
+    transactionValue,
+    'observed pending reserve top-up EVM transaction',
+  );
+  const input = uniqueReceiptField(
+    transaction,
+    ['input', 'data'],
+    'observed reserve top-up transaction input',
+  )?.toLowerCase();
+  if (exactHash(transaction.hash, 'observed reserve top-up transaction hash')
+        !== operation.evmTransactionHash
+      || normalizedAddressLike(transaction.from, 'observed reserve top-up sender')
+        !== config.expected.ownerAddress
+      || normalizedAddressLike(transaction.to, 'observed reserve top-up recipient')
+        !== BRADBURY_CONSENSUS_ADDRESS
+      || exactEvmQuantity(transaction.chainId, 'observed reserve top-up chainId')
+        !== `0x${BRADBURY_CHAIN_ID.toString(16)}`
+      || BigInt(exactEvmQuantity(transaction.type, 'observed reserve top-up type')) !== 0n
+      || BigInt(exactEvmQuantity(transaction.nonce, 'observed reserve top-up nonce'))
+        !== BigInt(envelope.nonce)
+      || BigInt(exactEvmQuantity(transaction.value, 'observed reserve top-up value'))
+        !== envelope.value
+      || BigInt(exactEvmQuantity(transaction.gas, 'observed reserve top-up gas'))
+        !== envelope.gasLimit
+      || BigInt(exactEvmQuantity(transaction.gasPrice, 'observed reserve top-up gasPrice'))
+        !== envelope.gasPrice
+      || input !== envelope.data.toLowerCase()) {
+    fail('observed reserve top-up transaction differs from the exact persisted signed raw envelope');
+  }
+  return transaction;
+}
+
+async function readReserveTopupSignedReplayGate({
+  reader, operation, envelope, config, state, local,
+}) {
+  if (typeof reader?.evmRequest !== 'function') {
+    fail('Bradbury reader cannot prove the signed reserve top-up replay boundary');
+  }
+  const current = await readAndVerifyPauseState(
+    reader,
+    state.contractAddress,
+    local,
+    config,
+    { newRiskEnabled: false },
+  );
+  if (BigInt(current.accounting.reserve.available_reserve_atto) >= RESERVE_TOPUP_ATTO) {
+    fail('signed reserve top-up replay requires manual review because live reserve is already at or above 0.6 GEN');
+  }
+  const ownerAddress = config.expected.ownerAddress;
+  const [latestRaw, pendingRaw, observedTransaction] = await Promise.all([
+    reader.evmRequest('eth_getTransactionCount', [ownerAddress, 'latest']),
+    reader.evmRequest('eth_getTransactionCount', [ownerAddress, 'pending']),
+    reader.evmRequest('eth_getTransactionByHash', [operation.evmTransactionHash]),
+  ]);
+  const latestNonce = BigInt(exactEvmQuantity(
+    latestRaw,
+    'signed top-up replay latest owner nonce',
+  ));
+  const pendingNonce = BigInt(exactEvmQuantity(
+    pendingRaw,
+    'signed top-up replay pending owner nonce',
+  ));
+  if (pendingNonce < latestNonce) {
+    fail('signed reserve top-up replay owner nonce observations are inconsistent');
+  }
+  if (observedTransaction !== null && observedTransaction !== undefined) {
+    assertExactObservedTopupOuterTransaction(
+      observedTransaction,
+      operation,
+      envelope,
+      config,
+    );
+    return Object.freeze({ shouldSend: false, latestNonce, pendingNonce });
+  }
+  const signedNonce = BigInt(envelope.nonce);
+  if (latestNonce !== signedNonce || pendingNonce !== signedNonce) {
+    fail('signed reserve top-up replay owner nonce is ambiguous without the exact transaction object');
+  }
+  return Object.freeze({ shouldSend: true, latestNonce, pendingNonce });
+}
+
 export async function reconcileEvmSubmission({
   reader,
   operation,
@@ -3043,8 +3684,16 @@ export async function reconcileEvmSubmission({
   if (action === 'resume') {
     assertResumePreparedOrigin(operation, 'resume recovery operation');
   }
+  if (action === 'topup'
+      && operation.preparedFromStage !== ACTIVATION_TERMINAL_STAGE) {
+    fail(`reserve top-up recovery operation is not derived from exact ${ACTIVATION_TERMINAL_STAGE} state`);
+  }
   const envelope = assertExactSignedEvmEnvelope(operation, config);
-  const expectedValue = action === 'fund' ? config.reserve.initialFundingAtto : '0';
+  const expectedValue = action === 'topup'
+    ? reviewedReserveTopupAtto(config)
+    : action === 'fund'
+      ? config.reserve.initialFundingAtto
+      : '0';
   if (envelope.value.toString() !== expectedValue) {
     fail(`stored signed EVM value does not match the exact ${action} operation`);
   }
@@ -3096,25 +3745,31 @@ export async function reconcileEvmSubmission({
       operation,
     );
   }
-  if (typeof reader.sendSignedEvmTransaction !== 'function') {
-    fail('Bradbury reader cannot replay the exact stored signed transaction');
-  }
-
+  const topupReplayGate = action === 'topup'
+    ? await readReserveTopupSignedReplayGate({
+      reader, operation, envelope, config, state, local,
+    })
+    : null;
   // eth_sendRawTransaction is idempotent by raw bytes/hash. A provider may
   // return the hash or report "already known" after accepting it. In either
   // case, only the exact stored hash and its exact receipt can advance state.
-  try {
-    const replayedHash = await reader.sendSignedEvmTransaction(
-      operation.signedEvmTransaction,
-    );
-    if (exactHash(replayedHash, 'replayed EVM transaction hash') !== evmTransactionHash) {
-      fail('Bradbury raw replay returned a different EVM transaction hash');
+  if (topupReplayGate?.shouldSend !== false) {
+    if (typeof reader.sendSignedEvmTransaction !== 'function') {
+      fail('Bradbury reader cannot replay the exact stored signed transaction');
     }
-  } catch (error) {
-    if (error instanceof Error
-      && error.message.startsWith('Bradbury V8 harness refused:')) throw error;
-    // Do not surface provider error text: some providers echo raw payloads.
-    // Polling the deterministic hash is the only safe success criterion.
+    try {
+      const replayedHash = await reader.sendSignedEvmTransaction(
+        operation.signedEvmTransaction,
+      );
+      if (exactHash(replayedHash, 'replayed EVM transaction hash') !== evmTransactionHash) {
+        fail('Bradbury raw replay returned a different EVM transaction hash');
+      }
+    } catch (error) {
+      if (error instanceof Error
+        && error.message.startsWith('Bradbury V8 harness refused:')) throw error;
+      // Do not surface provider error text: some providers echo raw payloads.
+      // Polling the deterministic hash is the only safe success criterion.
+    }
   }
 
   const retries = config.operator.finalityRetries;
@@ -3173,7 +3828,7 @@ function nextAction(stage) {
     PLANNED: 'deploy',
     AWAITING_FACTORY_BIND: 'complete the external one-time EVM factory bind and produce its proof',
     RESERVE_FUNDED: 'activate',
-    [ACTIVATION_TERMINAL_STAGE]: 'review the completed payout-only canaries, then run resume',
+    [ACTIVATION_TERMINAL_STAGE]: 'if live available reserve is below the reviewed 0.6 GEN minimum run topup; otherwise review the completed payout-only canaries and run resume',
     [RISK_ACTIVE_STAGE]: 'monitor live risk; run pause immediately if the safety posture changes',
   };
   return actions[stage] ?? 'reconcile the recorded operation before any new broadcast';
@@ -3391,6 +4046,220 @@ async function fundAction(context, options) {
     cutsOverApplication: false,
     cutsOverDatabase: false,
   };
+}
+
+async function finalizeReserveTopup(context, state, { reconciled = false } = {}) {
+  const { config, statePath, reader, local } = context;
+  const operation = state.operations.topup;
+  if (!operation || operation.status !== 'SUBMITTED' || !operation.transactionHash
+      || operation.preparedFromStage !== ACTIVATION_TERMINAL_STAGE) {
+    fail(`reserve top-up finalization requires the exact submitted ${ACTIVATION_TERMINAL_STAGE} operation`);
+  }
+  const amountAtto = reviewedReserveTopupAtto(config);
+  const hash = operation.transactionHash;
+  const receipt = await exactRawReceipt(reader, hash, config.operator);
+  assertExactCallReceipt(receipt, {
+    hash,
+    sender: config.expected.ownerAddress,
+    contractAddress: state.contractAddress,
+    method: 'fund_delivery_reserve',
+    valueAtto: amountAtto,
+    signedOperation: operation,
+    config,
+  });
+  const evmFinality = await assertFinalizedCanonicalStoredEvmSubmission(
+    reader,
+    operation,
+    config,
+  );
+  const postTopup = await readAndVerifyPauseState(
+    reader,
+    state.contractAddress,
+    local,
+    config,
+    { newRiskEnabled: false },
+  );
+  const postcondition = assertReserveTopupPostcondition(
+    postTopup.accounting,
+    amountAtto,
+  );
+  state = finalizeOperation(
+    statePath,
+    state,
+    'topup',
+    ACTIVATION_TERMINAL_STAGE,
+    {},
+    {
+      topupPostAccountingIdentity: postcondition.accounting,
+      evmFinalityVerified: true,
+      evmFinalizedBlockNumber: evmFinality.finalizedBlockNumber,
+    },
+  );
+  return {
+    event: reconciled
+      ? 'BRADBURY_V8_RESERVE_TOPUP_RECONCILED'
+      : 'BRADBURY_V8_RESERVE_TOPPED_UP',
+    transactionHash: hash,
+    contractAddress: state.contractAddress,
+    topupAmountAtto: amountAtto,
+    availableReserveAtto: postcondition.accounting.reserve.available_reserve_atto,
+    preTopupIdentitySha256: operation.topupIdentity.sha256,
+    postTopupAccountingSha256: postcondition.accounting.sha256,
+    payoutsEnabled: true,
+    newRiskEnabled: false,
+    evmFinalityVerified: true,
+    evmFinalizedBlockNumber: evmFinality.finalizedBlockNumber,
+    stage: state.stage,
+    cutsOverApplication: false,
+    cutsOverDatabase: false,
+  };
+}
+
+export async function reserveTopupAction(
+  context,
+  options,
+  { reconcileUnsignedPrepared = false } = {},
+) {
+  if (!context.state.contractAddress) fail('reserve top-up requires a recorded V8 contract');
+  const amountAtto = reviewedReserveTopupAtto(context.config);
+  const existing = context.state.operations.topup;
+  const cleanPreparedTopup = isCleanUnsignedTopupPreparation(context.state);
+  if (existing && !cleanPreparedTopup) {
+    fail('the one reviewed post-activation reserve top-up is already recorded; refuse duplicate');
+  }
+  if (context.state.stage !== ACTIVATION_TERMINAL_STAGE && !cleanPreparedTopup) {
+    fail(`reserve top-up is allowed only from ${ACTIVATION_TERMINAL_STAGE}`);
+  }
+  const unresolved = unresolvedOperationEntries(context.state);
+  if (unresolved.length > 0 && !cleanPreparedTopup) {
+    fail('reserve top-up cannot bypass unresolved durable state; run reconcile first');
+  }
+  const preTopup = await readAndVerifyReserveTopupState(
+    context.reader,
+    context.state.contractAddress,
+    context.local,
+    context.config,
+  );
+  const availableReserveBeforeAtto =
+    preTopup.topupIdentity.accounting.reserve.available_reserve_atto;
+  const reserveAlreadyRestored = BigInt(availableReserveBeforeAtto) >= BigInt(amountAtto);
+  const mayMutateUnsignedPrepared = options.broadcast || reconcileUnsignedPrepared;
+  if (reserveAlreadyRestored && cleanPreparedTopup) {
+    if (!mayMutateUnsignedPrepared) {
+      return {
+        ...planResult('topup', context),
+        event: 'BRADBURY_V8_UNSIGNED_TOPUP_PREPARATION_CLOSURE_REQUIRED',
+        availableReserveAtto: availableReserveBeforeAtto,
+        minimumAvailableReserveAtto: amountAtto,
+        transferWillBeSubmitted: false,
+        cutsOverApplication: false,
+        cutsOverDatabase: false,
+      };
+    }
+    const closed = closeCleanUnsignedTopupPreparation(
+      context,
+      preTopup.topupIdentity,
+    );
+    return {
+      event: 'BRADBURY_V8_UNSIGNED_TOPUP_PREPARATION_CLOSED_NO_TRANSFER',
+      transactionHash: null,
+      contractAddress: closed.state.contractAddress,
+      stage: closed.state.stage,
+      availableReserveAtto: availableReserveBeforeAtto,
+      noTransferEvidenceSha256: closed.noTransferEvidence.evidenceSha256,
+      replayProhibited: true,
+      transferSubmitted: false,
+      payoutsEnabled: true,
+      newRiskEnabled: false,
+      cutsOverApplication: false,
+      cutsOverDatabase: false,
+    };
+  }
+  if (reserveAlreadyRestored) {
+    fail('live available reserve is already at or above the reviewed 0.6 GEN minimum');
+  }
+  const preparedSnapshotChanged = cleanPreparedTopup
+    && existing.topupIdentity.sha256 !== preTopup.topupIdentity.sha256;
+  let state = context.state;
+  let preparedRefreshed = false;
+  if (cleanPreparedTopup && mayMutateUnsignedPrepared) {
+    const refreshed = refreshCleanUnsignedTopupPreparation(
+      { ...context, state },
+      preTopup.topupIdentity,
+    );
+    state = refreshed.state;
+    preparedRefreshed = refreshed.refreshed;
+  }
+  if (reconcileUnsignedPrepared && !options.broadcast) {
+    return {
+      event: preparedRefreshed
+        ? 'BRADBURY_V8_UNSIGNED_TOPUP_PREPARATION_REFRESHED'
+        : 'BRADBURY_V8_UNSIGNED_TOPUP_PREPARATION_READY',
+      dryRun: true,
+      transactionHash: null,
+      contractAddress: state.contractAddress,
+      stage: state.stage,
+      operationNonce: state.operations.topup.nonce,
+      topupIdentitySha256: state.operations.topup.topupIdentity.sha256,
+      transferSubmitted: false,
+      instruction: 'run reconcile --broadcast to sign only after the refreshed snapshot passes again',
+      cutsOverApplication: false,
+      cutsOverDatabase: false,
+    };
+  }
+  const ownerReadiness = await readReserveTopupOwnerReadiness(
+    context.reader,
+    context.config,
+  );
+  if (!options.broadcast) {
+    return {
+      ...planResult('topup', context),
+      topupAmountAtto: amountAtto,
+      availableReserveBeforeAtto,
+      minimumAvailableReserveAfterAtto: amountAtto,
+      projectedAvailableReserveAfterAtto: (
+        BigInt(availableReserveBeforeAtto) + BigInt(amountAtto)
+      ).toString(),
+      projectionIsAtomicGuarantee: false,
+      contractBalanceBeforeAtto: preTopup.topupIdentity.contractBalanceAtto,
+      projectedContractBalanceAfterAtto: (
+        BigInt(preTopup.topupIdentity.contractBalanceAtto) + BigInt(amountAtto)
+      ).toString(),
+      preTopupIdentitySha256: preTopup.topupIdentity.sha256,
+      preparedSnapshotRefreshRequired: preparedSnapshotChanged,
+      ownerAddress: ownerReadiness.ownerAddress,
+      ownerNonce: ownerReadiness.pendingNonce,
+      ownerPendingBalanceAtto: ownerReadiness.pendingBalanceAtto,
+      requiredWorstCaseOwnerBalanceAtto: ownerReadiness.requiredWorstCaseBalanceAtto,
+      payoutsEnabled: true,
+      newRiskEnabled: false,
+    };
+  }
+  if (!cleanPreparedTopup) {
+    state = prepareOperation(context.statePath, context.state, 'topup', {
+      topupIdentity: preTopup.topupIdentity,
+    });
+  } else {
+    assertExactReserveTopupIdentity(
+      state.operations.topup.topupIdentity,
+      preTopup.topupIdentity,
+    );
+  }
+  const nonce = state.operations.topup.nonce;
+  await runSignerChild({
+    config: context.config,
+    configPath: context.configPath,
+    statePath: context.statePath,
+    action: 'topup',
+    nonce,
+    lockToken: context.lockToken,
+    ownerLockToken: context.ownerLockToken,
+  });
+  state = loadState(context.statePath, context.config);
+  if (!state.operations.topup?.transactionHash) {
+    fail('signer child did not durably record the reserve top-up hash');
+  }
+  return finalizeReserveTopup(context, state);
 }
 
 async function broadcastPause(
@@ -3798,6 +4667,9 @@ function oneUnresolvedOperation(state) {
   if (type === 'resume') {
     assertResumePreparedOrigin(operation, 'unresolved resume recovery operation');
   }
+  if (type === 'topup' && operation.preparedFromStage !== ACTIVATION_TERMINAL_STAGE) {
+    fail(`unresolved reserve top-up operation is not derived from exact ${ACTIVATION_TERMINAL_STAGE} state`);
+  }
   const expectedStage = {
     SIGNED: SIGNED_STAGE[type],
     EVM_CONFIRMED: EVM_CONFIRMED_STAGE[type],
@@ -3838,6 +4710,9 @@ export async function finalizeReconciledOperation(context, state, type) {
       cutsOverApplication: false,
       cutsOverDatabase: false,
     };
+  }
+  if (type === 'topup') {
+    return finalizeReserveTopup(context, state, { reconciled: true });
   }
   const hash = operation.transactionHash;
   const receipt = await exactRawReceipt(reader, hash, config.operator);
@@ -3959,6 +4834,9 @@ export async function finalizeReconciledOperation(context, state, type) {
 }
 
 async function reconcileAction(context, options) {
+  if (isCleanUnsignedTopupPreparation(context.state)) {
+    return reserveTopupAction(context, options, { reconcileUnsignedPrepared: true });
+  }
   const { type, operation } = oneUnresolvedOperation(context.state);
   if (['fund', 'activate'].includes(type)) {
     const bindProof = loadAndValidateBindProof(
@@ -4041,7 +4919,7 @@ function parseArguments(argv) {
       else result.bindProofPath = value;
     } else fail(`unknown option ${option}`);
   }
-  if (!['status', 'deploy', 'fund', 'activate', 'pause', 'resume', 'reconcile'].includes(result.action)) {
+  if (!['status', 'deploy', 'fund', 'topup', 'activate', 'pause', 'resume', 'reconcile'].includes(result.action)) {
     fail(`unknown action ${result.action}`);
   }
   if (result.action === 'status' && result.broadcast) fail('status never accepts --broadcast');
@@ -4052,7 +4930,7 @@ function parseArguments(argv) {
 }
 
 export function helpText() {
-  return `Bradbury-only Liquidity Arena V8 deployment canary (never app/DB cutover).\n\nUsage:\n  node ops/bradbury-v8/harness.mjs [status] --config <file> [--state <file>]\n  node ops/bradbury-v8/harness.mjs deploy --config <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs fund --config <file> --bind-proof <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs activate --config <file> --bind-proof <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs resume --config <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs pause --config <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs reconcile --config <file> [--bind-proof <file>] [--broadcast]\n\nNo action broadcasts without the literal --broadcast flag. status is the default and is read-only.\nActivation enables payouts while new risk remains paused. resume is owner-only, requires the exact PAYOUTS_ACTIVE_RISK_PAUSED state and live readback, and does not cut over app or database traffic.\nreconcile inspects the exact stored EVM hash first; --broadcast can only replay its exact stored signed bytes.\nThe exact-state lock serializes its state file; the canonical owner lock coordinates the reviewed harness/factory/bind tools across checkouts under one user profile. It cannot coordinate external or unreviewed writers. Verify PID/owner inactivity before manually removing a crash-stale lock.\nThe SDK is pinned to testnet-bradbury/chain 4221 and never changes the global GenLayer CLI network.\nLocked-keystore passwords use GENLAYER_KEYSTORE_PASSWORD only in the parent and are sent to the signer child over stdin; they are never arguments or logs.`;
+  return `Bradbury-only Liquidity Arena V8 deployment canary (never app/DB cutover).\n\nUsage:\n  node ops/bradbury-v8/harness.mjs [status] --config <file> [--state <file>]\n  node ops/bradbury-v8/harness.mjs deploy --config <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs fund --config <file> --bind-proof <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs topup --config <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs activate --config <file> --bind-proof <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs resume --config <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs pause --config <file> [--broadcast]\n  node ops/bradbury-v8/harness.mjs reconcile --config <file> [--bind-proof <file>] [--broadcast]\n\nNo action broadcasts without the literal --broadcast flag. status is the default and is read-only.\nActivation enables payouts while new risk remains paused. resume is owner-only, requires the exact PAYOUTS_ACTIVE_RISK_PAUSED state and live readback, and does not cut over app or database traffic.\ntopup is the one reviewed post-activation 0.6 GEN delivery-reserve addition. It is accepted only after pause is fully reconciled to PAYOUTS_ACTIVE_RISK_PAUSED, keeps risk paused throughout funding and recovery, and uses the configured owner. Resume is a separate later action.\nFor one exact clean unsigned top-up PREPARED record, reconcile may durably refresh a changed below-minimum snapshot or close it with no-transfer evidence after reserve restoration. Otherwise reconcile inspects the exact stored EVM hash first; --broadcast can only replay its exact stored signed bytes.\nThe exact-state lock serializes its state file; the canonical owner lock coordinates the reviewed harness/factory/bind tools across checkouts under one user profile. It cannot coordinate external or unreviewed writers. Verify PID/owner inactivity before manually removing a crash-stale lock.\nThe SDK is pinned to testnet-bradbury/chain 4221 and never changes the global GenLayer CLI network.\nLocked-keystore passwords use GENLAYER_KEYSTORE_PASSWORD only in the parent and are sent to the signer child over stdin; they are never arguments or logs.`;
 }
 
 export async function runHarness(argv, dependencies = {}) {
@@ -4090,6 +4968,7 @@ export async function runHarness(argv, dependencies = {}) {
     if (options.action === 'status') return await statusAction(context);
     if (options.action === 'deploy') return await deployAction(context, options);
     if (options.action === 'fund') return await fundAction(context, options);
+    if (options.action === 'topup') return await reserveTopupAction(context, options);
     if (options.action === 'activate') return await activateAction(context, options);
     if (options.action === 'resume') return await resumeAction(context, options);
     if (options.action === 'reconcile') return await reconcileAction(context, options);
