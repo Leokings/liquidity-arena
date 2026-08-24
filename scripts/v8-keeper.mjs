@@ -14,12 +14,14 @@ import {
   createAuthoritativeKeeperSession,
   DURABLE_PENDING_REASONS,
   INNER_STATUS_INDEXING_PENDING_REASON,
+  INNER_STATUS_LOOKUP_PENDING_REASON,
   keeperActionForOperation,
   keeperOperationForAction,
   reconcileAuthoritativeOperation,
   recoverAuthoritativeOperations,
   validateDurablePendingOutcome,
   validateInnerIndexingPendingOutcome,
+  validateInnerLookupPendingOutcome,
   validateRecoveredKeeperOperation,
 } from './authoritative-keeper-journal.mjs';
 import {
@@ -106,10 +108,10 @@ function pendingOutcomeFromSummaryEntry(entry) {
   };
 }
 
-function innerIndexingOutcomeFromSummaryEntry(entry) {
+function innerStatusOutcomeFromSummaryEntry(entry, pendingReason) {
   return {
     outcome: 'PENDING',
-    pendingReason: INNER_STATUS_INDEXING_PENDING_REASON,
+    pendingReason,
     transactionHash: entry?.transactionHash,
     outerTransactionHash: entry?.outerTransactionHash,
     receiptBlockHash: entry?.receiptBlockHash,
@@ -129,7 +131,7 @@ function pendingEvidenceKeys(reason) {
     : ['outerTransactionHash', 'receiptBlockHash', 'receiptBlockNumber', 'finalizedHeadBlockNumber'];
 }
 
-const INNER_INDEXING_EVIDENCE_KEYS = Object.freeze([
+const INNER_STATUS_EVIDENCE_KEYS = Object.freeze([
   'outerTransactionHash',
   'receiptBlockHash',
   'receiptBlockNumber',
@@ -149,9 +151,12 @@ function hasCanonicalPendingEvidence(entry) {
   }
 }
 
-function hasCanonicalInnerIndexingEvidence(entry) {
+function hasCanonicalInnerStatusEvidence(entry, pendingReason) {
   try {
-    validateInnerIndexingPendingOutcome(innerIndexingOutcomeFromSummaryEntry(entry), {
+    const validate = pendingReason === INNER_STATUS_LOOKUP_PENDING_REASON
+      ? validateInnerLookupPendingOutcome
+      : validateInnerIndexingPendingOutcome;
+    validate(innerStatusOutcomeFromSummaryEntry(entry, pendingReason), {
       state: entry.state,
       lifecycleStatus: entry.lifecycleStatus ?? 'UNKNOWN',
       transactionHash: entry.transactionHash,
@@ -242,15 +247,15 @@ function isRecoveryDurablePendingEntry(entry) {
   return hasCanonicalPendingEvidence(entry);
 }
 
-function isFreshInnerIndexingPendingEntry(entry) {
-  if (entry?.reason !== INNER_STATUS_INDEXING_PENDING_REASON) return false;
+function isFreshInnerStatusPendingEntry(entry, pendingReason) {
+  if (entry?.reason !== pendingReason) return false;
   const hasEpoch = Object.prototype.hasOwnProperty.call(entry, 'epochEndTimestamp');
   const hasPayout = Object.prototype.hasOwnProperty.call(entry, 'payoutId');
   if (hasEpoch === hasPayout) return false;
   const subjectKey = hasEpoch ? 'epochEndTimestamp' : 'payoutId';
   if (!exactPendingEntryKeys(entry, [
     'type', subjectKey, 'operationId', 'logicalOperationId', 'transactionHash',
-    'state', 'pendingReceipt', 'reason', ...INNER_INDEXING_EVIDENCE_KEYS,
+    'state', 'pendingReceipt', 'reason', ...INNER_STATUS_EVIDENCE_KEYS,
   ])
       || !SUMMARY_OPERATION_ID.test(entry.operationId)
       || !SUMMARY_OPERATION_ID.test(entry.logicalOperationId)
@@ -263,15 +268,15 @@ function isFreshInnerIndexingPendingEntry(entry) {
   } else if (!FRESH_PAYOUT_PENDING_TYPES.has(entry.type)
       || typeof entry.payoutId !== 'string'
       || !PAYOUT_ID.test(entry.payoutId)) return false;
-  return hasCanonicalInnerIndexingEvidence(entry);
+  return hasCanonicalInnerStatusEvidence(entry, pendingReason);
 }
 
-function isRecoveryInnerIndexingPendingEntry(entry) {
-  if (entry?.reason !== INNER_STATUS_INDEXING_PENDING_REASON
+function isRecoveryInnerStatusPendingEntry(entry, pendingReason) {
+  if (entry?.reason !== pendingReason
       || !exactPendingEntryKeys(entry, [
         'operationId', 'logicalOperationId', 'attemptNumber', 'retryOfOperationId',
         'deploymentAlias', 'method', 'subjectType', 'subjectId', 'transactionHash',
-        'state', 'lifecycleStatus', 'reason', ...INNER_INDEXING_EVIDENCE_KEYS,
+        'state', 'lifecycleStatus', 'reason', ...INNER_STATUS_EVIDENCE_KEYS,
       ])
       || !SUMMARY_OPERATION_ID.test(entry.operationId)
       || !SUMMARY_OPERATION_ID.test(entry.logicalOperationId)
@@ -306,7 +311,7 @@ function isRecoveryInnerIndexingPendingEntry(entry) {
   } else if (typeof entry.subjectId !== 'string' || !PAYOUT_ID.test(entry.subjectId)) {
     return false;
   }
-  return hasCanonicalInnerIndexingEvidence(entry);
+  return hasCanonicalInnerStatusEvidence(entry, pendingReason);
 }
 
 export function isHealthyDurablePendingSummary(summary) {
@@ -316,8 +321,10 @@ export function isHealthyDurablePendingSummary(summary) {
   return summary.pending.every((entry) => (
     isFreshDurablePendingEntry(entry)
       || isRecoveryDurablePendingEntry(entry)
-      || isFreshInnerIndexingPendingEntry(entry)
-      || isRecoveryInnerIndexingPendingEntry(entry)
+      || isFreshInnerStatusPendingEntry(entry, INNER_STATUS_INDEXING_PENDING_REASON)
+      || isRecoveryInnerStatusPendingEntry(entry, INNER_STATUS_INDEXING_PENDING_REASON)
+      || isFreshInnerStatusPendingEntry(entry, INNER_STATUS_LOOKUP_PENDING_REASON)
+      || isRecoveryInnerStatusPendingEntry(entry, INNER_STATUS_LOOKUP_PENDING_REASON)
   ));
 }
 const EMPTY_OBJECTIVE_KEYS = Object.freeze([
@@ -1278,8 +1285,14 @@ async function executeAction(context, action, acceptedPredecessor = null) {
     });
   }
   if (!reconciled.verified
-      && reconciled.pending.reason === INNER_STATUS_INDEXING_PENDING_REASON) {
-    const indexingPending = validateInnerIndexingPendingOutcome({
+      && [
+        INNER_STATUS_INDEXING_PENDING_REASON,
+        INNER_STATUS_LOOKUP_PENDING_REASON,
+      ].includes(reconciled.pending.reason)) {
+    const validate = reconciled.pending.reason === INNER_STATUS_LOOKUP_PENDING_REASON
+      ? validateInnerLookupPendingOutcome
+      : validateInnerIndexingPendingOutcome;
+    const innerStatusPending = validate({
       outcome: 'PENDING',
       pendingReason: reconciled.pending.reason,
       transactionHash: reconciled.operation.transactionHash,
@@ -1292,7 +1305,7 @@ async function executeAction(context, action, acceptedPredecessor = null) {
       outcome: _outcome,
       pendingReason,
       ...publicEvidence
-    } = indexingPending;
+    } = innerStatusPending;
     return Object.freeze({
       ...action,
       operationId: reconciled.operation.operationId,

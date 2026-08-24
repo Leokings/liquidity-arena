@@ -116,12 +116,15 @@ status read can briefly return `UNKNOWN` while Bradbury indexes the new GenLayer
 the same invocation that received the fenced submission-bind acknowledgement may report
 `INNER_STATUS_INDEXING_PENDING`. That exact public outcome includes the inner and outer hashes,
 canonical receipt block identity, and a positive finalized-head number at or above the receipt
-block. It leaves the row `SUBMITTED`/`UNKNOWN`, performs no additional journal mutation, resend, or
-later write, and is the only inner-indexing delay for which the CLI exits successfully so history
+block. If that invocation's first status lookup throws instead of returning a status, it may report
+the distinct `INNER_STATUS_LOOKUP_PENDING` outcome with the same exact public proof and without the
+exception text. Both outcomes leave the row `SUBMITTED`/`UNKNOWN`, perform no additional lookup
+retry, journal mutation, resend, or later write, and allow the CLI to exit successfully so history
 synchronization can still run. A rerun that still observes `UNKNOWN` is a hard
-`LIFECYCLE_UNKNOWN` blockage. A crash after the bind loses the in-memory acknowledgement and is
-therefore conservative: its next `UNKNOWN` is also hard. Transport failures, malformed statuses,
-and every other nonfinal result remain non-allowlisted.
+`LIFECYCLE_UNKNOWN` blockage, and a rerun whose lookup throws is hard
+`LIFECYCLE_STATUS_UNAVAILABLE`; neither generic reason is allowlisted. A crash after the bind loses
+the in-memory acknowledgement and is therefore conservative. Malformed returned statuses and every
+other nonfinal result remain non-allowlisted.
 
 An unavailable or invalid finalized head, missing or conflicting exact transaction identity,
 nonce/hash mismatch, receipt or canonical-block drift, removed/conflicting event, or reorg remains

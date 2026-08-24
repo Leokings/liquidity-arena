@@ -23,6 +23,7 @@ export const DURABLE_PENDING_REASONS = Object.freeze([
   'OUTER_FINALITY_PENDING',
 ]);
 export const INNER_STATUS_INDEXING_PENDING_REASON = 'INNER_STATUS_INDEXING_PENDING';
+export const INNER_STATUS_LOOKUP_PENDING_REASON = 'INNER_STATUS_LOOKUP_PENDING';
 const RECEIPT_AMBIGUITY_CODES = Object.freeze({
   HASH: 'RECEIPT_HASH_MISMATCH',
   CONTRACT: 'RECEIPT_CONTRACT_MISMATCH',
@@ -132,37 +133,37 @@ export function validateDurablePendingOutcome(value, operation) {
   });
 }
 
-export function validateInnerIndexingPendingOutcome(value, operation) {
+function validateInnerStatusPendingOutcome(value, operation, expectedPendingReason) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
       || Object.keys(value).sort().join(',') !== [
         'finalizedHeadBlockNumber', 'outcome', 'outerTransactionHash', 'pendingReason',
         'receiptBlockHash', 'receiptBlockNumber', 'transactionHash',
       ].sort().join(',')) {
-    fail('KEEPER_JOURNAL_SCHEMA', 'Inner indexing pending outcome is not an exact public object.');
+    fail('KEEPER_JOURNAL_SCHEMA', 'Inner status pending outcome is not an exact public object.');
   }
   const transactionHash = exactDurablePendingHash(
     value.transactionHash,
-    'inner indexing pending transaction hash',
+    'inner status pending transaction hash',
   );
   const outerTransactionHash = exactDurablePendingHash(
     value.outerTransactionHash,
-    'inner indexing pending outer transaction hash',
+    'inner status pending outer transaction hash',
   );
   const receiptBlockHash = exactDurablePendingHash(
     value.receiptBlockHash,
-    'inner indexing pending receipt block hash',
+    'inner status pending receipt block hash',
   );
   const receiptBlockNumber = exactDurablePendingBlock(
     value.receiptBlockNumber,
-    'inner indexing pending receipt block number',
+    'inner status pending receipt block number',
   );
   const finalizedHeadBlockNumber = exactDurablePendingBlock(
     value.finalizedHeadBlockNumber,
-    'inner indexing pending finalized head block number',
+    'inner status pending finalized head block number',
   );
   const submissionEvidence = operation?.submissionEvidence;
   if (value.outcome !== 'PENDING'
-      || value.pendingReason !== INNER_STATUS_INDEXING_PENDING_REASON
+      || value.pendingReason !== expectedPendingReason
       || !operation || operation.state !== 'SUBMITTED'
       || operation.lifecycleStatus !== 'UNKNOWN'
       || String(operation.transactionHash ?? '').toLowerCase() !== transactionHash
@@ -178,18 +179,34 @@ export function validateInnerIndexingPendingOutcome(value, operation) {
       || BigInt(finalizedHeadBlockNumber) < BigInt(receiptBlockNumber)) {
     fail(
       'KEEPER_JOURNAL_SCHEMA',
-      'Inner indexing pending outcome is not bound to an exact finalized SUBMITTED row.',
+      'Inner status pending outcome is not bound to an exact finalized SUBMITTED row.',
     );
   }
   return Object.freeze({
     outcome: 'PENDING',
-    pendingReason: INNER_STATUS_INDEXING_PENDING_REASON,
+    pendingReason: expectedPendingReason,
     transactionHash,
     outerTransactionHash,
     receiptBlockHash,
     receiptBlockNumber,
     finalizedHeadBlockNumber,
   });
+}
+
+export function validateInnerIndexingPendingOutcome(value, operation) {
+  return validateInnerStatusPendingOutcome(
+    value,
+    operation,
+    INNER_STATUS_INDEXING_PENDING_REASON,
+  );
+}
+
+export function validateInnerLookupPendingOutcome(value, operation) {
+  return validateInnerStatusPendingOutcome(
+    value,
+    operation,
+    INNER_STATUS_LOOKUP_PENDING_REASON,
+  );
 }
 
 function exactAddress(value, label) {
@@ -648,11 +665,14 @@ function pending(operation, reason, details = {}) {
   });
 }
 
-function innerIndexingPendingOutcome(operation) {
+function innerStatusPendingOutcome(operation, pendingReason) {
   const evidence = operation?.submissionEvidence;
-  return validateInnerIndexingPendingOutcome({
+  const validate = pendingReason === INNER_STATUS_LOOKUP_PENDING_REASON
+    ? validateInnerLookupPendingOutcome
+    : validateInnerIndexingPendingOutcome;
+  return validate({
     outcome: 'PENDING',
-    pendingReason: INNER_STATUS_INDEXING_PENDING_REASON,
+    pendingReason,
     transactionHash: operation?.transactionHash,
     outerTransactionHash: operation?.outerTransactionHash,
     receiptBlockHash: evidence?.receiptBlockHash,
@@ -958,6 +978,34 @@ export async function reconcileAuthoritativeOperation({
       try {
         lifecycleStatus = await operator.getTransactionStatus(operation.transactionHash);
       } catch (error) {
+        if (attempt === 1 && submissionBoundThisInvocation) {
+          const deferred = innerStatusPendingOutcome(
+            operation,
+            INNER_STATUS_LOOKUP_PENDING_REASON,
+          );
+          const {
+            outcome: _outcome,
+            pendingReason,
+            transactionHash: _transactionHash,
+            ...publicEvidence
+          } = deferred;
+          logger({
+            event: 'KEEPER_INNER_STATUS_LOOKUP_PENDING',
+            operationId: operation.operationId,
+            logicalOperationId: operation.logicalOperationId,
+            transactionHash: operation.transactionHash,
+            method: operation.method,
+            subjectType: operation.subjectType,
+            subjectId: operation.subjectId,
+            reason: pendingReason,
+            ...publicEvidence,
+          });
+          return Object.freeze({
+            verified: false,
+            operation,
+            pending: pending(operation, pendingReason, publicEvidence),
+          });
+        }
         if (attempt < attempts) {
           await sleep(lifecycleIntervalMs);
           continue;
@@ -972,7 +1020,10 @@ export async function reconcileAuthoritativeOperation({
       }
       if (attempt === 1 && lifecycleStatus === 'UNKNOWN'
           && submissionBoundThisInvocation) {
-        const deferred = innerIndexingPendingOutcome(operation);
+        const deferred = innerStatusPendingOutcome(
+          operation,
+          INNER_STATUS_INDEXING_PENDING_REASON,
+        );
         const {
           outcome: _outcome,
           pendingReason,
