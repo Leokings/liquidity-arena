@@ -44,6 +44,37 @@ factory deployment, bytecode/source verification, source review, and exact sourc
   not deploy or bind the Solidity factory.
 - Reserve funding must finalize successfully with the exact sender, V8 recipient, payable method,
   and value, followed by an exact reserve increase with zero liabilities.
+- The separate post-activation `topup` action is deliberately narrower than initial `fund`. It is
+  allowed only from the exact durable `PAYOUTS_ACTIVE_RISK_PAUSED` stage after `pause` has fully
+  reconciled, requires `reserve.initialFundingAtto=600000000000000000` (0.6 GEN), and may be recorded
+  only once. A live available reserve below 0.6 GEN establishes that the attended restoration is
+  needed. Although `fund_delivery_reserve` is permissionless on the contract, this harness signs the
+  call only with the configured owner account and proves the owner in both the signed outer envelope
+  and finalized receipt. It never pauses, resumes, or exposes new risk itself.
+- Before preparing a top-up, the harness re-reads the exact deployed code, exhaustive schema,
+  configuration, paused flags, complete reserve/fee/liability accounting, epoch and payout totals,
+  and the V8 contract's EVM balance. That exact identity is hash-bound in
+  `RESERVE_TOPUP_PREPARED` and re-read immediately before the fresh account/nonce gate. Finalization
+  proves the exact successful 0.6 GEN call and canonical outer EVM envelope, then applies the normal
+  live paused-state/accounting invariants and requires available reserve to be at least 0.6 GEN.
+  Legitimate payout progress, reserve restoration, liability/fee changes, and page-count changes may
+  occur during finality, so post-finality does not require equality to the pre-sign snapshot or claim
+  that the current EVM balance is exactly the old balance plus 0.6 GEN.
+- A crash that leaves one exact clean unsigned `RESERVE_TOPUP_PREPARED` record is recoverable only
+  while both the state lock and configured-owner lock are held. If paused accounting changed while
+  available reserve remains below 0.6 GEN, the harness atomically replaces the prepared identity,
+  issues a fresh operation nonce, persists a hash-chained refresh event, and makes the signer re-read
+  that refreshed identity before signing. If live available reserve has already reached 0.6 GEN, it
+  closes the clean preparation back to `PAYOUTS_ACTIVE_RISK_PAUSED` with explicit no-transfer evidence.
+  Any signed raw, signed hash, `signedAt`, transaction hash, or broadcast evidence makes refresh and
+  no-transfer closure illegal.
+- A signed top-up never adopts a new accounting snapshot or new raw transaction. With no receipt, an
+  attended replay requires a fresh invariant-valid `PAYOUTS_ACTIVE_RISK_PAUSED` readback, available
+  reserve still below 0.6 GEN, an unexpired exact payload, and an unambiguous configured-owner nonce.
+  An exact matching pending transaction suppresses another send and is polled by its persisted hash.
+  A restored reserve, changed activation flags, expired raw, or ambiguous nonce is a manual fail-stop.
+  Once the exact receipt exists, recovery continues with its canonical finality proof and the fresh
+  paused-state minimum-reserve postcondition; it does not require the old accounting snapshot to match.
 - The reviewed `activate_payouts` transition enables payout processing while deliberately leaving
   `new_risk_enabled=false` in the same finalized transaction. There is no activation-to-pause
   public-risk window. Its terminal state is `PAYOUTS_ACTIVE_RISK_PAUSED`. On a value-bearing network,
@@ -126,6 +157,13 @@ successful and mined by Bradbury's exact consensus contract. It accepts exactly 
 GenLayer transaction ID to equal that event's indexed ID. Only then can state become `SUBMITTED`.
 The GenLayer transaction must later reach `FINALIZED` **and** `FINISHED_WITH_RETURN`.
 
+For a post-activation top-up, that GenLayer finality is not sufficient on its own. The harness also
+fetches the exact persisted outer EVM transaction and receipt, requires the receipt block to be no
+newer than Bradbury's `finalized` head, re-fetches the canonical block by number, and proves the
+transaction occurs exactly once at its recorded index with one exact non-removed consensus event.
+Until all of those checks and the accounting delta pass, the operation remains recoverable as
+`RESERVE_TOPUP_SUBMITTED`; it is never silently treated as complete.
+
 GenLayer finality does not claim that the outer EVM envelope's block has reached the EVM
 `finalized` tag. The bind request therefore fixes
 `deploymentEvmFinalityVerified=false` and `deploymentEvmFinalityRequiredBeforeBind=true`. Before
@@ -147,6 +185,17 @@ hash and receipt must still match. A recovered finalized activation requires the
   `RESUME_PREPARED` record after exact active readback; it can also close that record without sending
   when risk is already paused. Pause recovery applies the inverse proof. Any conflicting hash, receipt,
   event, state readback, or other unresolved operation is a hard stop.
+
+Top-up recovery uses the same rule. `RESERVE_TOPUP_SIGNED` contains the sole authorized signed raw
+transaction before the SDK can broadcast it. `reconcile` first inspects its deterministic EVM hash;
+only explicit `reconcile --broadcast` may replay those byte-identical bytes, and only after a fresh
+paused-state, below-minimum reserve, payload-validity, and exact nonce/known-transaction gate. If
+submission was already accepted,
+recovery suppresses replay and advances only from the exact receipt. No recovery path creates a new
+signature, changes the amount, or calls activation, pause, or resume. The contract therefore remains
+risk-paused while a top-up is `PREPARED`, `SIGNED`, `EVM_CONFIRMED`, or `SUBMITTED`. An unresolved
+top-up therefore cannot delay the safety outcome of emergency pause: that outcome was already fully
+reconciled before the top-up began.
 
 Every state-changing or reconciliation run holds two exclusive lock files: one for the exact state
 path and one for the Bradbury owner address. The exact-state lock serializes its state file; the
@@ -195,6 +244,90 @@ Activation is one safe GenLayer transaction: the contract sets `payouts_enabled=
 open epochs or wagers. `resume` performs one attended owner-only `resume_new_risk` transaction with
 the same durable pre-sign and reconciliation protections. Its terminal `RISK_ACTIVE` status proves
 both live flags are true; it is not an app or database cutover.
+
+### One reviewed post-activation reserve top-up
+
+This command is not accepted from `RISK_ACTIVE` and is not a replacement for initial `fund`. First
+complete and reconcile the attended emergency pause so durable and live state are both exactly
+`PAYOUTS_ACTIVE_RISK_PAUSED`:
+
+```powershell
+node ops/bradbury-v8/harness.mjs pause --config ops/bradbury-v8/config.local.json
+node ops/bradbury-v8/harness.mjs pause --config ops/bradbury-v8/config.local.json --broadcast
+npm run v8:bradbury:status -- --config ops/bradbury-v8/config.local.json
+```
+
+If the pause process stops with an unresolved operation, use read-only reconciliation first and add
+`--broadcast` only when it reports that the exact stored raw pause transaction still has no receipt:
+
+```powershell
+npm run v8:bradbury:reconcile -- --config ops/bradbury-v8/config.local.json
+npm run v8:bradbury:reconcile -- --config ops/bradbury-v8/config.local.json --broadcast
+```
+
+Do not start `topup` while pause is unresolved. Once status proves the paused terminal state, review
+that the selected configuration contains exactly
+`"initialFundingAtto": "600000000000000000"`. The configured owner must have at least 0.6 GEN plus
+the signed gas ceiling. With the shipped maximum gas-limit/price caps, the hard worst-case
+requirement is 0.63 GEN; the independent live estimate can be lower, but insufficient pending balance
+always refuses before signing. Fund the owner separately if needed—this harness does not acquire
+faucet funds or transfer between operator accounts.
+
+Run the top-up read-only dry-run first:
+
+```powershell
+npm run v8:bradbury:topup -- --config ops/bradbury-v8/config.local.json
+```
+
+Review the returned contract, network, source/schema hashes, exact 0.6 GEN amount, available reserve
+below the 0.6 GEN restoration minimum, preserved payout-on/risk-paused flags, quiescent owner nonce,
+and owner pending balance. The projected post-balance is advisory only: because the deployed method
+is permissionless and has no compare-and-set argument, the harness does not claim atomic zero-reserve
+or overfund prevention. Dry-run refuses unless the owner balance covers 0.6 GEN plus the configured
+worst-case gas ceiling. Only then run the attended write:
+
+```powershell
+npm run v8:bradbury:topup -- --config ops/bradbury-v8/config.local.json --broadcast
+```
+
+No bind proof is used for this post-activation action. If the process stops or refuses after
+the unsigned `RESERVE_TOPUP_PREPARED` journal write, never edit or delete the operation. Rerunning
+`topup --broadcast` re-reads and, only under both locks, atomically refreshes a changed below-minimum
+snapshot before the signer performs its own exact recheck. `reconcile` without `--broadcast` performs
+the same locked refresh but does not sign; follow its instruction before authorizing
+`reconcile --broadcast`. If the live available reserve is already at least 0.6 GEN, either attended
+write path closes only the provably clean unsigned preparation with an explicit no-transfer event and
+retains the one-time top-up operation in terminal failed/replay-prohibited form.
+
+If the process stops or refuses after `RESERVE_TOPUP_SIGNED`, `RESERVE_TOPUP_EVM_CONFIRMED`, or
+`RESERVE_TOPUP_SUBMITTED`, do not rerun `topup` and never replace the stored raw bytes. Inspect with
+read-only reconciliation first, then explicitly authorize only exact-raw replay if the persisted EVM
+hash still has no receipt:
+
+```powershell
+npm run v8:bradbury:reconcile -- --config ops/bradbury-v8/config.local.json
+npm run v8:bradbury:reconcile -- --config ops/bradbury-v8/config.local.json --broadcast
+```
+
+For a signed operation with no receipt, replay additionally requires a fresh valid paused-state
+readback, available reserve below 0.6 GEN, an unexpired raw payload, and either the exact unused owner
+nonce or the exact matching transaction object already known to Bradbury. If reserve is already at the
+minimum, the flags changed, validity expired, or the nonce is ambiguous, stop for manual review; signed
+bytes are never abandoned, refreshed, or superseded. If the exact receipt is already present, the
+harness proceeds to canonical finality and the live paused-state `available_reserve_atto >= 0.6 GEN`
+postcondition without demanding equality to the old pre-sign snapshot.
+
+Successful top-up finalization deliberately returns to `PAYOUTS_ACTIVE_RISK_PAUSED`. It proves the
+exact 0.6 GEN transfer and requires the current live available reserve to be at least 0.6 GEN, while
+allowing otherwise-valid payout/accounting progress during finality. If the live reserve is still
+below that minimum, the exact submitted operation remains nonterminal and must be reconciled later;
+it is not rewritten as success. Only after top-up status is fully reconciled may the separate attended
+resume sequence re-enable risk:
+
+```powershell
+node ops/bradbury-v8/harness.mjs resume --config ops/bradbury-v8/config.local.json
+node ops/bradbury-v8/harness.mjs resume --config ops/bradbury-v8/config.local.json --broadcast
+```
 
 For a value-bearing production network, run and separately review the payout-only ghost/EVM canary
 before authorizing `resume`. The present Bradbury rollout is faucet-funded testnet: its explicit

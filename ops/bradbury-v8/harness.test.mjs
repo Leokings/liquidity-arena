@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 
-import { Interface, Wallet, getBytes, id, keccak256 } from 'ethers';
+import { Interface, Transaction, Wallet, getBytes, id, keccak256 } from 'ethers';
 import { abi as genlayerAbi } from 'genlayer-js';
 import { CalldataAddress } from 'genlayer-js/types';
 
@@ -18,6 +18,7 @@ import {
   BIND_REQUEST_SCHEMA,
   ACTIVATION_TERMINAL_STAGE,
   RISK_ACTIVE_STAGE,
+  RESERVE_TOPUP_ATTO,
   MAX_BRADBURY_DEPLOY_SOURCE_BYTES,
   MAX_BRADBURY_OUTER_CALLDATA_BYTES,
   MAX_TRANSACTION_GAS_COST_ATTO,
@@ -27,14 +28,17 @@ import {
   PAYOUT_PROTOCOL_VERSION,
   V8_POLICY_VERSION,
   V8_PROTOCOL_VERSION,
+  assertCleanUnsignedTopupPreparation,
   assertExactBradburyGasEstimate,
   assertExactCallReceipt,
   assertExactFailedCallReceipt,
   assertExactConfigReadback,
   assertExactDeploymentReceipt,
   assertExactEvmSubmissionReceipt,
+  assertFinalizedCanonicalStoredEvmSubmission,
   assertExactPauseAccountingIdentity,
   assertExactResumeAccountingIdentity,
+  assertExactReserveTopupIdentity,
   assertExactPlannedConsensusCalldata,
   assertExactReserveReadback,
   assertExactSchema,
@@ -46,6 +50,7 @@ import {
   assertPauseAccountingContinuity,
   assertResumePreparedOrigin,
   assertResumeAccountingContinuity,
+  assertReserveTopupPostcondition,
   assertProtectedOperationalPath,
   activationTerminalReadback,
   acquireOwnerLock,
@@ -60,17 +65,24 @@ import {
   newState,
   normalizeConfig,
   normalizePauseAccountingIdentity,
+  normalizeReserveTopupIdentity,
   operationalEvidenceRoot,
   prepareOperation,
   reconcileEvmSubmission,
   readAndVerifyPauseState,
+  readAndVerifyReserveTopupState,
+  readReserveTopupOwnerReadiness,
   readAndVerifyResumePreSignState,
+  refreshCleanUnsignedTopupPreparation,
   recordEvmReceiptEvidence,
   recordSignedOperation,
   recordSubmittedOperation,
   resolveKeychainSecretWithFallback,
+  reserveTopupAction,
+  reviewedReserveTopupAtto,
   resumeAction,
   sha256,
+  stableStringify,
   signAfterFreshAccountPreflight,
   stateLockPathFor,
   statePathFor,
@@ -181,6 +193,55 @@ function liveAccountingIdentity(config, {
   }, config, { newRiskEnabled });
 }
 
+function pausedTopupAccountingIdentity(config, {
+  availableReserveAtto = '0',
+  epochCount = 4,
+  payoutCount = 3,
+  reserveOverrides = {},
+} = {}) {
+  return assertLiveAccountingIdentity({
+    reserveReadback: {
+      treasury: config.expected.treasuryAddress,
+      current_platform_fee_bps: 200,
+      payout_protocol_version: PAYOUT_PROTOCOL_VERSION,
+      payouts_enabled: true,
+      new_risk_enabled: false,
+      player_liability_atto: '200000000000000000',
+      accrued_platform_fees_atto: '0',
+      reserved_platform_fees_atto: '0',
+      funded_platform_fees_atto: '0',
+      withdrawn_platform_fees_atto: '0',
+      available_reserve_atto: availableReserveAtto,
+      committed_reserve_atto: '600000000000000000',
+      required_available_reserve_atto: '0',
+      reserved_player_payouts_atto: '200000000000000000',
+      max_payout_attempts: 3,
+      prepare_retries_capped: false,
+      retry_delay_seconds: 3600,
+      ...reserveOverrides,
+    },
+    epochPage: accountingPage('epoch_ids', epochCount),
+    payoutPage: accountingPage('payouts', payoutCount),
+  }, config, { newRiskEnabled: false });
+}
+
+function reserveTopupIdentityFor(config, options = {}) {
+  const accounting = pausedTopupAccountingIdentity(config, options);
+  const reserve = accounting.reserve;
+  const contractBalanceAtto = (
+    BigInt(reserve.player_liability_atto)
+    + BigInt(reserve.accrued_platform_fees_atto)
+    + BigInt(reserve.reserved_platform_fees_atto)
+    + BigInt(reserve.available_reserve_atto)
+    + BigInt(reserve.committed_reserve_atto)
+  ).toString();
+  const identity = { accounting, contractBalanceAtto };
+  return normalizeReserveTopupIdentity({
+    ...identity,
+    sha256: sha256(stableStringify(identity)),
+  });
+}
+
 function accountingPage(itemsField, total) {
   const count = BigInt(total);
   return {
@@ -244,12 +305,15 @@ function evmSubmissionReceipt(evmTransactionHash, overrides = {}) {
     blockHash: BLOCK_HASH,
     blockNumber: '0x2a',
     logIndex: '0x0',
+    transactionIndex: '0x0',
+    removed: false,
   };
   return {
     transactionHash: evmTransactionHash,
     status: '0x1',
     blockHash: BLOCK_HASH,
     blockNumber: '0x2a',
+    transactionIndex: '0x0',
     logs: [log],
     ...overrides,
   };
@@ -264,6 +328,9 @@ async function signedReplayFixture(value = 0n, validUntilOverride, action = 'pau
       factoryBinderAddress: REPLAY_WALLET.address,
     },
     operator: { finalityRetries: 2, finalityIntervalMs: 100 },
+    ...(action === 'topup'
+      ? { reserve: { initialFundingAtto: RESERVE_TOPUP_ATTO.toString() } }
+      : {}),
   }));
   const state = { contractAddress: CONTRACT };
   const nowSeconds = Math.floor(Date.now() / 1_000);
@@ -309,7 +376,12 @@ async function signedReplayFixture(value = 0n, validUntilOverride, action = 'pau
           resumeAccountingIdentity: accountingIdentity,
           preparedFromStage: ACTIVATION_TERMINAL_STAGE,
         }
-        : { pauseAccountingIdentity: accountingIdentity }),
+        : action === 'topup'
+          ? {
+            topupIdentity: reserveTopupIdentityFor(config),
+            preparedFromStage: ACTIVATION_TERMINAL_STAGE,
+          }
+          : { pauseAccountingIdentity: accountingIdentity }),
       transactionHash: null,
     },
   };
@@ -336,6 +408,7 @@ function plannedInnerData(action, config, source, overrides = {}) {
   }
   const method = overrides.method ?? {
     fund: 'fund_delivery_reserve',
+    topup: 'fund_delivery_reserve',
     activate: 'activate_payouts',
     pause: 'pause_new_risk',
     resume: 'resume_new_risk',
@@ -569,6 +642,8 @@ test('activation keeps risk paused until the explicit durable resume action', ()
   assert.doesNotMatch(help, /activate-pause/i);
   assert.match(help, /harness\.mjs resume --config/i);
   assert.match(help, /owner-only.*PAYOUTS_ACTIVE_RISK_PAUSED/i);
+  assert.match(help, /harness\.mjs topup --config/i);
+  assert.match(help, /one reviewed post-activation 0\.6 GEN/i);
 
   const source = readFileSync(
     new URL('../../contracts/LiquidityArenaV8.release.py', import.meta.url),
@@ -1239,6 +1314,331 @@ test('pause readback accepts live canary accounting but enforces every cross-vie
   assert.equal(verified.accounting.reserve.player_liability_atto, '100');
 });
 
+test('post-activation reserve top-up is fixed to 0.6 GEN and requires a live paused minimum', () => {
+  const config = normalizeConfig(rawConfig({
+    reserve: { initialFundingAtto: RESERVE_TOPUP_ATTO.toString() },
+  }));
+  assert.equal(reviewedReserveTopupAtto(config), RESERVE_TOPUP_ATTO.toString());
+  assert.throws(
+    () => reviewedReserveTopupAtto(normalizeConfig(rawConfig())),
+    /safety maximum|must be exactly 600000000000000000/i,
+  );
+
+  const before = reserveTopupIdentityFor(config);
+  assert.doesNotThrow(() => assertExactReserveTopupIdentity(before, before));
+  const dynamicPost = pausedTopupAccountingIdentity(config, {
+    availableReserveAtto: RESERVE_TOPUP_ATTO.toString(),
+    epochCount: 5,
+    payoutCount: 4,
+    reserveOverrides: {
+      player_liability_atto: '100000000000000000',
+      reserved_player_payouts_atto: '100000000000000000',
+      committed_reserve_atto: '500000000000000000',
+    },
+  });
+  const postcondition = assertReserveTopupPostcondition(dynamicPost);
+  assert.equal(
+    postcondition.minimumAvailableReserveAtto,
+    RESERVE_TOPUP_ATTO.toString(),
+  );
+  assert.equal(postcondition.accounting.epochCount, '5');
+  assert.throws(() => assertReserveTopupPostcondition(
+    pausedTopupAccountingIdentity(config, {
+      availableReserveAtto: (RESERVE_TOPUP_ATTO - 1n).toString(),
+    }),
+  ), /below the reviewed 600000000000000000 minimum/i);
+  assert.throws(() => assertReserveTopupPostcondition(
+    liveAccountingIdentity(config, { newRiskEnabled: true }),
+  ), /payout-on risk-paused/i);
+});
+
+test('reserve top-up live readback binds exact paused code, schema, accounting, and EVM balance', async () => {
+  const source = 'reviewed active top-up V8 source\n';
+  const config = normalizeConfig(rawConfig({
+    sourceSha256: sha256(source),
+    reserve: { initialFundingAtto: RESERVE_TOPUP_ATTO.toString() },
+  }));
+  const expected = reserveTopupIdentityFor(config);
+  const reader = pauseReadbackReader(config, source, expected.accounting, {
+    evmRequest: async (method, params) => {
+      assert.equal(method, 'eth_getBalance');
+      assert.deepEqual(params, [CONTRACT, 'latest']);
+      return `0x${BigInt(expected.contractBalanceAtto).toString(16)}`;
+    },
+  });
+  const readback = await readAndVerifyReserveTopupState(
+    reader,
+    CONTRACT,
+    { source },
+    config,
+  );
+  assert.deepEqual(readback.topupIdentity, expected);
+
+  await assert.rejects(() => readAndVerifyReserveTopupState({
+    ...reader,
+    evmRequest: async () => `0x${(BigInt(expected.contractBalanceAtto) + 1n).toString(16)}`,
+  }, CONTRACT, { source }, config), /complete V8 accounting ledger/i);
+});
+
+test('reserve top-up dry-run and PREPARED journal are paused-only, snapshot-bound, and one-time', async () => {
+  const source = 'reviewed top-up preparation V8 source\n';
+  const config = normalizeConfig(rawConfig({
+    sourceSha256: sha256(source),
+    reserve: { initialFundingAtto: RESERVE_TOPUP_ATTO.toString() },
+  }));
+  const availableBefore = 100_000_000_000_000_000n;
+  const before = reserveTopupIdentityFor(config, {
+    availableReserveAtto: availableBefore.toString(),
+  });
+  const reader = pauseReadbackReader(config, source, before.accounting, {
+    network: { alias: BRADBURY_ALIAS, chainId: BRADBURY_CHAIN_ID },
+    evmRequest: async (method, params) => {
+      if (method === 'eth_getBalance' && params[0] === CONTRACT) {
+        return `0x${BigInt(before.contractBalanceAtto).toString(16)}`;
+      }
+      if (method === 'eth_getTransactionCount') return '0x7';
+      if (method === 'eth_getBalance' && params[0] === config.expected.ownerAddress) {
+        return `0x${(RESERVE_TOPUP_ATTO + MAX_TRANSACTION_GAS_COST_ATTO).toString(16)}`;
+      }
+      throw new Error(`unexpected EVM request ${method}`);
+    },
+  });
+  const root = mkdtempSync(join(tmpdir(), 'bradbury-v8-topup-prepare-'));
+  const statePath = join(root, 'state.json');
+  const active = writeStateAtomic(statePath, {
+    ...newState(config),
+    stage: ACTIVATION_TERMINAL_STAGE,
+    contractAddress: CONTRACT,
+  });
+  const context = {
+    config,
+    configPath: join(root, 'config.json'),
+    statePath,
+    state: active,
+    reader,
+    local: { source, sourceHash: sha256(source) },
+  };
+  const plan = await reserveTopupAction(context, { broadcast: false });
+  assert.equal(plan.dryRun, true);
+  assert.equal(plan.action, 'topup');
+  assert.equal(plan.topupAmountAtto, RESERVE_TOPUP_ATTO.toString());
+  assert.equal(plan.availableReserveBeforeAtto, availableBefore.toString());
+  assert.equal(plan.minimumAvailableReserveAfterAtto, RESERVE_TOPUP_ATTO.toString());
+  assert.equal(
+    plan.projectedAvailableReserveAfterAtto,
+    (availableBefore + RESERVE_TOPUP_ATTO).toString(),
+  );
+  assert.equal(plan.projectionIsAtomicGuarantee, false);
+  assert.equal(plan.contractBalanceBeforeAtto, before.contractBalanceAtto);
+  assert.equal(
+    plan.projectedContractBalanceAfterAtto,
+    (BigInt(before.contractBalanceAtto) + RESERVE_TOPUP_ATTO).toString(),
+  );
+  assert.equal(plan.preTopupIdentitySha256, before.sha256);
+  assert.equal(plan.ownerAddress, config.expected.ownerAddress);
+  assert.equal(plan.ownerNonce, '7');
+  assert.equal(plan.payoutsEnabled, true);
+  assert.equal(plan.newRiskEnabled, false);
+  assert.equal(
+    plan.requiredWorstCaseOwnerBalanceAtto,
+    (RESERVE_TOPUP_ATTO + MAX_TRANSACTION_GAS_COST_ATTO).toString(),
+  );
+  assert.equal(loadState(statePath, config).stage, ACTIVATION_TERMINAL_STAGE);
+
+  const prepared = prepareOperation(statePath, active, 'topup', {
+    topupIdentity: before,
+  });
+  assert.equal(prepared.stage, 'RESERVE_TOPUP_PREPARED');
+  assert.equal(prepared.operations.topup.status, 'PREPARED');
+  assert.equal(prepared.operations.topup.preparedFromStage, ACTIVATION_TERMINAL_STAGE);
+  assert.equal(
+    prepared.operations.topup.topupIdentity.accounting.reserve.new_risk_enabled,
+    false,
+  );
+  assert.deepEqual(prepared.operations.topup.topupIdentity, before);
+  assert.equal(prepareOperation(statePath, prepared, 'topup', {
+    topupIdentity: before,
+  }), prepared);
+
+  const changedBefore = reserveTopupIdentityFor(config, {
+    availableReserveAtto: RESERVE_TOPUP_ATTO.toString(),
+  });
+  assert.throws(() => prepareOperation(statePath, prepared, 'topup', {
+    topupIdentity: changedBefore,
+  }), /risk-paused state below the reviewed reserve minimum|pre-top-up identity continuity/i);
+  assert.throws(() => prepareOperation(statePath, {
+    ...active,
+    stage: RISK_ACTIVE_STAGE,
+  }, 'topup', { topupIdentity: before }), /allowed only from PAYOUTS_ACTIVE_RISK_PAUSED/i);
+  await assert.rejects(() => reserveTopupAction({
+    ...context,
+    state: { ...active, stage: RISK_ACTIVE_STAGE },
+  }, { broadcast: false }), /allowed only from PAYOUTS_ACTIVE_RISK_PAUSED/i);
+  await assert.rejects(() => reserveTopupAction({
+    ...context,
+    state: {
+      ...active,
+      operations: { topup: { status: 'FINALIZED', transactionHash: GEN_HASH } },
+    },
+  }, { broadcast: false }), /already recorded; refuse duplicate/i);
+
+  const readiness = await readReserveTopupOwnerReadiness(reader, config);
+  assert.equal(readiness.latestNonce, '7');
+  assert.equal(readiness.pendingNonce, '7');
+  await assert.rejects(() => readReserveTopupOwnerReadiness({
+    evmRequest: async (method, params) => {
+      if (method === 'eth_getTransactionCount') {
+        return params[1] === 'latest' ? '0x7' : '0x8';
+      }
+      return '0xffffffffffffffff';
+    },
+  }, config), /external pending EVM transaction/i);
+  await assert.rejects(() => readReserveTopupOwnerReadiness({
+    evmRequest: async (method) => (
+      method === 'eth_getBalance'
+        ? `0x${(RESERVE_TOPUP_ATTO - 1n).toString(16)}`
+        : '0x7'
+    ),
+  }, config), /cannot cover exact 0\.6 GEN plus/i);
+});
+
+test('clean unsigned top-up PREPARED refreshes atomically or closes with no-transfer proof', async () => {
+  const source = 'reviewed unsigned top-up refresh source\n';
+  const config = normalizeConfig(rawConfig({
+    sourceSha256: sha256(source),
+    reserve: { initialFundingAtto: RESERVE_TOPUP_ATTO.toString() },
+  }));
+  const root = mkdtempSync(join(tmpdir(), 'bradbury-v8-topup-refresh-'));
+  const statePath = join(root, 'state.json');
+  const originalIdentity = reserveTopupIdentityFor(config, {
+    availableReserveAtto: '100000000000000000',
+  });
+  const refreshedIdentity = reserveTopupIdentityFor(config, {
+    availableReserveAtto: '200000000000000000',
+    epochCount: 5,
+    payoutCount: 4,
+  });
+  const base = writeStateAtomic(statePath, {
+    ...newState(config),
+    stage: ACTIVATION_TERMINAL_STAGE,
+    contractAddress: CONTRACT,
+  });
+  const prepared = prepareOperation(statePath, base, 'topup', {
+    topupIdentity: originalIdentity,
+  });
+  const originalNonce = prepared.operations.topup.nonce;
+  assert.equal(assertCleanUnsignedTopupPreparation(prepared).nonce, originalNonce);
+
+  const ownerLock = acquireOwnerLock(config);
+  const stateLock = acquireStateLock(statePath);
+  try {
+    const context = {
+      config,
+      statePath,
+      state: prepared,
+      lockToken: stateLock.token,
+      ownerLockToken: ownerLock.token,
+    };
+    const refresh = refreshCleanUnsignedTopupPreparation(context, refreshedIdentity);
+    assert.equal(refresh.refreshed, true);
+    assert.notEqual(refresh.state.operations.topup.nonce, originalNonce);
+    assert.deepEqual(refresh.state.operations.topup.topupIdentity, refreshedIdentity);
+    assert.equal(
+      refresh.state.operations.topup.preparedRefreshEvidence.previousNonce,
+      originalNonce,
+    );
+    assert.equal(
+      refresh.state.operations.topup.preparedRefreshEvidence.previousTopupIdentitySha256,
+      originalIdentity.sha256,
+    );
+    assert.equal(refresh.state.operations.topup.preparedRefreshEvidence.refreshSequence, '1');
+    assert.equal(
+      assertCleanUnsignedTopupPreparation(refresh.state).nonce,
+      refresh.state.operations.topup.nonce,
+    );
+    assert.deepEqual(loadState(statePath, config), refresh.state);
+
+    const exactPersistedBytes = readFileSync(statePath, 'utf8');
+    for (const [field, value] of [
+      ['signedEvmTransaction', '0x02'],
+      ['evmTransactionHash', EVM_HASH],
+      ['signedAt', new Date().toISOString()],
+      ['broadcastEvidence', { submitted: true }],
+      ['transactionHash', GEN_HASH],
+    ]) {
+      const tampered = {
+        ...refresh.state,
+        operations: {
+          ...refresh.state.operations,
+          topup: { ...refresh.state.operations.topup, [field]: value },
+        },
+      };
+      assert.throws(
+        () => refreshCleanUnsignedTopupPreparation(
+          { ...context, state: tampered },
+          reserveTopupIdentityFor(config, { availableReserveAtto: '300000000000000000' }),
+        ),
+        /not one exact clean unsigned PREPARED record|clean unsigned top-up PREPARED fields/i,
+        `${field} must prohibit refresh`,
+      );
+      await assert.rejects(
+        () => reserveTopupAction({ ...context, state: tampered }, { broadcast: true }),
+        /already recorded; refuse duplicate/i,
+        `${field} must prohibit no-transfer closure`,
+      );
+      assert.equal(readFileSync(statePath, 'utf8'), exactPersistedBytes);
+    }
+
+    const restoredIdentity = reserveTopupIdentityFor(config, {
+      availableReserveAtto: RESERVE_TOPUP_ATTO.toString(),
+      epochCount: 6,
+      payoutCount: 5,
+    });
+    let evmReads = 0;
+    const reader = pauseReadbackReader(config, source, restoredIdentity.accounting, {
+      evmRequest: async (method, params) => {
+        evmReads += 1;
+        assert.equal(method, 'eth_getBalance');
+        assert.deepEqual(params, [CONTRACT, 'latest']);
+        return `0x${BigInt(restoredIdentity.contractBalanceAtto).toString(16)}`;
+      },
+    });
+    const closed = await reserveTopupAction({
+      ...context,
+      state: refresh.state,
+      reader,
+      local: { source, sourceHash: sha256(source) },
+    }, { broadcast: true });
+    assert.equal(evmReads, 1);
+    assert.equal(closed.event, 'BRADBURY_V8_UNSIGNED_TOPUP_PREPARATION_CLOSED_NO_TRANSFER');
+    assert.equal(closed.transactionHash, null);
+    assert.equal(closed.transferSubmitted, false);
+    assert.equal(closed.replayProhibited, true);
+    assert.equal(closed.stage, ACTIVATION_TERMINAL_STAGE);
+    assert.equal(closed.payoutsEnabled, true);
+    assert.equal(closed.newRiskEnabled, false);
+    const persisted = loadState(statePath, config);
+    const operation = persisted.operations.topup;
+    assert.equal(operation.status, 'FAILED');
+    assert.equal(operation.transactionHash, null);
+    assert.equal(operation.replayProhibited, true);
+    assert.equal(operation.noTransferEvidence.transferSubmitted, false);
+    assert.equal(operation.noTransferEvidence.signedRawAbsent, true);
+    assert.equal(operation.noTransferEvidence.signedHashAbsent, true);
+    assert.equal(operation.noTransferEvidence.signedAtAbsent, true);
+    assert.equal(operation.noTransferEvidence.broadcastEvidenceAbsent, true);
+    assert.equal(Object.hasOwn(operation, 'signedEvmTransaction'), false);
+    assert.equal(Object.hasOwn(operation, 'evmTransactionHash'), false);
+    assert.equal(
+      operation.noTransferEvidence.evidenceSha256,
+      closed.noTransferEvidenceSha256,
+    );
+  } finally {
+    stateLock.release();
+    ownerLock.release();
+  }
+});
+
 test('signed raw EVM transaction and exact event binding are durable before SUBMITTED is legal', async () => {
   const fixture = await signedReplayFixture();
   const { config, operation } = fixture;
@@ -1540,6 +1940,7 @@ test('asynchronous CLI actions remain awaited inside the exclusive-lock lifetime
     'statusAction(context)',
     'deployAction(context, options)',
     'fundAction(context, options)',
+    'reserveTopupAction(context, options)',
     'activateAction(context, options)',
     'resumeAction(context, options)',
     'reconcileAction(context, options)',
@@ -1551,7 +1952,10 @@ test('asynchronous CLI actions remain awaited inside the exclusive-lock lifetime
 
 test('signer child independently authorizes the exact durable resume operation', () => {
   const source = readFileSync(new URL('./signer-child.mjs', import.meta.url), 'utf8');
-  assert.match(source, /'deploy', 'fund', 'activate', 'pause', 'resume'/);
+  assert.match(source, /'deploy', 'fund', 'topup', 'activate', 'pause', 'resume'/);
+  assert.match(source, /topup: 'RESERVE_TOPUP_PREPARED'/);
+  assert.match(source, /topup: 'fund_delivery_reserve'/);
+  assert.match(source, /if \(action === 'topup'\) assertCleanUnsignedTopupPreparation\(state\)/);
   assert.match(source, /resume: 'RESUME_PREPARED'/);
   assert.match(source, /resume: 'resume_new_risk'/);
   const signingHook = source.match(
@@ -1564,6 +1968,10 @@ test('signer child independently authorizes the exact durable resume operation',
   );
   assert.match(signingHook, /beforeFreshAccountPreflight,\s*signImpl: originalSign/s);
   assert.doesNotMatch(signingHook, /await readAndVerifyResumePreSignState[\s\S]*?originalSign/);
+  assert.match(
+    signingHook,
+    /options\.action === 'topup'.*?readAndVerifyReserveTopupPreSignState\(/s,
+  );
 });
 
 test('all platforms keep replayable state inside one protected ignored operational root', () => {
@@ -1867,6 +2275,360 @@ test('resume replay re-proves the exact paused snapshot before sending stored ow
     }),
   }), /pre-resume accounting identity continuity/i);
   assert.equal(staleSends, 0);
+});
+
+test('reserve top-up signed recovery uses immutable raw under fresh paused-state and nonce gates', async () => {
+  const fixture = await signedReplayFixture(
+    RESERVE_TOPUP_ATTO,
+    undefined,
+    'topup',
+  );
+  const {
+    config, operation, action, state, local,
+  } = fixture;
+  const gateRequest = ({ latest = '0x7', pending = '0x7', transaction = null } = {}) => (
+    async (method, params) => {
+      if (method === 'eth_getTransactionCount') {
+        assert.equal(params[0], config.expected.ownerAddress);
+        return params[1] === 'latest' ? latest : pending;
+      }
+      if (method === 'eth_getTransactionByHash') {
+        assert.deepEqual(params, [operation.evmTransactionHash]);
+        return transaction;
+      }
+      throw new Error(`unexpected EVM replay-gate request ${method}`);
+    }
+  );
+  let invalidOriginReceiptReads = 0;
+  await assert.rejects(() => reconcileEvmSubmission({
+    config,
+    operation: { ...operation, preparedFromStage: RISK_ACTIVE_STAGE },
+    action,
+    state,
+    local,
+    reader: {
+      evmReceipt: async () => { invalidOriginReceiptReads += 1; return null; },
+    },
+  }), /not derived from exact PAYOUTS_ACTIVE_RISK_PAUSED/i);
+  assert.equal(invalidOriginReceiptReads, 0);
+  let receiptCalls = 0;
+  let replayedRaw = null;
+  const driftedBelowMinimum = pausedTopupAccountingIdentity(config, {
+    availableReserveAtto: '200000000000000000',
+    epochCount: 8,
+    payoutCount: 7,
+    reserveOverrides: {
+      player_liability_atto: '250000000000000000',
+      reserved_player_payouts_atto: '250000000000000000',
+      committed_reserve_atto: '550000000000000000',
+    },
+  });
+  assert.notEqual(driftedBelowMinimum.sha256, operation.topupIdentity.accounting.sha256);
+  const evidence = await reconcileEvmSubmission({
+    config,
+    operation,
+    action,
+    state,
+    local,
+    broadcast: true,
+    sleepImpl: async () => {},
+    reader: pauseReadbackReader(config, local.source, driftedBelowMinimum, {
+      evmRequest: gateRequest(),
+      evmReceipt: async () => {
+        receiptCalls += 1;
+        return receiptCalls === 1
+          ? null
+          : evmSubmissionReceipt(operation.evmTransactionHash);
+      },
+      sendSignedEvmTransaction: async (raw) => {
+        replayedRaw = raw;
+        return operation.evmTransactionHash;
+      },
+    }),
+  });
+  assert.equal(replayedRaw, operation.signedEvmTransaction);
+  assert.equal(evidence.evmTransactionHash, operation.evmTransactionHash);
+  assert.equal(evidence.genlayerTransactionHash, GEN_HASH);
+
+  let restoredSends = 0;
+  let restoredNonceReads = 0;
+  const restored = reserveTopupIdentityFor(config, {
+    availableReserveAtto: RESERVE_TOPUP_ATTO.toString(),
+  });
+  await assert.rejects(() => reconcileEvmSubmission({
+    config,
+    operation,
+    action,
+    state,
+    local,
+    broadcast: true,
+    reader: pauseReadbackReader(config, local.source, restored.accounting, {
+      evmRequest: async () => { restoredNonceReads += 1; throw new Error('must not read nonce'); },
+      evmReceipt: async () => null,
+      sendSignedEvmTransaction: async () => { restoredSends += 1; },
+    }),
+  }), /manual review.*already at or above 0\.6 GEN/i);
+  assert.equal(restoredNonceReads, 0);
+  assert.equal(restoredSends, 0);
+
+  let activeFlagSends = 0;
+  await assert.rejects(() => reconcileEvmSubmission({
+    config,
+    operation,
+    action,
+    state,
+    local,
+    broadcast: true,
+    reader: pauseReadbackReader(config, local.source, liveAccountingIdentity(config), {
+      evmRequest: async () => { throw new Error('must not read nonce'); },
+      evmReceipt: async () => null,
+      sendSignedEvmTransaction: async () => { activeFlagSends += 1; },
+    }),
+  }), /new.risk|risk.paused|get_config readback/i);
+  assert.equal(activeFlagSends, 0);
+
+  let ambiguousSends = 0;
+  await assert.rejects(() => reconcileEvmSubmission({
+    config,
+    operation,
+    action,
+    state,
+    local,
+    broadcast: true,
+    reader: pauseReadbackReader(config, local.source, driftedBelowMinimum, {
+      evmRequest: gateRequest({ latest: '0x7', pending: '0x8' }),
+      evmReceipt: async () => null,
+      sendSignedEvmTransaction: async () => { ambiguousSends += 1; },
+    }),
+  }), /owner nonce is ambiguous without the exact transaction object/i);
+  assert.equal(ambiguousSends, 0);
+
+  const signed = Transaction.from(operation.signedEvmTransaction);
+  const exactPendingTransaction = {
+    hash: operation.evmTransactionHash,
+    from: config.expected.ownerAddress,
+    to: BRADBURY_CONSENSUS_ADDRESS,
+    chainId: `0x${BRADBURY_CHAIN_ID.toString(16)}`,
+    type: '0x0',
+    nonce: `0x${signed.nonce.toString(16)}`,
+    value: `0x${signed.value.toString(16)}`,
+    gas: `0x${signed.gasLimit.toString(16)}`,
+    gasPrice: `0x${signed.gasPrice.toString(16)}`,
+    input: signed.data,
+  };
+  let pendingReceiptCalls = 0;
+  let pendingSends = 0;
+  const pendingEvidence = await reconcileEvmSubmission({
+    config,
+    operation,
+    action,
+    state,
+    local,
+    broadcast: true,
+    sleepImpl: async () => {},
+    reader: pauseReadbackReader(config, local.source, driftedBelowMinimum, {
+      evmRequest: gateRequest({
+        latest: '0x7',
+        pending: '0x8',
+        transaction: exactPendingTransaction,
+      }),
+      evmReceipt: async () => {
+        pendingReceiptCalls += 1;
+        return pendingReceiptCalls === 1
+          ? null
+          : evmSubmissionReceipt(operation.evmTransactionHash);
+      },
+      sendSignedEvmTransaction: async () => { pendingSends += 1; },
+    }),
+  });
+  assert.equal(pendingSends, 0);
+  assert.equal(pendingReceiptCalls, 2);
+  assert.equal(pendingEvidence.evmTransactionHash, operation.evmTransactionHash);
+
+  const receiptWithoutSnapshotEquality = await reconcileEvmSubmission({
+    config,
+    operation,
+    action,
+    state,
+    local,
+    broadcast: true,
+    reader: {
+      evmReceipt: async () => evmSubmissionReceipt(operation.evmTransactionHash),
+    },
+  });
+  assert.equal(
+    receiptWithoutSnapshotEquality.evmTransactionHash,
+    operation.evmTransactionHash,
+  );
+
+  const expiredFixture = await signedReplayFixture(
+    RESERVE_TOPUP_ATTO,
+    BigInt(Math.floor(Date.now() / 1_000) - 1),
+    'topup',
+  );
+  let expiredSends = 0;
+  await assert.rejects(() => reconcileEvmSubmission({
+    config: expiredFixture.config,
+    operation: expiredFixture.operation,
+    action: expiredFixture.action,
+    state: expiredFixture.state,
+    local: expiredFixture.local,
+    broadcast: true,
+    reader: {
+      evmReceipt: async () => null,
+      evmRequest: async () => { throw new Error('expired raw must not reach replay gate'); },
+      sendSignedEvmTransaction: async () => { expiredSends += 1; },
+    },
+  }), /validity window is not the pinned one-hour Bradbury window/i);
+  assert.equal(expiredSends, 0);
+});
+
+test('paused reserve top-up tolerates finality interleavings but remains nonterminal below minimum', async () => {
+  const fixture = await signedReplayFixture(
+    RESERVE_TOPUP_ATTO,
+    undefined,
+    'topup',
+  );
+  const { config, local } = fixture;
+  const evmReceipt = evmSubmissionReceipt(fixture.operation.evmTransactionHash);
+  const operation = {
+    ...fixture.operation,
+    status: 'SUBMITTED',
+    transactionHash: GEN_HASH,
+    genlayerTransactionHash: GEN_HASH,
+    evmReceiptBlockHash: BLOCK_HASH,
+    evmReceiptBlockNumber: '0x2a',
+    evmReceiptEventTopic: NEW_TRANSACTION_TOPIC,
+    evmReceiptLogIndex: '0x0',
+  };
+  const signed = Transaction.from(operation.signedEvmTransaction);
+  const outerTransaction = {
+    hash: operation.evmTransactionHash,
+    from: config.expected.ownerAddress,
+    to: BRADBURY_CONSENSUS_ADDRESS,
+    chainId: `0x${BRADBURY_CHAIN_ID.toString(16)}`,
+    type: '0x0',
+    nonce: `0x${signed.nonce.toString(16)}`,
+    value: `0x${signed.value.toString(16)}`,
+    gas: `0x${signed.gasLimit.toString(16)}`,
+    gasPrice: `0x${signed.gasPrice.toString(16)}`,
+    input: signed.data,
+    blockHash: BLOCK_HASH,
+    blockNumber: '0x2a',
+    transactionIndex: '0x0',
+  };
+  const interleavedPostAccounting = pausedTopupAccountingIdentity(config, {
+    availableReserveAtto: '650000000000000000',
+    epochCount: 7,
+    payoutCount: 6,
+    reserveOverrides: {
+      player_liability_atto: '150000000000000000',
+      accrued_platform_fees_atto: '10000000000000000',
+      reserved_platform_fees_atto: '20000000000000000',
+      funded_platform_fees_atto: '30000000000000000',
+      withdrawn_platform_fees_atto: '5000000000000000',
+      committed_reserve_atto: '400000000000000000',
+      required_available_reserve_atto: '30000000000000000',
+      reserved_player_payouts_atto: '150000000000000000',
+    },
+  });
+  const consensusReceipt = finalizedReceipt({
+    sender: config.expected.ownerAddress,
+    value: RESERVE_TOPUP_ATTO.toString(),
+    txDataDecoded: {
+      type: 'call',
+      callData: { method: 'fund_delivery_reserve', args: [] },
+      leaderOnly: false,
+    },
+  });
+  const evmRequest = async (method, params) => {
+    if (method === 'eth_getTransactionReceipt') return evmReceipt;
+    if (method === 'eth_getTransactionByHash') return outerTransaction;
+    if (method === 'eth_getBlockByNumber' && params[0] === 'finalized') {
+      return { number: '0x2b', hash: `0x${'ef'.repeat(32)}`, transactions: [] };
+    }
+    if (method === 'eth_getBlockByNumber' && params[0] === '0x2a') {
+      return {
+        number: '0x2a',
+        hash: BLOCK_HASH,
+        transactions: [operation.evmTransactionHash],
+      };
+    }
+    throw new Error(`unexpected EVM request ${method}`);
+  };
+  const readerFor = (accounting) => pauseReadbackReader(
+    config,
+    local.source,
+    accounting,
+    {
+      waitFinalized: async () => consensusReceipt,
+      transaction: async () => consensusReceipt,
+      evmRequest,
+    },
+  );
+  const reader = readerFor(interleavedPostAccounting);
+  const exactFinality = await assertFinalizedCanonicalStoredEvmSubmission(
+    reader,
+    operation,
+    config,
+  );
+  assert.equal(exactFinality.finalizedBlockNumber, '0x2b');
+  assert.equal(exactFinality.transactionIndex, '0x0');
+
+  const root = mkdtempSync(join(tmpdir(), 'bradbury-v8-topup-finalize-'));
+  const statePath = join(root, 'state.json');
+  const state = writeStateAtomic(statePath, {
+    ...newState(config),
+    stage: 'RESERVE_TOPUP_SUBMITTED',
+    contractAddress: CONTRACT,
+    operations: { topup: operation },
+  });
+  const belowMinimumAccounting = pausedTopupAccountingIdentity(config, {
+    availableReserveAtto: (RESERVE_TOPUP_ATTO - 1n).toString(),
+    epochCount: 5,
+    payoutCount: 4,
+  });
+  await assert.rejects(() => finalizeReconciledOperation({
+    config,
+    statePath,
+    reader: readerFor(belowMinimumAccounting),
+    local: { ...local, sourceHash: sha256(local.source) },
+  }, state, 'topup'), /below the reviewed 600000000000000000 minimum/i);
+  const stillSubmitted = loadState(statePath, config);
+  assert.equal(stillSubmitted.stage, 'RESERVE_TOPUP_SUBMITTED');
+  assert.equal(stillSubmitted.operations.topup.status, 'SUBMITTED');
+
+  const result = await finalizeReconciledOperation({
+    config,
+    statePath,
+    reader,
+    local: { ...local, sourceHash: sha256(local.source) },
+  }, stillSubmitted, 'topup');
+  assert.equal(result.event, 'BRADBURY_V8_RESERVE_TOPUP_RECONCILED');
+  assert.equal(result.stage, ACTIVATION_TERMINAL_STAGE);
+  assert.equal(result.availableReserveAtto, '650000000000000000');
+  assert.equal(result.preTopupIdentitySha256, operation.topupIdentity.sha256);
+  assert.equal(result.postTopupAccountingSha256, interleavedPostAccounting.sha256);
+  assert.equal(result.payoutsEnabled, true);
+  assert.equal(result.newRiskEnabled, false);
+  assert.equal(result.evmFinalityVerified, true);
+  const persisted = loadState(statePath, config);
+  assert.equal(persisted.stage, ACTIVATION_TERMINAL_STAGE);
+  assert.equal(persisted.operations.topup.status, 'FINALIZED');
+  assert.equal(persisted.operations.topup.evmFinalityVerified, true);
+  assert.deepEqual(
+    persisted.operations.topup.topupPostAccountingIdentity,
+    interleavedPostAccounting,
+  );
+
+  await assert.rejects(() => assertFinalizedCanonicalStoredEvmSubmission({
+    evmRequest: async (method, params) => {
+      if (method === 'eth_getBlockByNumber' && params[0] === 'finalized') {
+        return { number: '0x29', hash: `0x${'ef'.repeat(32)}` };
+      }
+      return evmRequest(method, params);
+    },
+  }, operation, config), /has not reached Bradbury EVM finality/i);
 });
 
 test('raw replay and receipt mismatch or ambiguity refuse reconciliation', async () => {
