@@ -111,6 +111,18 @@ and, for finality lag, the receipt block/hash and finalized-head number. They le
 writes in that run. The CLI exits successfully only for one of these exact allowlisted outcomes
 with zero real failures, so the workflow still performs bounded history synchronization.
 
+After an exact finalized outer receipt is durably bound as `SUBMITTED`, the first successful inner
+status read can briefly return `UNKNOWN` while Bradbury indexes the new GenLayer transaction. Only
+the same invocation that received the fenced submission-bind acknowledgement may report
+`INNER_STATUS_INDEXING_PENDING`. That exact public outcome includes the inner and outer hashes,
+canonical receipt block identity, and a positive finalized-head number at or above the receipt
+block. It leaves the row `SUBMITTED`/`UNKNOWN`, performs no additional journal mutation, resend, or
+later write, and is the only inner-indexing delay for which the CLI exits successfully so history
+synchronization can still run. A rerun that still observes `UNKNOWN` is a hard
+`LIFECYCLE_UNKNOWN` blockage. A crash after the bind loses the in-memory acknowledgement and is
+therefore conservative: its next `UNKNOWN` is also hard. Transport failures, malformed statuses,
+and every other nonfinal result remain non-allowlisted.
+
 An unavailable or invalid finalized head, missing or conflicting exact transaction identity,
 nonce/hash mismatch, receipt or canonical-block drift, removed/conflicting event, or reorg remains
 a nonzero hard failure. A newly submitted inner GenLayer transaction may use up to 480 reads at

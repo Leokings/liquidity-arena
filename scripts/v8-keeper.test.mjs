@@ -847,6 +847,180 @@ test('durable outer pending stays SIGNED across fresh execution and authoritativ
   assert.equal(journal.calls.filter(({ method }) => method === 'transition').length, 0);
 });
 
+test('fresh finalized submission defers one exact UNKNOWN probe and a rerun fails closed', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  const innerTransactionHash = `0x${'9'.repeat(64)}`;
+  let signatureCalls = 0;
+  let broadcastCalls = 0;
+  let statusCalls = 0;
+  const operator = emptyExecutionOperator({
+    createSignedWrite: async (operation) => {
+      signatureCalls += 1;
+      return createTestSignedWrite(operation);
+    },
+    broadcastSignedWrite: async (operation, session) => {
+      broadcastCalls += 1;
+      const loaded = await session.loadSigned(operation.operationId);
+      return Object.freeze({
+        outcome: 'SUBMITTED',
+        transactionHash: innerTransactionHash,
+        submissionEvidence: durableSubmissionEvidence(
+          loaded.evidence,
+          innerTransactionHash,
+        ),
+      });
+    },
+    getTransactionStatus: async () => {
+      statusCalls += 1;
+      return 'UNKNOWN';
+    },
+  });
+  const options = {
+    config: config({ maxWritesPerRun: 5 }),
+    execute: true,
+    operator,
+    journalClient: journal.client,
+    nowEpochSeconds: NOW,
+    logger: () => {},
+    sleep: async () => {},
+    journalSessionOptions: {
+      setIntervalImpl: () => ({ unref() {} }),
+      clearIntervalImpl: () => {},
+    },
+  };
+
+  const fresh = await runV8KeeperOnce(options);
+  assert.equal(fresh.blocked, true);
+  assert.deepEqual(fresh.failures, []);
+  assert.equal(fresh.pending.length, 1);
+  assert.deepEqual(Object.keys(fresh.pending[0]).sort(), [
+    'epochEndTimestamp', 'finalizedHeadBlockNumber', 'logicalOperationId',
+    'operationId', 'outerTransactionHash', 'pendingReceipt', 'reason',
+    'receiptBlockHash', 'receiptBlockNumber', 'state', 'transactionHash', 'type',
+  ].sort());
+  assert.equal(fresh.pending[0].reason, 'INNER_STATUS_INDEXING_PENDING');
+  assert.equal(fresh.pending[0].state, 'SUBMITTED');
+  assert.equal(fresh.pending[0].pendingReceipt, true);
+  assert.equal(fresh.pending[0].transactionHash, innerTransactionHash);
+  assert.equal(fresh.pending[0].receiptBlockNumber, '18790587');
+  assert.equal(fresh.pending[0].finalizedHeadBlockNumber, '18790588');
+  assert.equal(isHealthyDurablePendingSummary(fresh), true);
+  assert.ok(fresh.skipped.every(
+    ({ reason }) => reason === 'BLOCKED_BY_NONTERMINAL_OPERATION',
+  ));
+  assert.doesNotMatch(JSON.stringify(fresh), /rawTransaction|privateSignedEvidence/);
+
+  const [operation] = [...journal.operations.values()];
+  assert.equal(operation.state, 'SUBMITTED');
+  assert.equal(operation.lifecycleStatus, 'UNKNOWN');
+  assert.equal(operation.transactionHash, innerTransactionHash);
+  const boundRevision = operation.revision;
+
+  const repeated = await runV8KeeperOnce(options);
+  assert.equal(repeated.blocked, true);
+  assert.deepEqual(repeated.failures, []);
+  assert.equal(repeated.actions.length, 0);
+  assert.equal(repeated.pending.length, 1);
+  assert.equal(repeated.pending[0].reason, 'LIFECYCLE_UNKNOWN');
+  assert.equal(repeated.pending[0].state, 'SUBMITTED');
+  assert.equal(repeated.pending[0].lifecycleStatus, 'UNKNOWN');
+  assert.equal(isHealthyDurablePendingSummary(repeated), false);
+  assert.equal(signatureCalls, 1, 'the indexing grace cannot authorize another signature');
+  assert.equal(broadcastCalls, 1, 'a SUBMITTED row is never rebroadcast');
+  assert.equal(statusCalls, 2);
+  assert.equal(operation.revision, boundRevision, 'UNKNOWN probing must not mutate the row');
+  assert.equal(journal.calls.filter(({ method }) => method === 'bindSubmission').length, 1);
+  assert.equal(journal.calls.filter(({ method }) => method === 'observe').length, 0);
+});
+
+test('SIGNED recovery gets one exact UNKNOWN indexing deferral and no replay grace', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  const innerTransactionHash = `0x${'8'.repeat(64)}`;
+  let signatureCalls = 0;
+  let broadcastCalls = 0;
+  let statusCalls = 0;
+  const operator = emptyExecutionOperator({
+    createSignedWrite: async (operation) => {
+      signatureCalls += 1;
+      return createTestSignedWrite(operation);
+    },
+    broadcastSignedWrite: async (operation, session) => {
+      broadcastCalls += 1;
+      const loaded = await session.loadSigned(operation.operationId);
+      if (broadcastCalls === 1) {
+        return Object.freeze({
+          outcome: 'PENDING',
+          pendingReason: 'OUTER_RECEIPT_PENDING',
+          outerTransactionHash: operation.outerTransactionHash,
+        });
+      }
+      return Object.freeze({
+        outcome: 'SUBMITTED',
+        transactionHash: innerTransactionHash,
+        submissionEvidence: durableSubmissionEvidence(
+          loaded.evidence,
+          innerTransactionHash,
+        ),
+      });
+    },
+    getTransactionStatus: async () => {
+      statusCalls += 1;
+      return 'UNKNOWN';
+    },
+  });
+  const options = {
+    config: config({ maxWritesPerRun: 5 }),
+    execute: true,
+    operator,
+    journalClient: journal.client,
+    nowEpochSeconds: NOW,
+    logger: () => {},
+    sleep: async () => {},
+    journalSessionOptions: {
+      setIntervalImpl: () => ({ unref() {} }),
+      clearIntervalImpl: () => {},
+    },
+  };
+
+  const signed = await runV8KeeperOnce(options);
+  assert.equal(signed.pending[0].reason, 'OUTER_RECEIPT_PENDING');
+  assert.equal(signed.pending[0].state, 'SIGNED');
+  assert.equal(statusCalls, 0);
+
+  const recovered = await runV8KeeperOnce(options);
+  assert.equal(recovered.blocked, true);
+  assert.deepEqual(recovered.failures, []);
+  assert.equal(recovered.actions.length, 0);
+  assert.equal(recovered.pending.length, 1);
+  assert.deepEqual(Object.keys(recovered.pending[0]).sort(), [
+    'attemptNumber', 'deploymentAlias', 'finalizedHeadBlockNumber',
+    'lifecycleStatus', 'logicalOperationId', 'method', 'operationId',
+    'outerTransactionHash', 'reason', 'receiptBlockHash', 'receiptBlockNumber',
+    'retryOfOperationId', 'state', 'subjectId', 'subjectType', 'transactionHash',
+  ].sort());
+  assert.equal(recovered.pending[0].reason, 'INNER_STATUS_INDEXING_PENDING');
+  assert.equal(recovered.pending[0].state, 'SUBMITTED');
+  assert.equal(recovered.pending[0].lifecycleStatus, 'UNKNOWN');
+  assert.equal(recovered.pending[0].transactionHash, innerTransactionHash);
+  assert.equal(isHealthyDurablePendingSummary(recovered), true);
+  assert.doesNotMatch(JSON.stringify(recovered), /rawTransaction|privateSignedEvidence/);
+
+  const [operation] = [...journal.operations.values()];
+  const boundRevision = operation.revision;
+  const repeated = await runV8KeeperOnce(options);
+  assert.equal(repeated.blocked, true);
+  assert.equal(repeated.pending[0].reason, 'LIFECYCLE_UNKNOWN');
+  assert.equal(isHealthyDurablePendingSummary(repeated), false);
+  assert.equal(signatureCalls, 1, 'recovery must never create a successor signature');
+  assert.equal(broadcastCalls, 2, 'only the exact persisted SIGNED bytes are replayed once');
+  assert.equal(statusCalls, 2);
+  assert.equal(operation.revision, boundRevision);
+  assert.equal(journal.calls.filter(({ method }) => method === 'bindSigned').length, 1);
+  assert.equal(journal.calls.filter(({ method }) => method === 'loadSigned').length, 2);
+  assert.equal(journal.calls.filter(({ method }) => method === 'bindSubmission').length, 1);
+  assert.equal(journal.calls.filter(({ method }) => method === 'observe').length, 0);
+});
+
 test('CLI succeeds only for exact allowlisted durable pending with zero real failures', async () => {
   const outerTransactionHash = `0x${'d'.repeat(64)}`;
   const healthy = Object.freeze({
@@ -921,6 +1095,68 @@ test('CLI succeeds only for exact allowlisted durable pending with zero real fai
     healthyRecovery,
   );
 
+  const innerTransactionHash = `0x${'9'.repeat(64)}`;
+  const innerReceiptBlockHash = `0x${'f'.repeat(64)}`;
+  const healthyInnerFresh = {
+    execute: true,
+    blocked: true,
+    failures: [],
+    pending: [{
+      operationId: recoveredIdentity.operationId,
+      logicalOperationId: recoveredIdentity.operationId,
+      type: 'CREATE',
+      epochEndTimestamp: NOW + 7_200,
+      transactionHash: innerTransactionHash,
+      state: 'SUBMITTED',
+      pendingReceipt: true,
+      reason: 'INNER_STATUS_INDEXING_PENDING',
+      outerTransactionHash,
+      receiptBlockHash: innerReceiptBlockHash,
+      receiptBlockNumber: '500',
+      finalizedHeadBlockNumber: '501',
+    }],
+  };
+  assert.equal(isHealthyDurablePendingSummary(healthyInnerFresh), true);
+  assert.equal(
+    await runV8KeeperCli(
+      ['--config', 'ignored.json', '--execute'],
+      dependenciesFor(healthyInnerFresh),
+    ),
+    healthyInnerFresh,
+  );
+
+  const healthyInnerRecovery = {
+    execute: true,
+    blocked: true,
+    failures: [],
+    pending: [{
+      operationId: recoveredIdentity.operationId,
+      logicalOperationId: recoveredIdentity.operationId,
+      attemptNumber: '1',
+      retryOfOperationId: null,
+      deploymentAlias: 'v8',
+      method: 'create_epoch',
+      subjectType: 'epoch',
+      subjectId: String(NOW + 7_200),
+      transactionHash: innerTransactionHash,
+      state: 'SUBMITTED',
+      lifecycleStatus: 'UNKNOWN',
+      reason: 'INNER_STATUS_INDEXING_PENDING',
+      outerTransactionHash,
+      receiptBlockHash: innerReceiptBlockHash,
+      receiptBlockNumber: '500',
+      finalizedHeadBlockNumber: '501',
+    }],
+  };
+  assert.equal(isHealthyDurablePendingSummary(healthyInnerRecovery), true);
+  assert.equal(
+    await runV8KeeperCli(
+      ['--config', 'ignored.json', '--execute'],
+      dependenciesFor(healthyInnerRecovery),
+    ),
+    healthyInnerRecovery,
+  );
+
   const missingIdentityEntry = { ...healthy.pending[0] };
   delete missingIdentityEntry.operationId;
   const falsePendingReceipt = {
@@ -949,6 +1185,82 @@ test('CLI succeeds only for exact allowlisted durable pending with zero real fai
     recoveryWithPendingReceipt,
     extraRecoveryField,
   ]) {
+    assert.equal(isHealthyDurablePendingSummary(adversarial), false);
+    await assert.rejects(
+      runV8KeeperCli(['--config', 'ignored.json', '--execute'], dependenciesFor(adversarial)),
+      (error) => error.code === 'RUN_BLOCKED',
+    );
+  }
+
+  const innerAdversarial = [
+    {
+      ...healthyInnerFresh,
+      pending: [{ ...healthyInnerFresh.pending[0], pendingReceipt: false }],
+    },
+    {
+      ...healthyInnerFresh,
+      pending: [{ ...healthyInnerFresh.pending[0], state: 'SIGNED' }],
+    },
+    {
+      ...healthyInnerFresh,
+      pending: [{ ...healthyInnerFresh.pending[0], lifecycleStatus: 'UNKNOWN' }],
+    },
+    {
+      ...healthyInnerFresh,
+      pending: [{ ...healthyInnerFresh.pending[0], finalizedHeadBlockNumber: '0' }],
+    },
+    {
+      ...healthyInnerFresh,
+      pending: [{ ...healthyInnerFresh.pending[0], finalizedHeadBlockNumber: '499' }],
+    },
+    {
+      ...healthyInnerFresh,
+      pending: [{ ...healthyInnerFresh.pending[0], unexpected: 'public-looking' }],
+    },
+    {
+      ...healthyInnerFresh,
+      pending: [{ ...healthyInnerFresh.pending[0], transactionHash: undefined }],
+    },
+    {
+      ...healthyInnerFresh,
+      pending: [{ ...healthyInnerFresh.pending[0], outerTransactionHash: undefined }],
+    },
+    {
+      ...healthyInnerFresh,
+      pending: [{ ...healthyInnerFresh.pending[0], reason: 'LIFECYCLE_UNKNOWN' }],
+    },
+    {
+      ...healthyInnerRecovery,
+      pending: [{ ...healthyInnerRecovery.pending[0], pendingReceipt: true }],
+    },
+    {
+      ...healthyInnerRecovery,
+      pending: [{ ...healthyInnerRecovery.pending[0], lifecycleStatus: null }],
+    },
+    {
+      ...healthyInnerRecovery,
+      pending: [{ ...healthyInnerRecovery.pending[0], lifecycleStatus: 'PENDING' }],
+    },
+    {
+      ...healthyInnerRecovery,
+      pending: [{ ...healthyInnerRecovery.pending[0], state: 'SIGNED' }],
+    },
+    {
+      ...healthyInnerRecovery,
+      pending: [{ ...healthyInnerRecovery.pending[0], finalizedHeadBlockNumber: '499' }],
+    },
+    {
+      ...healthyInnerRecovery,
+      pending: [{ ...healthyInnerRecovery.pending[0], unexpected: 'public-looking' }],
+    },
+  ];
+  const innerMissingLogicalIdentity = { ...healthyInnerRecovery.pending[0] };
+  delete innerMissingLogicalIdentity.logicalOperationId;
+  innerAdversarial.push({
+    ...healthyInnerRecovery,
+    pending: [innerMissingLogicalIdentity],
+  });
+  for (const adversarial of innerAdversarial) {
     assert.equal(isHealthyDurablePendingSummary(adversarial), false);
     await assert.rejects(
       runV8KeeperCli(['--config', 'ignored.json', '--execute'], dependenciesFor(adversarial)),
