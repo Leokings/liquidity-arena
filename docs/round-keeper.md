@@ -103,7 +103,17 @@ Recovery rules:
 
 Scheduled recovery performs a bounded live probe and stops safely on a provider failure. It may
 replay an exact `SIGNED` raw envelope by its deterministic outer hash, but cannot construct or sign
-a replacement. A newly submitted transaction may use up to 480 reads at
+a replacement. When the exact canonical outer transaction is present but has no receipt, the run
+reports `OUTER_RECEIPT_PENDING`. When its canonical status-1 receipt is above a valid Bradbury
+finalized head, the run reports `OUTER_FINALITY_PENDING`. Both outcomes expose only the outer hash
+and, for finality lag, the receipt block/hash and finalized-head number. They leave the row
+`SIGNED`, keep raw bytes private, perform no journal transition or rebroadcast, and stop all later
+writes in that run. The CLI exits successfully only for one of these exact allowlisted outcomes
+with zero real failures, so the workflow still performs bounded history synchronization.
+
+An unavailable or invalid finalized head, missing or conflicting exact transaction identity,
+nonce/hash mismatch, receipt or canonical-block drift, removed/conflicting event, or reorg remains
+a nonzero hard failure. A newly submitted inner GenLayer transaction may use up to 480 reads at
 five-second intervals (about 40 minutes) to reach exact `ACCEPTED` or `FINALIZED`, beneath the
 keeper's hard 45-minute run deadline. Before signing any fresh write, the keeper reserves that
 budget plus the bounded post-state verification margin. After one fresh signature, every remaining

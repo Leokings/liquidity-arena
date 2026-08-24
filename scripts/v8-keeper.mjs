@@ -9,12 +9,15 @@ import { createClient } from 'genlayer-js';
 import { testnetBradbury } from 'genlayer-js/chains';
 
 import { createKeeperJournalClientFromEnvironment } from '../keeper-journal/client.mjs';
+import { keeperAttemptOperationId } from '../keeper-journal/schema.mjs';
 import {
   createAuthoritativeKeeperSession,
+  DURABLE_PENDING_REASONS,
   keeperActionForOperation,
   keeperOperationForAction,
   reconcileAuthoritativeOperation,
   recoverAuthoritativeOperations,
+  validateDurablePendingOutcome,
   validateRecoveredKeeperOperation,
 } from './authoritative-keeper-journal.mjs';
 import {
@@ -65,9 +68,145 @@ import {
 } from './v8-keeper-config.mjs';
 
 const PAYOUT_ID = /^[0-9a-f]{64}$/;
+const SUMMARY_OPERATION_ID = /^[0-9a-f]{64}$/;
+const SUMMARY_DECIMAL = /^(?:0|[1-9]\d*)$/;
 const ADDRESS = /^0x[0-9a-f]{40}$/;
 const TERMINAL_EPOCH_STATUSES = new Set(['RESOLVED', 'TIMED_OUT']);
 const PAYOUT_STATES = new Set(['PREPARING', 'DISPATCHED', 'FUNDED_IN_ESCROW', 'EOA_WITHDRAWN']);
+const FRESH_EPOCH_PENDING_TYPES = new Set(['CREATE', 'RESOLVE', 'TIMEOUT']);
+const FRESH_PAYOUT_PENDING_TYPES = new Set([
+  'RETRY_PREPARE', 'DISPATCH', 'RETRY_PAYOUT', 'CONFIRM', 'REFRESH',
+]);
+const RECOVERY_PENDING_METHOD_SUBJECTS = Object.freeze({
+  create_epoch: 'epoch',
+  resolve_epoch: 'epoch',
+  activate_timeout_refund: 'epoch',
+  retry_prepare_payout: 'payout',
+  dispatch_payout: 'payout',
+  retry_payout: 'payout',
+  confirm_payout: 'payout',
+  refresh_payout_withdrawal: 'payout',
+});
+
+function pendingOutcomeFromSummaryEntry(entry) {
+  const pendingReason = String(entry?.reason ?? '');
+  return {
+    outcome: 'PENDING',
+    pendingReason,
+    outerTransactionHash: entry?.outerTransactionHash,
+    ...(pendingReason === 'OUTER_FINALITY_PENDING'
+      ? {
+        receiptBlockHash: entry?.receiptBlockHash,
+        receiptBlockNumber: entry?.receiptBlockNumber,
+        finalizedHeadBlockNumber: entry?.finalizedHeadBlockNumber,
+      }
+      : {}),
+  };
+}
+
+function exactPendingEntryKeys(entry, expectedKeys) {
+  return entry && typeof entry === 'object' && !Array.isArray(entry)
+    && Object.keys(entry).sort().join(',') === [...expectedKeys].sort().join(',');
+}
+
+function pendingEvidenceKeys(reason) {
+  return reason === 'OUTER_RECEIPT_PENDING'
+    ? ['outerTransactionHash']
+    : ['outerTransactionHash', 'receiptBlockHash', 'receiptBlockNumber', 'finalizedHeadBlockNumber'];
+}
+
+function hasCanonicalPendingEvidence(entry) {
+  try {
+    validateDurablePendingOutcome(pendingOutcomeFromSummaryEntry(entry), {
+      state: entry.state,
+      transactionHash: entry.transactionHash,
+      outerTransactionHash: entry.outerTransactionHash,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isFreshDurablePendingEntry(entry) {
+  const reason = String(entry?.reason ?? '');
+  if (!DURABLE_PENDING_REASONS.includes(reason)) return false;
+  const hasEpoch = Object.prototype.hasOwnProperty.call(entry, 'epochEndTimestamp');
+  const hasPayout = Object.prototype.hasOwnProperty.call(entry, 'payoutId');
+  if (hasEpoch === hasPayout) return false;
+  const subjectKey = hasEpoch ? 'epochEndTimestamp' : 'payoutId';
+  if (!exactPendingEntryKeys(entry, [
+    'type', subjectKey, 'operationId', 'logicalOperationId', 'transactionHash',
+    'state', 'pendingReceipt', 'reason', ...pendingEvidenceKeys(reason),
+  ])) return false;
+  if (!SUMMARY_OPERATION_ID.test(entry.operationId)
+      || !SUMMARY_OPERATION_ID.test(entry.logicalOperationId)
+      || entry.transactionHash !== null
+      || entry.state !== 'SIGNED'
+      || entry.pendingReceipt !== true) return false;
+  if (hasEpoch) {
+    if (!FRESH_EPOCH_PENDING_TYPES.has(entry.type)
+        || !Number.isSafeInteger(entry.epochEndTimestamp)
+        || entry.epochEndTimestamp <= 0) return false;
+  } else if (!FRESH_PAYOUT_PENDING_TYPES.has(entry.type)
+      || typeof entry.payoutId !== 'string'
+      || !PAYOUT_ID.test(entry.payoutId)) return false;
+  return hasCanonicalPendingEvidence(entry);
+}
+
+function isRecoveryDurablePendingEntry(entry) {
+  const reason = String(entry?.reason ?? '');
+  if (!DURABLE_PENDING_REASONS.includes(reason)
+      || !exactPendingEntryKeys(entry, [
+        'operationId', 'logicalOperationId', 'attemptNumber', 'retryOfOperationId',
+        'deploymentAlias', 'method', 'subjectType', 'subjectId', 'transactionHash',
+        'state', 'lifecycleStatus', 'reason', ...pendingEvidenceKeys(reason),
+      ])
+      || !SUMMARY_OPERATION_ID.test(entry.operationId)
+      || !SUMMARY_OPERATION_ID.test(entry.logicalOperationId)
+      || typeof entry.attemptNumber !== 'string'
+      || !/^[1-9]\d{0,18}$/.test(entry.attemptNumber)
+      || entry.deploymentAlias !== 'v8'
+      || entry.transactionHash !== null
+      || entry.state !== 'SIGNED'
+      || entry.lifecycleStatus !== null) return false;
+  let expectedOperationId;
+  let expectedRetryOfOperationId = null;
+  try {
+    expectedOperationId = keeperAttemptOperationId(
+      entry.logicalOperationId,
+      entry.attemptNumber,
+    );
+    if (entry.attemptNumber !== '1') {
+      expectedRetryOfOperationId = keeperAttemptOperationId(
+        entry.logicalOperationId,
+        (BigInt(entry.attemptNumber) - 1n).toString(),
+      );
+    }
+  } catch {
+    return false;
+  }
+  if (entry.operationId !== expectedOperationId
+      || entry.retryOfOperationId !== expectedRetryOfOperationId
+      || RECOVERY_PENDING_METHOD_SUBJECTS[entry.method] !== entry.subjectType) return false;
+  if (entry.subjectType === 'epoch') {
+    if (typeof entry.subjectId !== 'string' || !SUMMARY_DECIMAL.test(entry.subjectId)) return false;
+    const epochEndTimestamp = Number(entry.subjectId);
+    if (!Number.isSafeInteger(epochEndTimestamp) || epochEndTimestamp <= 0) return false;
+  } else if (typeof entry.subjectId !== 'string' || !PAYOUT_ID.test(entry.subjectId)) {
+    return false;
+  }
+  return hasCanonicalPendingEvidence(entry);
+}
+
+export function isHealthyDurablePendingSummary(summary) {
+  if (summary?.blocked !== true || !Array.isArray(summary.pending)
+      || summary.pending.length < 1 || !Array.isArray(summary.failures)
+      || summary.failures.length !== 0) return false;
+  return summary.pending.every((entry) => (
+    isFreshDurablePendingEntry(entry) || isRecoveryDurablePendingEntry(entry)
+  ));
+}
 const EMPTY_OBJECTIVE_KEYS = Object.freeze([
   'allocated_atto',
   'allocated_not_funded_atto',
@@ -927,6 +1066,34 @@ async function executeAction(context, action, acceptedPredecessor = null) {
     operation,
     context.journalSession,
   );
+  if (submitted?.outcome === 'PENDING') {
+    const durablePending = validateDurablePendingOutcome(submitted, operation);
+    const {
+      outcome: _outcome,
+      pendingReason,
+      ...publicEvidence
+    } = durablePending;
+    context.logger({
+      event: 'V8_KEEPER_DURABLE_OUTER_PENDING',
+      operationId: operation.operationId,
+      logicalOperationId: operation.logicalOperationId,
+      method: operation.method,
+      subjectType: operation.subjectType,
+      subjectId: operation.subjectId,
+      reason: pendingReason,
+      ...publicEvidence,
+    });
+    return Object.freeze({
+      ...action,
+      operationId: operation.operationId,
+      logicalOperationId: operation.logicalOperationId,
+      transactionHash: null,
+      state: operation.state,
+      pendingReceipt: true,
+      reason: pendingReason,
+      ...publicEvidence,
+    });
+  }
   if (submitted?.outcome === 'OUTER_FAILURE') {
     const failed = await context.journalSession.bindOuterOutcome(
       operation.operationId,
@@ -1254,7 +1421,19 @@ export async function runV8KeeperCli(argv = process.argv.slice(2), {
   const config = loadConfig(parsed.configPath, { environment });
   const operator = createOperator({ config, environment });
   const summary = await runOnce({ config, execute: parsed.execute, operator, journalClient: parsed.execute ? createJournalClient(environment) : undefined });
-  if (summary?.blocked) throw new V8KeeperError('RUN_BLOCKED', 'V8 keeper stopped with an authoritative operation blocked', { summary });
+  const hasExactArrays = Array.isArray(summary?.failures) && Array.isArray(summary?.pending);
+  const hasRealFailures = hasExactArrays && summary.failures.length > 0;
+  const hasPending = hasExactArrays && summary.pending.length > 0;
+  const healthyDurablePending = isHealthyDurablePendingSummary(summary);
+  if (!hasExactArrays || typeof summary?.blocked !== 'boolean' || hasRealFailures
+      || (summary.blocked && !healthyDurablePending)
+      || (!summary.blocked && hasPending)) {
+    throw new V8KeeperError(
+      'RUN_BLOCKED',
+      'V8 keeper stopped with an unsafe or non-allowlisted authoritative blockage',
+      { summary },
+    );
+  }
   return summary;
 }
 

@@ -18,6 +18,10 @@ const LIFECYCLE_STATUSES = new Set([
 ]);
 const SUCCESSFUL_EXECUTION = 'FINISHED_WITH_RETURN';
 const FAILED_EXECUTION = 'FINISHED_WITH_ERROR';
+export const DURABLE_PENDING_REASONS = Object.freeze([
+  'OUTER_RECEIPT_PENDING',
+  'OUTER_FINALITY_PENDING',
+]);
 const RECEIPT_AMBIGUITY_CODES = Object.freeze({
   HASH: 'RECEIPT_HASH_MISMATCH',
   CONTRACT: 'RECEIPT_CONTRACT_MISMATCH',
@@ -55,6 +59,76 @@ export class AuthoritativeKeeperJournalError extends Error {
 
 function fail(code, message, details) {
   throw new AuthoritativeKeeperJournalError(code, message, details);
+}
+
+function exactDurablePendingHash(value, label) {
+  const normalized = String(value ?? '').toLowerCase();
+  if (!TRANSACTION_HASH.test(normalized) || normalized === `0x${'0'.repeat(64)}`) {
+    fail('KEEPER_JOURNAL_SCHEMA', `${label} is not an exact nonzero hash.`);
+  }
+  return normalized;
+}
+
+function exactDurablePendingBlock(value, label) {
+  const normalized = String(value ?? '');
+  if (!/^(?:0|[1-9]\d*)$/.test(normalized)) {
+    fail('KEEPER_JOURNAL_SCHEMA', `${label} is not a canonical decimal block number.`);
+  }
+  return normalized;
+}
+
+export function validateDurablePendingOutcome(value, operation) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    fail('KEEPER_JOURNAL_SCHEMA', 'Durable pending outcome is not an exact object.');
+  }
+  const pendingReason = String(value.pendingReason ?? '');
+  if (!DURABLE_PENDING_REASONS.includes(pendingReason) || value.outcome !== 'PENDING') {
+    fail('KEEPER_JOURNAL_SCHEMA', 'Durable pending outcome reason is not allowlisted.');
+  }
+  const expectedKeys = pendingReason === 'OUTER_RECEIPT_PENDING'
+    ? ['outcome', 'outerTransactionHash', 'pendingReason']
+    : [
+      'finalizedHeadBlockNumber', 'outcome', 'outerTransactionHash', 'pendingReason',
+      'receiptBlockHash', 'receiptBlockNumber',
+    ];
+  if (Object.keys(value).sort().join(',') !== expectedKeys.sort().join(',')) {
+    fail('KEEPER_JOURNAL_SCHEMA', 'Durable pending outcome contains non-public or unknown fields.');
+  }
+  const outerTransactionHash = exactDurablePendingHash(
+    value.outerTransactionHash,
+    'durable pending outer transaction hash',
+  );
+  if (!operation || operation.state !== 'SIGNED' || operation.transactionHash !== null
+      || String(operation.outerTransactionHash ?? '').toLowerCase() !== outerTransactionHash) {
+    fail('KEEPER_JOURNAL_SCHEMA', 'Durable pending outcome is not bound to the exact SIGNED row.');
+  }
+  if (pendingReason === 'OUTER_RECEIPT_PENDING') {
+    return Object.freeze({ outcome: 'PENDING', pendingReason, outerTransactionHash });
+  }
+  const receiptBlockHash = exactDurablePendingHash(
+    value.receiptBlockHash,
+    'durable pending receipt block hash',
+  );
+  const receiptBlockNumber = exactDurablePendingBlock(
+    value.receiptBlockNumber,
+    'durable pending receipt block number',
+  );
+  const finalizedHeadBlockNumber = exactDurablePendingBlock(
+    value.finalizedHeadBlockNumber,
+    'durable pending finalized head block number',
+  );
+  if (BigInt(finalizedHeadBlockNumber) === 0n
+      || BigInt(finalizedHeadBlockNumber) >= BigInt(receiptBlockNumber)) {
+    fail('KEEPER_JOURNAL_SCHEMA', 'Durable finality pending evidence is not below the receipt block.');
+  }
+  return Object.freeze({
+    outcome: 'PENDING',
+    pendingReason,
+    outerTransactionHash,
+    receiptBlockHash,
+    receiptBlockNumber,
+    finalizedHeadBlockNumber,
+  });
 }
 
 function exactAddress(value, label) {
@@ -637,6 +711,28 @@ export async function reconcileAuthoritativeOperation({
           replay.submissionEvidence,
         );
         operation = validateRecoveredKeeperOperation(bound?.operation || bound);
+      } else if (replay.outcome === 'PENDING') {
+        const durablePending = validateDurablePendingOutcome(replay, operation);
+        const {
+          outcome: _outcome,
+          pendingReason,
+          ...publicEvidence
+        } = durablePending;
+        logger({
+          event: 'KEEPER_DURABLE_OUTER_PENDING',
+          operationId: operation.operationId,
+          logicalOperationId: operation.logicalOperationId,
+          method: operation.method,
+          subjectType: operation.subjectType,
+          subjectId: operation.subjectId,
+          reason: pendingReason,
+          ...publicEvidence,
+        });
+        return Object.freeze({
+          verified: false,
+          operation,
+          pending: pending(operation, pendingReason, publicEvidence),
+        });
       } else if (replay.outcome === 'OUTER_FAILURE') {
         if (!replay.outerFailureEvidence || typeof replay.outerFailureEvidence !== 'object') {
           fail('KEEPER_JOURNAL_SCHEMA', 'Durable signed replay returned invalid outer failure evidence.');
