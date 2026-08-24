@@ -294,6 +294,8 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       operation.submittedAt = timestamp();
       operation.outerReceiptObservedAt = operation.submittedAt;
       operation.submissionEvidence = structuredClone(request.submissionEvidence);
+      operation.lifecycleStatus = 'UNKNOWN';
+      operation.lifecycleObservedAt = operation.submittedAt;
       operation.updatedAt = operation.submittedAt;
       operation.revision = String(Number(operation.revision) + 1);
       return { status: 'ok', action: 'BIND_SUBMISSION', ...responseOperation(operation) };

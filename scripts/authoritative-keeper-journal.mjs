@@ -22,6 +22,7 @@ export const DURABLE_PENDING_REASONS = Object.freeze([
   'OUTER_RECEIPT_PENDING',
   'OUTER_FINALITY_PENDING',
 ]);
+export const INNER_STATUS_INDEXING_PENDING_REASON = 'INNER_STATUS_INDEXING_PENDING';
 const RECEIPT_AMBIGUITY_CODES = Object.freeze({
   HASH: 'RECEIPT_HASH_MISMATCH',
   CONTRACT: 'RECEIPT_CONTRACT_MISMATCH',
@@ -124,6 +125,66 @@ export function validateDurablePendingOutcome(value, operation) {
   return Object.freeze({
     outcome: 'PENDING',
     pendingReason,
+    outerTransactionHash,
+    receiptBlockHash,
+    receiptBlockNumber,
+    finalizedHeadBlockNumber,
+  });
+}
+
+export function validateInnerIndexingPendingOutcome(value, operation) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+      || Object.keys(value).sort().join(',') !== [
+        'finalizedHeadBlockNumber', 'outcome', 'outerTransactionHash', 'pendingReason',
+        'receiptBlockHash', 'receiptBlockNumber', 'transactionHash',
+      ].sort().join(',')) {
+    fail('KEEPER_JOURNAL_SCHEMA', 'Inner indexing pending outcome is not an exact public object.');
+  }
+  const transactionHash = exactDurablePendingHash(
+    value.transactionHash,
+    'inner indexing pending transaction hash',
+  );
+  const outerTransactionHash = exactDurablePendingHash(
+    value.outerTransactionHash,
+    'inner indexing pending outer transaction hash',
+  );
+  const receiptBlockHash = exactDurablePendingHash(
+    value.receiptBlockHash,
+    'inner indexing pending receipt block hash',
+  );
+  const receiptBlockNumber = exactDurablePendingBlock(
+    value.receiptBlockNumber,
+    'inner indexing pending receipt block number',
+  );
+  const finalizedHeadBlockNumber = exactDurablePendingBlock(
+    value.finalizedHeadBlockNumber,
+    'inner indexing pending finalized head block number',
+  );
+  const submissionEvidence = operation?.submissionEvidence;
+  if (value.outcome !== 'PENDING'
+      || value.pendingReason !== INNER_STATUS_INDEXING_PENDING_REASON
+      || !operation || operation.state !== 'SUBMITTED'
+      || operation.lifecycleStatus !== 'UNKNOWN'
+      || String(operation.transactionHash ?? '').toLowerCase() !== transactionHash
+      || String(operation.outerTransactionHash ?? '').toLowerCase() !== outerTransactionHash
+      || !submissionEvidence || typeof submissionEvidence !== 'object'
+      || submissionEvidence.transactionHash !== transactionHash
+      || submissionEvidence.outerTransactionHash !== outerTransactionHash
+      || submissionEvidence.receiptBlockHash !== receiptBlockHash
+      || submissionEvidence.receiptBlockNumber !== receiptBlockNumber
+      || submissionEvidence.finalizedHeadBlockNumber !== finalizedHeadBlockNumber
+      || submissionEvidence.receiptIdentityVerified !== true
+      || BigInt(finalizedHeadBlockNumber) === 0n
+      || BigInt(finalizedHeadBlockNumber) < BigInt(receiptBlockNumber)) {
+    fail(
+      'KEEPER_JOURNAL_SCHEMA',
+      'Inner indexing pending outcome is not bound to an exact finalized SUBMITTED row.',
+    );
+  }
+  return Object.freeze({
+    outcome: 'PENDING',
+    pendingReason: INNER_STATUS_INDEXING_PENDING_REASON,
+    transactionHash,
     outerTransactionHash,
     receiptBlockHash,
     receiptBlockNumber,
@@ -587,6 +648,19 @@ function pending(operation, reason, details = {}) {
   });
 }
 
+function innerIndexingPendingOutcome(operation) {
+  const evidence = operation?.submissionEvidence;
+  return validateInnerIndexingPendingOutcome({
+    outcome: 'PENDING',
+    pendingReason: INNER_STATUS_INDEXING_PENDING_REASON,
+    transactionHash: operation?.transactionHash,
+    outerTransactionHash: operation?.outerTransactionHash,
+    receiptBlockHash: evidence?.receiptBlockHash,
+    receiptBlockNumber: evidence?.receiptBlockNumber,
+    finalizedHeadBlockNumber: evidence?.finalizedHeadBlockNumber,
+  }, operation);
+}
+
 function sameScope(operation, { deploymentAlias, contractAddress, signerAddress }) {
   return operation.deploymentAlias === deploymentAlias
     && operation.contractAddress === contractAddress.toLowerCase()
@@ -662,11 +736,13 @@ export async function reconcileAuthoritativeOperation({
   lifecycleAttempts,
   lifecycleIntervalMs,
   receiptPolicy,
+  submissionBoundThisInvocation: sourceSubmissionBoundThisInvocation = false,
   deadlineAtMs = Number.POSITIVE_INFINITY,
   clockMs = Date.now,
   logger = () => {},
 }) {
   let operation = validateRecoveredKeeperOperation(source);
+  let submissionBoundThisInvocation = sourceSubmissionBoundThisInvocation === true;
   if (!sameScope(operation, {
     deploymentAlias,
     contractAddress,
@@ -711,6 +787,16 @@ export async function reconcileAuthoritativeOperation({
           replay.submissionEvidence,
         );
         operation = validateRecoveredKeeperOperation(bound?.operation || bound);
+        if (operation.state !== 'SUBMITTED'
+            || operation.transactionHash !== String(replay.transactionHash).toLowerCase()
+            || operation.lifecycleStatus !== 'UNKNOWN'
+            || operation.submissionEvidence?.transactionHash !== operation.transactionHash) {
+          fail(
+            'KEEPER_JOURNAL_SCHEMA',
+            'Durable signed replay bind did not return the exact UNKNOWN SUBMITTED row.',
+          );
+        }
+        submissionBoundThisInvocation = true;
       } else if (replay.outcome === 'PENDING') {
         const durablePending = validateDurablePendingOutcome(replay, operation);
         const {
@@ -882,6 +968,32 @@ export async function reconcileAuthoritativeOperation({
           pending: pending(operation, 'LIFECYCLE_STATUS_UNAVAILABLE', {
             message: error instanceof Error ? error.message : String(error),
           }),
+        });
+      }
+      if (attempt === 1 && lifecycleStatus === 'UNKNOWN'
+          && submissionBoundThisInvocation) {
+        const deferred = innerIndexingPendingOutcome(operation);
+        const {
+          outcome: _outcome,
+          pendingReason,
+          transactionHash: _transactionHash,
+          ...publicEvidence
+        } = deferred;
+        logger({
+          event: 'KEEPER_INNER_STATUS_INDEXING_PENDING',
+          operationId: operation.operationId,
+          logicalOperationId: operation.logicalOperationId,
+          transactionHash: operation.transactionHash,
+          method: operation.method,
+          subjectType: operation.subjectType,
+          subjectId: operation.subjectId,
+          reason: pendingReason,
+          ...publicEvidence,
+        });
+        return Object.freeze({
+          verified: false,
+          operation,
+          pending: pending(operation, pendingReason, publicEvidence),
         });
       }
       if (lifecycleStatus !== operation.lifecycleStatus) {

@@ -13,11 +13,13 @@ import { keeperAttemptOperationId } from '../keeper-journal/schema.mjs';
 import {
   createAuthoritativeKeeperSession,
   DURABLE_PENDING_REASONS,
+  INNER_STATUS_INDEXING_PENDING_REASON,
   keeperActionForOperation,
   keeperOperationForAction,
   reconcileAuthoritativeOperation,
   recoverAuthoritativeOperations,
   validateDurablePendingOutcome,
+  validateInnerIndexingPendingOutcome,
   validateRecoveredKeeperOperation,
 } from './authoritative-keeper-journal.mjs';
 import {
@@ -104,6 +106,18 @@ function pendingOutcomeFromSummaryEntry(entry) {
   };
 }
 
+function innerIndexingOutcomeFromSummaryEntry(entry) {
+  return {
+    outcome: 'PENDING',
+    pendingReason: INNER_STATUS_INDEXING_PENDING_REASON,
+    transactionHash: entry?.transactionHash,
+    outerTransactionHash: entry?.outerTransactionHash,
+    receiptBlockHash: entry?.receiptBlockHash,
+    receiptBlockNumber: entry?.receiptBlockNumber,
+    finalizedHeadBlockNumber: entry?.finalizedHeadBlockNumber,
+  };
+}
+
 function exactPendingEntryKeys(entry, expectedKeys) {
   return entry && typeof entry === 'object' && !Array.isArray(entry)
     && Object.keys(entry).sort().join(',') === [...expectedKeys].sort().join(',');
@@ -115,12 +129,41 @@ function pendingEvidenceKeys(reason) {
     : ['outerTransactionHash', 'receiptBlockHash', 'receiptBlockNumber', 'finalizedHeadBlockNumber'];
 }
 
+const INNER_INDEXING_EVIDENCE_KEYS = Object.freeze([
+  'outerTransactionHash',
+  'receiptBlockHash',
+  'receiptBlockNumber',
+  'finalizedHeadBlockNumber',
+]);
+
 function hasCanonicalPendingEvidence(entry) {
   try {
     validateDurablePendingOutcome(pendingOutcomeFromSummaryEntry(entry), {
       state: entry.state,
       transactionHash: entry.transactionHash,
       outerTransactionHash: entry.outerTransactionHash,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasCanonicalInnerIndexingEvidence(entry) {
+  try {
+    validateInnerIndexingPendingOutcome(innerIndexingOutcomeFromSummaryEntry(entry), {
+      state: entry.state,
+      lifecycleStatus: entry.lifecycleStatus ?? 'UNKNOWN',
+      transactionHash: entry.transactionHash,
+      outerTransactionHash: entry.outerTransactionHash,
+      submissionEvidence: {
+        transactionHash: entry.transactionHash,
+        outerTransactionHash: entry.outerTransactionHash,
+        receiptBlockHash: entry.receiptBlockHash,
+        receiptBlockNumber: entry.receiptBlockNumber,
+        finalizedHeadBlockNumber: entry.finalizedHeadBlockNumber,
+        receiptIdentityVerified: true,
+      },
     });
     return true;
   } catch {
@@ -199,12 +242,82 @@ function isRecoveryDurablePendingEntry(entry) {
   return hasCanonicalPendingEvidence(entry);
 }
 
+function isFreshInnerIndexingPendingEntry(entry) {
+  if (entry?.reason !== INNER_STATUS_INDEXING_PENDING_REASON) return false;
+  const hasEpoch = Object.prototype.hasOwnProperty.call(entry, 'epochEndTimestamp');
+  const hasPayout = Object.prototype.hasOwnProperty.call(entry, 'payoutId');
+  if (hasEpoch === hasPayout) return false;
+  const subjectKey = hasEpoch ? 'epochEndTimestamp' : 'payoutId';
+  if (!exactPendingEntryKeys(entry, [
+    'type', subjectKey, 'operationId', 'logicalOperationId', 'transactionHash',
+    'state', 'pendingReceipt', 'reason', ...INNER_INDEXING_EVIDENCE_KEYS,
+  ])
+      || !SUMMARY_OPERATION_ID.test(entry.operationId)
+      || !SUMMARY_OPERATION_ID.test(entry.logicalOperationId)
+      || entry.state !== 'SUBMITTED'
+      || entry.pendingReceipt !== true) return false;
+  if (hasEpoch) {
+    if (!FRESH_EPOCH_PENDING_TYPES.has(entry.type)
+        || !Number.isSafeInteger(entry.epochEndTimestamp)
+        || entry.epochEndTimestamp <= 0) return false;
+  } else if (!FRESH_PAYOUT_PENDING_TYPES.has(entry.type)
+      || typeof entry.payoutId !== 'string'
+      || !PAYOUT_ID.test(entry.payoutId)) return false;
+  return hasCanonicalInnerIndexingEvidence(entry);
+}
+
+function isRecoveryInnerIndexingPendingEntry(entry) {
+  if (entry?.reason !== INNER_STATUS_INDEXING_PENDING_REASON
+      || !exactPendingEntryKeys(entry, [
+        'operationId', 'logicalOperationId', 'attemptNumber', 'retryOfOperationId',
+        'deploymentAlias', 'method', 'subjectType', 'subjectId', 'transactionHash',
+        'state', 'lifecycleStatus', 'reason', ...INNER_INDEXING_EVIDENCE_KEYS,
+      ])
+      || !SUMMARY_OPERATION_ID.test(entry.operationId)
+      || !SUMMARY_OPERATION_ID.test(entry.logicalOperationId)
+      || typeof entry.attemptNumber !== 'string'
+      || !/^[1-9]\d{0,18}$/.test(entry.attemptNumber)
+      || entry.deploymentAlias !== 'v8'
+      || entry.state !== 'SUBMITTED'
+      || entry.lifecycleStatus !== 'UNKNOWN') return false;
+  let expectedOperationId;
+  let expectedRetryOfOperationId = null;
+  try {
+    expectedOperationId = keeperAttemptOperationId(
+      entry.logicalOperationId,
+      entry.attemptNumber,
+    );
+    if (entry.attemptNumber !== '1') {
+      expectedRetryOfOperationId = keeperAttemptOperationId(
+        entry.logicalOperationId,
+        (BigInt(entry.attemptNumber) - 1n).toString(),
+      );
+    }
+  } catch {
+    return false;
+  }
+  if (entry.operationId !== expectedOperationId
+      || entry.retryOfOperationId !== expectedRetryOfOperationId
+      || RECOVERY_PENDING_METHOD_SUBJECTS[entry.method] !== entry.subjectType) return false;
+  if (entry.subjectType === 'epoch') {
+    if (typeof entry.subjectId !== 'string' || !SUMMARY_DECIMAL.test(entry.subjectId)) return false;
+    const epochEndTimestamp = Number(entry.subjectId);
+    if (!Number.isSafeInteger(epochEndTimestamp) || epochEndTimestamp <= 0) return false;
+  } else if (typeof entry.subjectId !== 'string' || !PAYOUT_ID.test(entry.subjectId)) {
+    return false;
+  }
+  return hasCanonicalInnerIndexingEvidence(entry);
+}
+
 export function isHealthyDurablePendingSummary(summary) {
   if (summary?.blocked !== true || !Array.isArray(summary.pending)
       || summary.pending.length < 1 || !Array.isArray(summary.failures)
       || summary.failures.length !== 0) return false;
   return summary.pending.every((entry) => (
-    isFreshDurablePendingEntry(entry) || isRecoveryDurablePendingEntry(entry)
+    isFreshDurablePendingEntry(entry)
+      || isRecoveryDurablePendingEntry(entry)
+      || isFreshInnerIndexingPendingEntry(entry)
+      || isRecoveryInnerIndexingPendingEntry(entry)
   ));
 }
 const EMPTY_OBJECTIVE_KEYS = Object.freeze([
@@ -1138,11 +1251,17 @@ async function executeAction(context, action, acceptedPredecessor = null) {
   );
   operation = validateRecoveredKeeperOperation(bound?.operation);
   if (operation.state !== 'SUBMITTED'
-      || operation.transactionHash !== String(transactionHash).toLowerCase()) {
+      || operation.transactionHash !== String(transactionHash).toLowerCase()
+      || operation.lifecycleStatus !== 'UNKNOWN'
+      || operation.submissionEvidence?.transactionHash !== operation.transactionHash) {
     fail('KEEPER_JOURNAL_IDENTITY', 'durable signed submission was not bound to its inner hash');
   }
   if (!/^0x[0-9a-f]{64}$/i.test(String(transactionHash || ''))) fail('TRANSACTION_HASH_NOT_DURABLE', 'write exited without a durable transaction hash');
-  const reconciled = await reconcileAuthoritativeOperation({ ...recoveryOptions(context), operation });
+  const reconciled = await reconcileAuthoritativeOperation({
+    ...recoveryOptions(context),
+    operation,
+    submissionBoundThisInvocation: true,
+  });
   if (reconciled.accepted) {
     context.logger({
       event: 'V8_KEEPER_ACTION_ACCEPTED_HANDOFF',
@@ -1156,6 +1275,32 @@ async function executeAction(context, action, acceptedPredecessor = null) {
       status: 'ACCEPTED',
       acceptedHandoff: true,
       operation: reconciled.operation,
+    });
+  }
+  if (!reconciled.verified
+      && reconciled.pending.reason === INNER_STATUS_INDEXING_PENDING_REASON) {
+    const indexingPending = validateInnerIndexingPendingOutcome({
+      outcome: 'PENDING',
+      pendingReason: reconciled.pending.reason,
+      transactionHash: reconciled.operation.transactionHash,
+      outerTransactionHash: reconciled.pending.outerTransactionHash,
+      receiptBlockHash: reconciled.pending.receiptBlockHash,
+      receiptBlockNumber: reconciled.pending.receiptBlockNumber,
+      finalizedHeadBlockNumber: reconciled.pending.finalizedHeadBlockNumber,
+    }, reconciled.operation);
+    const {
+      outcome: _outcome,
+      pendingReason,
+      ...publicEvidence
+    } = indexingPending;
+    return Object.freeze({
+      ...action,
+      operationId: reconciled.operation.operationId,
+      logicalOperationId: reconciled.operation.logicalOperationId,
+      state: reconciled.operation.state,
+      pendingReceipt: true,
+      reason: pendingReason,
+      ...publicEvidence,
     });
   }
   if (!reconciled.verified) return Object.freeze({ ...action, transactionHash, pendingReceipt: true, reason: reconciled.pending.reason });
