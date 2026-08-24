@@ -239,6 +239,143 @@ test('client validates successful response shapes instead of trusting arbitrary 
   );
 });
 
+test('BIND_SUBMISSION identity comparison ignores JSON key order but rejects changed evidence', async () => {
+  const contractAddress = '0xb2ae59ae641f571726ae81e30080f8c2192b15ef';
+  const subjectId = '1800014400';
+  const requestedOperation = {
+    deploymentAlias: 'v8',
+    chainId: '4221',
+    contractAddress,
+    method: 'create_epoch',
+    subjectType: 'epoch',
+    subjectId,
+    args: [subjectId],
+    valueAtto: '0',
+  };
+  const operationId = canonicalKeeperOperation(requestedOperation).operationId;
+  const transactionHash = `0x${'b'.repeat(64)}`;
+  const outerTransactionHash = `0x${'a'.repeat(64)}`;
+  const evidenceSha256 = 'd'.repeat(64);
+  const eventTopic = '0xdab9102861c7483a187584d6371d88316f005af507982ccf95c110879f3ed5a5';
+  const eventActivator = '0x3b940a5b4a762583453d9e9cf0981be0426a8e79';
+  const requestEvidence = Object.freeze({
+    transactionHash,
+    outerTransactionHash,
+    receiptBlockHash: `0x${'c'.repeat(64)}`,
+    receiptBlockNumber: '18790587',
+    finalizedHeadBlockNumber: '18790588',
+    eventTopic,
+    eventActivator,
+    logIndex: '0',
+    receiptIdentityVerified: true,
+    evidenceSha256,
+  });
+  const canonicalResponseEvidence = Object.freeze({
+    transactionHash,
+    outerTransactionHash,
+    receiptBlockHash: `0x${'c'.repeat(64)}`,
+    receiptBlockNumber: '18790587',
+    finalizedHeadBlockNumber: '18790588',
+    eventTopic,
+    logIndex: '0',
+    eventActivator,
+    receiptIdentityVerified: true,
+    evidenceSha256,
+  });
+  const operation = Object.freeze({
+    operationId,
+    logicalOperationId: operationId,
+    attemptNumber: '1',
+    retryOfOperationId: null,
+    deploymentAlias: 'v8',
+    network: 'bradbury',
+    chainId: '4221',
+    signerAddress: SIGNER,
+    contractAddress,
+    subjectType: 'epoch',
+    subjectId,
+    method: 'create_epoch',
+    args: [subjectId],
+    valueAtto: '0',
+    state: 'SUBMITTED',
+    submissionProtocol: 'BRADBURY_DURABLE_RAW_V1',
+    outerTransactionHash,
+    outerSenderNonce: '7',
+    signedEvidenceSha256: evidenceSha256,
+    signedAt: '2026-08-20T00:00:01.000Z',
+    signedTransactionEvidence: {
+      protocolVersion: 'BRADBURY_DURABLE_RAW_V1',
+      outerTransactionHash,
+      outerNonce: '7',
+      chainId: '4221',
+      signerAddress: SIGNER,
+      consensusAddress: '0x0112bf6e83497965a5fdd6dad1e447a6e004271d',
+      contractAddress,
+      method: 'create_epoch',
+      arguments: [subjectId],
+      valueAtto: '0',
+      gasLimit: '900000',
+      gasPriceWei: '200000000',
+      validUntil: '2000000000',
+      calldataSha256: 'e'.repeat(64),
+    },
+    outerReceiptObservedAt: '2026-08-20T00:00:02.000Z',
+    submissionEvidence: canonicalResponseEvidence,
+    outerOutcomeEvidence: null,
+    transactionHash,
+    lifecycleStatus: 'UNKNOWN',
+    lifecycleObservedAt: '2026-08-20T00:00:02.000Z',
+    pipelineSlot: 0,
+    handoffPredecessorOperationId: null,
+    acceptedAt: null,
+    acceptanceRevalidatedAt: null,
+    acceptanceEvidence: null,
+    prehashAbandonedAt: null,
+    prehashAbandonmentEvidence: null,
+    stateReasonCode: null,
+    quarantineReason: null,
+    preparedAt: '2026-08-20T00:00:00.000Z',
+    submittedAt: '2026-08-20T00:00:02.000Z',
+    finalizedAt: null,
+    verifiedAt: null,
+    updatedAt: '2026-08-20T00:00:02.000Z',
+    revision: '2',
+  });
+  const lease = { holderId: HOLDER, signerAddress: SIGNER, fencingToken: '1' };
+  const request = {
+    lease,
+    operationId,
+    transactionHash,
+    submissionEvidence: requestEvidence,
+    idempotencyKey: 'keeper:test:bind-order',
+  };
+  const responseFor = (responseOperation) => async () => new Response(JSON.stringify({
+    status: 'ok', action: 'BIND_SUBMISSION', operation: responseOperation,
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  const client = createKeeperJournalClient({
+    endpoint: 'https://example.test/api/keeper-journal',
+    secret: SECRET,
+    fetchImpl: responseFor(operation),
+  });
+  const result = await client.bindSubmission(request);
+  assert.equal(result.operation.transactionHash, transactionHash);
+
+  const changedEvidence = {
+    ...canonicalResponseEvidence,
+    eventActivator: '0x1111111111111111111111111111111111111111',
+  };
+  const changedClient = createKeeperJournalClient({
+    endpoint: 'https://example.test/api/keeper-journal',
+    secret: SECRET,
+    fetchImpl: responseFor({ ...operation, submissionEvidence: changedEvidence }),
+  });
+  await assert.rejects(
+    changedClient.bindSubmission(request),
+    (error) => error.code === 'KEEPER_JOURNAL_RESPONSE_IDENTITY',
+  );
+});
+
 test('PREPARE response can authorize only the exact newly fenced operation', async () => {
   const requestedOperation = {
     deploymentAlias: 'v8', chainId: '4221',

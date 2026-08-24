@@ -10,6 +10,11 @@ import {
 import { normalizeDurableSignedEvidence } from './signed-transaction.mjs';
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const SUBMISSION_EVIDENCE_KEYS = Object.freeze([
+  'transactionHash', 'outerTransactionHash', 'receiptBlockHash',
+  'receiptBlockNumber', 'finalizedHeadBlockNumber', 'eventTopic', 'logIndex',
+  'eventActivator', 'receiptIdentityVerified', 'evidenceSha256',
+]);
 
 export class KeeperJournalClientError extends Error {
   constructor(code, message, { statusCode = 0, cause } = {}) {
@@ -139,6 +144,21 @@ function exactResponseKeys(value, keys, label) {
   }
 }
 
+function sameExactScalarRecord(left, right, keys) {
+  if (left === null || right === null
+      || typeof left !== 'object' || typeof right !== 'object'
+      || Array.isArray(left) || Array.isArray(right)) {
+    return false;
+  }
+  const expectedKeys = [...keys].sort();
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return leftKeys.length === expectedKeys.length
+    && rightKeys.length === expectedKeys.length
+    && expectedKeys.every((key, index) => leftKeys[index] === key && rightKeys[index] === key)
+    && expectedKeys.every((key) => left[key] === right[key]);
+}
+
 function validatedLease(value, acquire) {
   exactResponseKeys(
     value,
@@ -226,11 +246,7 @@ function validatedOperation(value) {
     && /^[0-9a-f]{64}$/.test(signedTransactionEvidence.calldataSha256)
   );
   const validSubmissionEvidence = submissionEvidence === null || (
-    exactKeys(submissionEvidence, [
-      'transactionHash', 'outerTransactionHash', 'receiptBlockHash',
-      'receiptBlockNumber', 'finalizedHeadBlockNumber', 'eventTopic', 'logIndex', 'eventActivator',
-      'receiptIdentityVerified', 'evidenceSha256',
-    ])
+    exactKeys(submissionEvidence, SUBMISSION_EVIDENCE_KEYS)
     && submissionEvidence.transactionHash === value.transactionHash
     && submissionEvidence.outerTransactionHash === value.outerTransactionHash
     && /^0x[0-9a-f]{64}$/.test(submissionEvidence.receiptBlockHash)
@@ -952,8 +968,11 @@ export function createKeeperJournalClient({
       }, idempotencyKey);
       if (result.operation.operationId !== String(operationId).toLowerCase()
           || result.operation.transactionHash !== String(transactionHash).toLowerCase()
-          || JSON.stringify(result.operation.submissionEvidence)
-            !== JSON.stringify(submissionEvidence)) {
+          || !sameExactScalarRecord(
+            result.operation.submissionEvidence,
+            submissionEvidence,
+            SUBMISSION_EVIDENCE_KEYS,
+          )) {
         throw new KeeperJournalClientError('KEEPER_JOURNAL_RESPONSE_IDENTITY', 'Keeper journal submission response identity does not match the request.');
       }
       return result;
