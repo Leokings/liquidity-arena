@@ -657,7 +657,7 @@ test("clean CI installs both shared harness and nested EVM dependency locks", ()
   const rootPackage = JSON.parse(
     fs.readFileSync(path.join(repositoryRoot, "package.json"), "utf8"),
   );
-  assert.equal(rootPackage.devDependencies.ethers, "6.17.0");
+  assert.equal(rootPackage.dependencies.ethers, "6.17.0");
   assert.equal(rootPackage.dependencies["genlayer-js"], "1.1.8");
   assert.match(
     workflow,
