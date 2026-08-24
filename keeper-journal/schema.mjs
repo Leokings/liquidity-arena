@@ -8,9 +8,15 @@ import {
   KEEPER_JOURNAL_NETWORK,
 } from './config.mjs';
 import { KeeperJournalError } from './errors.mjs';
+import {
+  DURABLE_SIGNING_PROTOCOL,
+  assertSignedEvidenceMatchesOperation,
+  normalizeDurableSignedEvidence,
+} from './signed-transaction.mjs';
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
+const SHA256 = /^[0-9a-f]{64}$/;
 const OPERATION_ID = /^[0-9a-f]{64}$/;
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DECIMAL = /^(?:0|[1-9]\d*)$/;
@@ -41,9 +47,15 @@ const QUARANTINE_REASON_CODES = new Set([
   'RECEIPT_METHOD_MISMATCH',
   'RECEIPT_ARGUMENTS_MISMATCH',
   'RECEIPT_IDENTITY_AMBIGUOUS',
+  'OUTER_RECEIPT_IDENTITY_AMBIGUOUS',
+]);
+const OUTER_OUTCOME_REASON_CODES = new Set([
+  'OUTER_RECEIPT_REVERTED',
+  'OUTER_RECEIPT_IDENTITY_AMBIGUOUS',
 ]);
 const RECOVERY_STATES = new Set([
-  'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'QUARANTINED', 'STATE_SATISFIED_UNPROVEN',
+  'PREPARED', 'SIGNED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'QUARANTINED',
+  'STATE_SATISFIED_UNPROVEN',
 ]);
 const JOURNAL_STATES = new Set([
   ...RECOVERY_STATES, 'VERIFIED', 'FINALIZED_FAILURE', 'ABANDONED_PREHASH',
@@ -52,6 +64,7 @@ const PREHASH_ABANDONMENT_REASONS = new Set([
   'DEFINITE_LOCAL_PRESPAWN_FAILURE', 'AUDITED_NO_BROADCAST',
 ]);
 const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const NEW_TRANSACTION_TOPIC = '0xdab9102861c7483a187584d6371d88316f005af507982ccf95c110879f3ed5a5';
 
 function fail(message, code = 'KEEPER_JOURNAL_SCHEMA') {
   throw new KeeperJournalError(code, message, { statusCode: 400 });
@@ -168,6 +181,110 @@ function canonicalTimestamp(value, label) {
     fail(`${label} must be an exact millisecond UTC timestamp.`);
   }
   return normalized;
+}
+
+function exactSubmissionEvidence(value, transactionHash) {
+  exactObject(value, [
+    'transactionHash', 'outerTransactionHash', 'receiptBlockHash',
+    'receiptBlockNumber', 'finalizedHeadBlockNumber', 'eventTopic', 'logIndex',
+    'eventActivator', 'receiptIdentityVerified', 'evidenceSha256',
+  ], 'submissionEvidence');
+  const normalized = Object.freeze({
+    transactionHash: canonicalHash(value.transactionHash, 'submissionEvidence.transactionHash'),
+    outerTransactionHash: canonicalHash(
+      value.outerTransactionHash,
+      'submissionEvidence.outerTransactionHash',
+    ),
+    receiptBlockHash: canonicalHash(
+      value.receiptBlockHash,
+      'submissionEvidence.receiptBlockHash',
+    ),
+    receiptBlockNumber: canonicalDecimal(
+      value.receiptBlockNumber,
+      'submissionEvidence.receiptBlockNumber',
+      UINT256_MAX,
+    ),
+    finalizedHeadBlockNumber: canonicalDecimal(
+      value.finalizedHeadBlockNumber,
+      'submissionEvidence.finalizedHeadBlockNumber',
+      UINT256_MAX,
+    ),
+    eventTopic: canonicalHash(value.eventTopic, 'submissionEvidence.eventTopic'),
+    logIndex: canonicalDecimal(value.logIndex, 'submissionEvidence.logIndex', UINT256_MAX),
+    eventActivator: canonicalAddress(
+      value.eventActivator,
+      'submissionEvidence.eventActivator',
+    ),
+    receiptIdentityVerified: value.receiptIdentityVerified,
+    evidenceSha256: String(value.evidenceSha256 || '').toLowerCase(),
+  });
+  if (normalized.transactionHash !== transactionHash
+      || normalized.eventTopic !== NEW_TRANSACTION_TOPIC
+      || normalized.receiptIdentityVerified !== true
+      || BigInt(normalized.receiptBlockNumber) > BigInt(normalized.finalizedHeadBlockNumber)
+      || !SHA256.test(normalized.evidenceSha256)) {
+    fail('submissionEvidence is not exact verified NewTransaction receipt evidence.');
+  }
+  return normalized;
+}
+
+function exactOuterFailureEvidence(value) {
+  exactObject(value, [
+    'outerTransactionHash', 'receiptBlockHash', 'receiptBlockNumber',
+    'finalizedHeadBlockNumber', 'receiptStatus', 'receiptCanonical',
+    'newTransactionEventCount', 'failureCode', 'evidenceSha256',
+  ], 'outerFailureEvidence');
+  const evidence = Object.freeze({
+    outerTransactionHash: canonicalHash(
+      value.outerTransactionHash,
+      'outerFailureEvidence.outerTransactionHash',
+    ),
+    receiptBlockHash: canonicalHash(
+      value.receiptBlockHash,
+      'outerFailureEvidence.receiptBlockHash',
+    ),
+    receiptBlockNumber: canonicalDecimal(
+      value.receiptBlockNumber,
+      'outerFailureEvidence.receiptBlockNumber',
+      UINT256_MAX,
+    ),
+    finalizedHeadBlockNumber: canonicalDecimal(
+      value.finalizedHeadBlockNumber,
+      'outerFailureEvidence.finalizedHeadBlockNumber',
+      UINT256_MAX,
+    ),
+    receiptStatus: String(value.receiptStatus ?? ''),
+    receiptCanonical: value.receiptCanonical,
+    newTransactionEventCount: canonicalDecimal(
+      value.newTransactionEventCount,
+      'outerFailureEvidence.newTransactionEventCount',
+      UINT256_MAX,
+    ),
+    failureCode: String(value.failureCode ?? ''),
+    evidenceSha256: String(value.evidenceSha256 ?? '').toLowerCase(),
+  });
+  if (evidence.receiptStatus !== '0'
+      || evidence.receiptCanonical !== true
+      || evidence.newTransactionEventCount !== '0'
+      || evidence.failureCode !== 'OUTER_RECEIPT_REVERTED'
+      || !SHA256.test(evidence.evidenceSha256)
+      || BigInt(evidence.receiptBlockNumber) > BigInt(evidence.finalizedHeadBlockNumber)) {
+    fail('outerFailureEvidence is not exact finalized canonical revert evidence.');
+  }
+  return evidence;
+}
+
+function exactOuterOutcomeEvidence(value) {
+  objectKeys(value, 'outerOutcomeEvidence');
+  if (String(value.receiptStatus ?? '') === '0') return exactOuterFailureEvidence(value);
+  if (String(value.receiptStatus ?? '') === '1') {
+    return exactTransitionMetadata(
+      'QUARANTINED',
+      value,
+      'OUTER_RECEIPT_IDENTITY_AMBIGUOUS',
+    );
+  }
+  fail('outerOutcomeEvidence has an invalid finalized receipt status.');
 }
 
 function canonicalFailureMessage(value) {
@@ -374,6 +491,52 @@ function exactPrehashAbandonmentEvidence(value, reasonCode, requestedOperationId
 
 function exactTransitionMetadata(targetState, value, reasonCode) {
   const metadata = safeMetadata(value);
+  if (targetState === 'QUARANTINED'
+      && reasonCode === 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS') {
+    exactObject(metadata, [
+      'outerTransactionHash', 'receiptBlockHash', 'receiptBlockNumber',
+      'finalizedHeadBlockNumber', 'receiptStatus', 'receiptCanonical',
+      'newTransactionEventCount', 'receiptIdentityVerified', 'ambiguityCode',
+      'evidenceSha256',
+    ], 'metadata');
+    const normalized = Object.freeze({
+      outerTransactionHash: canonicalHash(
+        metadata.outerTransactionHash,
+        'metadata.outerTransactionHash',
+      ),
+      receiptBlockHash: canonicalHash(metadata.receiptBlockHash, 'metadata.receiptBlockHash'),
+      receiptBlockNumber: canonicalDecimal(
+        metadata.receiptBlockNumber,
+        'metadata.receiptBlockNumber',
+        UINT256_MAX,
+      ),
+      finalizedHeadBlockNumber: canonicalDecimal(
+        metadata.finalizedHeadBlockNumber,
+        'metadata.finalizedHeadBlockNumber',
+        UINT256_MAX,
+      ),
+      receiptStatus: String(metadata.receiptStatus ?? ''),
+      receiptCanonical: metadata.receiptCanonical,
+      newTransactionEventCount: canonicalDecimal(
+        metadata.newTransactionEventCount,
+        'metadata.newTransactionEventCount',
+        UINT256_MAX,
+      ),
+      receiptIdentityVerified: metadata.receiptIdentityVerified,
+      ambiguityCode: String(metadata.ambiguityCode ?? ''),
+      evidenceSha256: String(metadata.evidenceSha256 ?? '').toLowerCase(),
+    });
+    if (normalized.receiptStatus !== '1'
+        || normalized.receiptCanonical !== true
+        || normalized.receiptIdentityVerified !== false
+        || normalized.ambiguityCode !== reasonCode
+        || !SHA256.test(normalized.evidenceSha256)
+        || BigInt(normalized.receiptBlockNumber)
+          > BigInt(normalized.finalizedHeadBlockNumber)) {
+      fail('Outer receipt quarantine requires exact finalized canonical ambiguity evidence.');
+    }
+    return normalized;
+  }
   const expectedKeys = Object.freeze({
     FINALIZED_SUCCESS: Object.freeze([
       'transactionHash', 'lifecycleStatus', 'receiptIdentityVerified', 'executionVerified',
@@ -603,9 +766,60 @@ export function parseKeeperJournalRequest(value) {
       operation: canonicalKeeperOperation(value.operation),
     });
   }
+  if (action === 'BIND_SIGNED') {
+    const lease = leaseIdentity(value, [
+      'action', 'holderId', 'signerAddress', 'fencingToken', 'operationId', 'evidence',
+    ]);
+    const operationId = String(value.operationId || '').toLowerCase();
+    if (!OPERATION_ID.test(operationId)) fail('operationId is invalid.');
+    let evidence;
+    try {
+      evidence = normalizeDurableSignedEvidence(value.evidence);
+    } catch (error) {
+      fail(error instanceof Error ? error.message : 'Signed transaction evidence is invalid.');
+    }
+    if (evidence.protocolVersion !== DURABLE_SIGNING_PROTOCOL
+        || evidence.signerAddress !== lease.signerAddress) {
+      fail('Signed transaction evidence does not match the keeper signer.');
+    }
+    return Object.freeze({ action, ...lease, operationId, evidence });
+  }
+  if (action === 'LOAD_SIGNED') {
+    const lease = leaseIdentity(value, [
+      'action', 'holderId', 'signerAddress', 'fencingToken', 'operationId',
+    ]);
+    const operationId = String(value.operationId || '').toLowerCase();
+    if (!OPERATION_ID.test(operationId)) fail('operationId is invalid.');
+    return Object.freeze({ action, ...lease, operationId });
+  }
+  if (action === 'LOAD_OPERATION') {
+    const lease = leaseIdentity(value, [
+      'action', 'holderId', 'signerAddress', 'fencingToken', 'operationId',
+    ]);
+    const operationId = String(value.operationId || '').toLowerCase();
+    if (!OPERATION_ID.test(operationId)) fail('operationId is invalid.');
+    return Object.freeze({ action, ...lease, operationId });
+  }
   if (action === 'BIND_SUBMISSION') {
     const lease = leaseIdentity(value, [
-      'action', 'holderId', 'signerAddress', 'fencingToken', 'operationId', 'transactionHash',
+      'action', 'holderId', 'signerAddress', 'fencingToken', 'operationId',
+      'transactionHash', 'submissionEvidence',
+    ]);
+    const operationId = String(value.operationId || '').toLowerCase();
+    if (!OPERATION_ID.test(operationId)) fail('operationId is invalid.');
+    const transactionHash = canonicalHash(value.transactionHash, 'transactionHash');
+    return Object.freeze({
+      action,
+      ...lease,
+      operationId,
+      transactionHash,
+      submissionEvidence: exactSubmissionEvidence(value.submissionEvidence, transactionHash),
+    });
+  }
+  if (action === 'BIND_OUTER_OUTCOME') {
+    const lease = leaseIdentity(value, [
+      'action', 'holderId', 'signerAddress', 'fencingToken',
+      'operationId', 'outerOutcomeEvidence',
     ]);
     const operationId = String(value.operationId || '').toLowerCase();
     if (!OPERATION_ID.test(operationId)) fail('operationId is invalid.');
@@ -613,7 +827,7 @@ export function parseKeeperJournalRequest(value) {
       action,
       ...lease,
       operationId,
-      transactionHash: canonicalHash(value.transactionHash, 'transactionHash'),
+      outerOutcomeEvidence: exactOuterOutcomeEvidence(value.outerOutcomeEvidence),
     });
   }
   if (action === 'OBSERVE_LIFECYCLE') {
@@ -670,6 +884,9 @@ export function parseKeeperJournalRequest(value) {
     if (!TRANSITION_STATES.has(targetState)) fail('targetState is invalid.');
     const reasonCode = value.reasonCode === null ? null : String(value.reasonCode || '');
     if (reasonCode !== null && !REASON_CODE.test(reasonCode)) fail('reasonCode is invalid.');
+    if (OUTER_OUTCOME_REASON_CODES.has(reasonCode)) {
+      fail('Outer receipt outcome reasons require BIND_OUTER_OUTCOME.');
+    }
     if (['FINALIZED_FAILURE', 'STATE_SATISFIED_UNPROVEN', 'QUARANTINED'].includes(targetState)
         && !reasonCode) {
       fail('reasonCode is required for this transition.');
@@ -829,6 +1046,93 @@ export function publicKeeperOperation(row) {
   const prehashAbandonmentEvidence = row.prehash_abandonment_metadata == null
     ? null
     : Object.freeze({ ...row.prehash_abandonment_metadata });
+  const submissionProtocol = row.submission_protocol == null
+    ? null
+    : String(row.submission_protocol);
+  const outerTransactionHash = row.outer_transaction_hash == null
+    ? null
+    : String(row.outer_transaction_hash);
+  const outerSenderNonce = row.outer_sender_nonce == null
+    ? null
+    : String(row.outer_sender_nonce);
+  const signedEvidenceSha256 = row.signed_evidence_sha256 == null
+    ? null
+    : String(row.signed_evidence_sha256);
+  const signedAt = canonicalDatabaseTimestamp(row.signed_at, 'signed_at');
+  const outerReceiptObservedAt = canonicalDatabaseTimestamp(
+    row.outer_receipt_observed_at,
+    'outer_receipt_observed_at',
+  );
+  let storedSignedTransactionEvidence = null;
+  let signedTransactionEvidence = null;
+  let submissionEvidence = null;
+  let outerOutcomeEvidence = null;
+  try {
+    if (row.signed_transaction_metadata != null) {
+      storedSignedTransactionEvidence = normalizeDurableSignedEvidence({
+        ...row.signed_transaction_metadata,
+        rawTransaction: row.signed_raw_transaction,
+      });
+      assertSignedEvidenceMatchesOperation(storedSignedTransactionEvidence, {
+        signerAddress: row.signer_address,
+        contractAddress: row.contract_address,
+        method: row.method,
+        args: row.arguments,
+      });
+      const { rawTransaction: _privateRawTransaction, ...publicEvidence } =
+        storedSignedTransactionEvidence;
+      signedTransactionEvidence = Object.freeze(publicEvidence);
+    }
+    if (row.submission_evidence != null) {
+      submissionEvidence = exactSubmissionEvidence(
+        row.submission_evidence,
+        String(row.transaction_hash || ''),
+      );
+    }
+    if (row.outer_outcome_evidence != null) {
+      if (state === 'FINALIZED_FAILURE'
+          && String(row.state_reason_code || '') === 'OUTER_RECEIPT_REVERTED') {
+        outerOutcomeEvidence = exactOuterFailureEvidence(row.outer_outcome_evidence);
+      } else if (state === 'QUARANTINED'
+          && String(row.state_reason_code || '') === 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS'
+          && String(row.quarantine_reason || '') === 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS') {
+        outerOutcomeEvidence = exactTransitionMetadata(
+          'QUARANTINED',
+          row.outer_outcome_evidence,
+          'OUTER_RECEIPT_IDENTITY_AMBIGUOUS',
+        );
+      } else {
+        fail('Outer receipt outcome is not valid for the keeper operation state.');
+      }
+    }
+  } catch (error) {
+    throw new KeeperJournalError(
+      'KEEPER_JOURNAL_DATABASE_SHAPE',
+      'Keeper journal returned invalid durable submission evidence.',
+      { statusCode: 503, cause: error },
+    );
+  }
+  const signedGroupPresent = row.signed_raw_transaction != null
+    && outerTransactionHash !== null
+    && outerSenderNonce !== null
+    && signedEvidenceSha256 !== null
+    && signedAt !== null
+    && storedSignedTransactionEvidence !== null;
+  const signedGroupAbsent = row.signed_raw_transaction == null
+    && outerTransactionHash === null
+    && outerSenderNonce === null
+    && signedEvidenceSha256 === null
+    && signedAt === null
+    && storedSignedTransactionEvidence === null;
+  const submissionGroupPresent = outerReceiptObservedAt !== null
+    && submissionEvidence !== null
+    && outerOutcomeEvidence === null;
+  const outerOutcomeGroupPresent = outerReceiptObservedAt !== null
+    && submissionEvidence === null
+    && outerOutcomeEvidence !== null;
+  const receiptGroupAbsent = outerReceiptObservedAt === null
+    && submissionEvidence === null
+    && outerOutcomeEvidence === null;
   if ((pipelineSlot !== null && ![0, 1].includes(pipelineSlot))
       || (RECOVERY_STATES.has(state) && pipelineSlot === null)
       || (handoffPredecessorOperationId !== null
@@ -836,6 +1140,44 @@ export function publicKeeperOperation(row) {
       || ((acceptedAt === null) !== (acceptanceEvidence === null))
       || ((acceptanceRevalidatedAt === null) !== (acceptanceEvidence === null))
       || ((prehashAbandonedAt === null) !== (prehashAbandonmentEvidence === null))
+      || ![null, DURABLE_SIGNING_PROTOCOL].includes(submissionProtocol)
+      || (!signedGroupPresent && !signedGroupAbsent)
+      || ([submissionGroupPresent, outerOutcomeGroupPresent, receiptGroupAbsent]
+        .filter(Boolean).length !== 1)
+      || (signedGroupPresent && (
+        submissionProtocol !== DURABLE_SIGNING_PROTOCOL
+        || storedSignedTransactionEvidence.rawTransaction !== String(row.signed_raw_transaction)
+        || storedSignedTransactionEvidence.outerTransactionHash !== outerTransactionHash
+        || storedSignedTransactionEvidence.outerNonce !== outerSenderNonce
+        || signedEvidenceSha256 !== createHash('sha256')
+          .update(JSON.stringify(storedSignedTransactionEvidence)).digest('hex')
+      ))
+      || (submissionGroupPresent && (
+        !signedGroupPresent
+        || submissionEvidence.outerTransactionHash !== outerTransactionHash
+        || submissionEvidence.evidenceSha256 !== createHash('sha256')
+          .update(JSON.stringify(storedSignedTransactionEvidence)).digest('hex')
+      ))
+      || (outerOutcomeGroupPresent && (
+        !signedGroupPresent
+        || outerOutcomeEvidence.outerTransactionHash !== outerTransactionHash
+        || outerOutcomeEvidence.evidenceSha256 !== createHash('sha256')
+          .update(JSON.stringify(storedSignedTransactionEvidence)).digest('hex')
+      ))
+      || (state === 'SIGNED' && (!signedGroupPresent || !receiptGroupAbsent
+        || row.transaction_hash !== null))
+      || (submissionProtocol === DURABLE_SIGNING_PROTOCOL
+        && row.transaction_hash !== null && !submissionGroupPresent)
+      || (state === 'FINALIZED_FAILURE' && row.transaction_hash === null
+        && !outerOutcomeGroupPresent)
+      || (outerOutcomeGroupPresent && !(
+        (state === 'FINALIZED_FAILURE'
+          && String(row.state_reason_code || '') === 'OUTER_RECEIPT_REVERTED')
+        || (state === 'QUARANTINED'
+          && String(row.state_reason_code || '') === 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS'
+          && String(row.quarantine_reason || '') === 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS')
+      ))
+      || (state === 'ABANDONED_PREHASH' && !signedGroupAbsent)
       || (state === 'ABANDONED_PREHASH' && (
         row.transaction_hash !== null
         || prehashAbandonedAt === null
@@ -877,6 +1219,15 @@ export function publicKeeperOperation(row) {
     args: Object.freeze([...(row.arguments || [])].map(String)),
     valueAtto: String(row.value_atto),
     state,
+    submissionProtocol,
+    outerTransactionHash,
+    outerSenderNonce,
+    signedEvidenceSha256,
+    signedAt,
+    signedTransactionEvidence,
+    outerReceiptObservedAt,
+    submissionEvidence,
+    outerOutcomeEvidence,
     transactionHash: row.transaction_hash === null ? null : String(row.transaction_hash),
     lifecycleStatus: row.lifecycle_status === null ? null : String(row.lifecycle_status),
     lifecycleObservedAt: canonicalDatabaseTimestamp(row.lifecycle_observed_at, 'lifecycle_observed_at'),

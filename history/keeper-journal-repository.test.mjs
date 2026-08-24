@@ -103,6 +103,9 @@ function healthySchemaRow(overrides = {}) {
     attention_subject_index_exists: true,
     handoff_predecessor_index_exists: true,
     attention_index_exists: true,
+    recovery_index_exists: true,
+    outer_hash_index_exists: true,
+    outer_nonce_index_exists: true,
     legacy_unresolved_index_absent: true,
     accepted_guard_function_exists: true,
     accepted_guard_trigger_exists: true,
@@ -112,6 +115,8 @@ function healthySchemaRow(overrides = {}) {
     accepted_handoff_constraints_exist: true,
     prehash_abandonment_columns_exist: true,
     prehash_abandonment_constraints_exist: true,
+    durable_signed_columns_exist: true,
+    durable_signed_constraints_exist: true,
     finalized_state_constraint_valid: true,
     legacy_prehash_submission_constraint_absent: true,
     base_migration_valid: true,
@@ -121,16 +126,17 @@ function healthySchemaRow(overrides = {}) {
     v6_migration_valid: true,
     v7_migration_valid: true,
     v8_migration_valid: true,
+    v9_migration_valid: true,
     migration_valid: true,
     no_unknown_migrations: true,
     ...overrides,
   };
 }
 
-test('health requires exact schema v9, create pre-hash recovery, and finalized-state defense', async () => {
+test('health requires exact schema v10 durable signing and finalized-state defense', async () => {
   const { repository, calls } = fixture([[healthySchemaRow()]]);
-  assert.deepEqual(await repository.health(), { configured: true, ready: true, schemaVersion: 9 });
-  assert.match(calls[0].sql, /version = 2[\s\S]*version = 3[\s\S]*version = 4[\s\S]*version = 5[\s\S]*version = 6[\s\S]*version = 7[\s\S]*version = 8[\s\S]*version = 9/);
+  assert.deepEqual(await repository.health(), { configured: true, ready: true, schemaVersion: 10 });
+  assert.match(calls[0].sql, /version = 2[\s\S]*version = 3[\s\S]*version = 4[\s\S]*version = 5[\s\S]*version = 6[\s\S]*version = 7[\s\S]*version = 8[\s\S]*version = 9[\s\S]*version = 10/);
   assert.match(calls[0].sql, /logical_operation_id/);
   assert.match(calls[0].sql, /arena_keeper_operations_logical_attempt_key/);
   assert.match(calls[0].sql, /subject_type[\s\S]*subject_id/);
@@ -140,11 +146,12 @@ test('health requires exact schema v9, create pre-hash recovery, and finalized-s
   assert.match(calls[0].sql, /arena_keeper_operations_check3/);
   assert.match(calls[0].sql, /arena_keeper_operations_finalized_state_v9_check/);
   assert.match(calls[0].sql, /finalized_at IS NOT NULL[\s\S]*IS TRUE/);
-  assert.match(calls[0].sql, /NOT EXISTS \([\s\S]*version > 9/);
-  assert.equal(calls[0].params.length, 8);
+  assert.match(calls[0].sql, /BIND_SIGNED[\s\S]*LOAD_SIGNED/);
+  assert.match(calls[0].sql, /NOT EXISTS \([\s\S]*version > 10/);
+  assert.equal(calls[0].params.length, 9);
 });
 
-test('health rejects an otherwise valid database with a migration newer than V9', async () => {
+test('health rejects an otherwise valid database with a migration newer than V10', async () => {
   const { repository } = fixture([[healthySchemaRow({ no_unknown_migrations: false })]]);
   assert.deepEqual(await repository.health(), { configured: true, ready: false, schemaVersion: null });
 });
@@ -327,16 +334,12 @@ test('ABANDON_PREHASH terminalizes only a hashless PREPARED row under exact evid
   assertBradburyV8Isolation(calls[0].sql);
 });
 
-test('hash conflict response is quarantined without overwriting the immutable stored hash', async () => {
-  const row = operationRow({
-    state: 'QUARANTINED',
-    quarantine_reason: 'SUBMISSION_HASH_CONFLICT',
-  });
+test('receipt binding conflict leaves the immutable signed identity untouched', async () => {
   const { repository, calls } = fixture([{
     lease_valid: true,
     operation_exists: true,
-    hash_conflict: true,
-    operation: row,
+    attempt_frozen: false,
+    operation: null,
   }].map((value) => [value]));
   await assert.rejects(
     repository.bindSubmission({
@@ -345,12 +348,19 @@ test('hash conflict response is quarantined without overwriting the immutable st
       fencingToken: '9',
       operationId: OPERATION_ID,
       transactionHash: `0x${'c'.repeat(64)}`,
+      submissionEvidence: {
+        outerTransactionHash: `0x${'d'.repeat(64)}`,
+        evidenceSha256: 'e'.repeat(64),
+        transactionHash: `0x${'c'.repeat(64)}`,
+        receiptIdentityVerified: true,
+      },
     }),
-    (error) => error.code === 'KEEPER_JOURNAL_HASH_CONFLICT',
+    (error) => error.code === 'KEEPER_JOURNAL_SUBMISSION_EVIDENCE_CONFLICT',
   );
-  assert.match(calls[0].sql, /ELSE target\.transaction_hash/);
-  assert.match(calls[0].sql, /SUBMISSION_HASH_CONFLICT/);
-  assert.match(calls[0].sql, /arena_keeper_operation_conflicts/);
+  assert.match(calls[0].sql, /target\.state = 'SIGNED'/);
+  assert.match(calls[0].sql, /target\.outer_transaction_hash/);
+  assert.match(calls[0].sql, /receiptIdentityVerified/);
+  assert.doesNotMatch(calls[0].sql, /arena_keeper_operation_conflicts/);
   assertBradburyV8Isolation(calls[0].sql);
 });
 
@@ -474,6 +484,7 @@ test('database constraints hard-bound the two-slot pipeline and same-subject adm
 test('PREPARE grants one-shot broadcast authorization only to the inserted attempt', async () => {
   const prepared = operationRow({
     state: 'PREPARED',
+    submission_protocol: 'BRADBURY_DURABLE_RAW_V1',
     transaction_hash: null,
     lifecycle_status: null,
     submitted_at: null,
@@ -505,7 +516,7 @@ test('PREPARE grants one-shot broadcast authorization only to the inserted attem
     },
   });
   assert.equal(result.inserted, false);
-  assert.equal(result.canBroadcast, false);
+  assert.equal(result.canSign, false);
   assert.equal(result.operation.preparedAt, '2026-08-20T00:00:00.000Z');
   assert.equal(result.operation.updatedAt, '2026-08-20T00:00:00.000Z');
 });
@@ -518,6 +529,7 @@ test('PREPARE appends after finalized failure, pre-hash abandonment, or verified
     attempt_number: '2',
     retry_of_operation_id: OPERATION_ID,
     state: 'PREPARED',
+    submission_protocol: 'BRADBURY_DURABLE_RAW_V1',
     transaction_hash: null,
     lifecycle_status: null,
     submitted_at: null,
@@ -552,7 +564,7 @@ test('PREPARE appends after finalized failure, pre-hash abandonment, or verified
   assert.equal(result.operation.attemptNumber, '2');
   assert.equal(result.operation.retryOfOperationId, OPERATION_ID);
   assert.equal(result.inserted, true);
-  assert.equal(result.canBroadcast, true);
+  assert.equal(result.canSign, true);
   assert.equal(result.auditedRetryNonce, '73');
   assert.match(calls[0].sql, /exact_latest\.state = 'FINALIZED_FAILURE'/);
   assert.match(calls[0].sql, /exact_latest\.state = 'ABANDONED_PREHASH'[\s\S]*exact_latest\.attempt_number = 1/);

@@ -41,6 +41,10 @@ import {
   walletClaimTarget,
   walletClaimIntentFromHref,
 } from './wallet-positions.js';
+import {
+  ROUND_NOT_SCHEDULED_NOTICE,
+  isRoundNotScheduledError,
+} from './round-probe-error.js';
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -446,6 +450,7 @@ class LiquidityArenaApp {
     this.knownEpochEndTimestampsByDeployment = new Map();
     this.roundLoading = false;
     this.roundReadError = false;
+    this.roundNotScheduled = false;
     this.roundRequestId = 0;
     this.roundLoadPromise = null;
     this.submittingPrediction = false;
@@ -913,6 +918,9 @@ class LiquidityArenaApp {
       };
     }
     if (this.roundLoading) return { allowed: false, code: 'ROUND_LOADING', message: 'Verifying the exact-hour epoch.' };
+    if (this.roundNotScheduled) {
+      return { allowed: false, code: 'ROUND_NOT_SCHEDULED', message: ROUND_NOT_SCHEDULED_NOTICE };
+    }
     if (this.roundReadError || !this.round) return { allowed: false, code: 'ROUND_UNAVAILABLE', message: this.modalNotice || 'The exact-hour epoch is unavailable.' };
     if (!contractAssetId || !this.round.assetIds.includes(contractAssetId)) {
       return { allowed: false, code: 'ASSET_UNAVAILABLE', message: 'This asset is not in the arena basket.' };
@@ -931,6 +939,7 @@ class LiquidityArenaApp {
       this.displayRoundAssets = Object.freeze([]);
       this.roundLoading = false;
       this.roundReadError = false;
+      this.roundNotScheduled = false;
       this.roundLoadPromise = null;
       this.modalNotice = this.deploymentSelectionError;
       this.contractConfig = null;
@@ -963,6 +972,7 @@ class LiquidityArenaApp {
     if (!background) this.round = null;
     this.roundLoading = !background || !hasVerifiedRound;
     this.roundReadError = false;
+    this.roundNotScheduled = false;
     if (!background) this.modalNotice = null;
     this._renderPredictionState();
     try {
@@ -1071,6 +1081,7 @@ class LiquidityArenaApp {
       }
       if (requestId !== this.roundRequestId) return null;
       this.round = round;
+      this.roundNotScheduled = false;
       this.roundId = round.roundId;
       this.displayRound = nextDisplayRound;
       this.displayRoundAssets = nextDisplayAssets;
@@ -1089,16 +1100,18 @@ class LiquidityArenaApp {
       return round;
     } catch (error) {
       if (requestId !== this.roundRequestId) return null;
+      const roundNotScheduled = isRoundNotScheduledError(error);
       if (!background || this.round?.epochEndTimestamp !== targets.actionEpochEndTimestamp) {
         this.round = null;
       }
       if (!verifiedConfig) this.contractConfig = null;
       this._clearPositionState();
       this.roundReadError = true;
+      this.roundNotScheduled = roundNotScheduled;
       if (!background || !hasVerifiedRound) {
-        this.modalNotice = error instanceof Error
-          ? error.message
-          : 'The configured GenLayer contract could not be verified.';
+        this.modalNotice = roundNotScheduled
+          ? ROUND_NOT_SCHEDULED_NOTICE
+          : 'The configured GenLayer contract could not be verified. Wagering remains disabled.';
       }
       return null;
     } finally {
@@ -1484,6 +1497,7 @@ class LiquidityArenaApp {
       this.contractConfig = null;
       this.roundLoading = true;
       this.roundReadError = false;
+      this.roundNotScheduled = false;
       this._clearPositionState();
     }
     if (feedChanged) {
@@ -1583,6 +1597,7 @@ class LiquidityArenaApp {
     this.contractConfig = null;
     this.roundLoading = true;
     this.roundReadError = false;
+    this.roundNotScheduled = false;
     this.modalNotice = null;
     this._clearPositionState();
     this._renderPredictionState();

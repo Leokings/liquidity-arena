@@ -23,11 +23,16 @@ import {
   V8_PROTOCOL_VERSION,
 } from './v8-keeper-config.mjs';
 import { canonicalKeeperOperation } from '../keeper-journal/schema.mjs';
+import {
+  durableSignedEvidence,
+  durableSubmissionEvidence,
+  TEST_DURABLE_SIGNER,
+} from '../history/durable-signed-test-helper.mjs';
 import { createMemoryAuthoritativeKeeperJournalClient } from './authoritative-keeper-journal.test-helper.mjs';
 
 const CONTRACT = '0x1111111111111111111111111111111111111111';
 const OWNER = '0x2222222222222222222222222222222222222222';
-const KEEPER = '0x3333333333333333333333333333333333333333';
+const KEEPER = TEST_DURABLE_SIGNER;
 const TREASURY = '0x4444444444444444444444444444444444444444';
 const PAYOUT = 'a'.repeat(64);
 const NOW = Date.UTC(2027, 0, 15, 10, 0, 0) / 1000;
@@ -198,8 +203,48 @@ function acceptedReceipt({ transactionHash, method, args, recipient = CONTRACT }
   };
 }
 
+const TEST_SIGNED_CAPSULES = new WeakMap();
+let testDurableNonce = 7n;
+
+async function createTestSignedWrite(operation) {
+  const capsule = Object.freeze({ protocol: 'TEST_DURABLE_SIGNED_CAPSULE_V1' });
+  TEST_SIGNED_CAPSULES.set(capsule, await durableSignedEvidence({
+    contractAddress: operation.contractAddress,
+    method: operation.method,
+    args: operation.args,
+    nonce: (testDurableNonce++).toString(),
+  }));
+  return capsule;
+}
+
+function installDurableTestWrites(input) {
+  const operator = { ...input };
+  operator.createSignedWrite ||= createTestSignedWrite;
+  operator.persistSignedWrite ||= async (capsule, operation, session) => {
+    const evidence = TEST_SIGNED_CAPSULES.get(capsule);
+    assert.ok(evidence, 'test signed capsule must remain private until BIND_SIGNED');
+    const bound = await session.bindSigned(operation.operationId, evidence);
+    TEST_SIGNED_CAPSULES.delete(capsule);
+    return bound.operation;
+  };
+  operator.broadcastSignedWrite ||= async (operation, session) => {
+    const loaded = await session.loadSigned(operation.operationId);
+    let transactionHash = null;
+    await operator.submitWrite(operation.method, operation.args, async (hash) => {
+      transactionHash = hash;
+    });
+    assert.match(String(transactionHash || ''), /^0x[0-9a-f]{64}$/i);
+    return {
+      outcome: 'SUBMITTED',
+      transactionHash,
+      submissionEvidence: durableSubmissionEvidence(loaded.evidence, transactionHash),
+    };
+  };
+  return operator;
+}
+
 function emptyExecutionOperator(overrides = {}) {
-  return {
+  return installDurableTestWrites({
     canSignLockedAccount: true,
     getNetworkInfo: async () => ({ alias: 'testnet-bradbury', chainId: 4221 }),
     getAccountInfo: async () => ({ address: KEEPER, active: true, status: 'locked' }),
@@ -213,7 +258,7 @@ function emptyExecutionOperator(overrides = {}) {
       offset, next_offset: offset, total: 0, payouts: [],
     }),
     ...overrides,
-  };
+  });
 }
 
 test('keeper pins the exhaustive V8 ABI and immutable contract configuration', () => {
@@ -510,7 +555,7 @@ test('execute PREPARE-binds and verifies a permissionless dispatch without vault
   let payout = payoutRecord();
   let submitted;
   const hash = `0x${'1'.padStart(64, '0')}`;
-  const operator = {
+  const operator = installDurableTestWrites({
     journalClient: journal.client,
     canSignLockedAccount: true,
     getNetworkInfo: async () => ({ alias: 'testnet-bradbury', chainId: 4221 }),
@@ -535,7 +580,7 @@ test('execute PREPARE-binds and verifies a permissionless dispatch without vault
       recipient: CONTRACT,
       txDataDecoded: { type: 'call', callData: { method: 'dispatch_payout', args: [PAYOUT] } },
     }),
-  };
+  });
   const result = await runV8KeeperOnce({
     config: config({ maxWritesPerRun: 1 }),
     execute: true,
@@ -570,9 +615,10 @@ test('proven local pre-spawn failure is abandoned with telemetry and retried as 
     }),
     getPayout: async () => structuredClone(payout),
     getPayoutRailState: async () => ({ prepared: true, credited: false, withdrawn: false }),
-    submitWrite: async () => {
+    createSignedWrite: async () => {
       throw Object.assign(new Error('GenLayer process could not be started.'), {
         code: 'GENLAYER_PROCESS_NOT_STARTED',
+        walletSignAttempted: false,
         broadcastAttempted: false,
       });
     },
@@ -603,7 +649,7 @@ test('proven local pre-spawn failure is abandoned with telemetry and retried as 
     'transactionHashObserved',
   ].sort());
   assert.deepEqual(
-    events.filter(({ event }) => event === 'V8_KEEPER_PREHASH_SUBMIT_FAILURE')
+    events.filter(({ event }) => event === 'V8_KEEPER_SIGNING_FAILURE')
       .map(({ failureCode, failureMessage }) => ({ failureCode, failureMessage })),
     [{
       failureCode: 'GENLAYER_PROCESS_NOT_STARTED',
@@ -611,6 +657,7 @@ test('proven local pre-spawn failure is abandoned with telemetry and retried as 
     }],
   );
 
+  operator.createSignedWrite = createTestSignedWrite;
   operator.submitWrite = async (method, args, onHash) => {
     await onHash(hash);
     payout = payoutRecord({ state: 'DISPATCHED', attempt_count: 1, last_dispatch_timestamp: NOW });
@@ -645,7 +692,7 @@ test('ambiguous hashless CLI failure logs its cause and leaves PREPARED blocking
     }),
     getPayout: async () => payoutRecord(),
     getPayoutRailState: async () => ({ prepared: true, credited: false, withdrawn: false }),
-    submitWrite: async () => {
+    createSignedWrite: async () => {
       throw Object.assign(new Error('GENLAYER_KEYSTORE_PASSWORD=hunter2\nCLI exited before printing a hash.'), {
         code: 'GENLAYER_PROCESS_ERROR',
         status: 1,
@@ -670,7 +717,7 @@ test('ambiguous hashless CLI failure logs its cause and leaves PREPARED blocking
   const operation = [...journal.operations.values()][0];
   assert.equal(operation.state, 'PREPARED');
   assert.equal(operation.prehashAbandonedAt, null);
-  const telemetry = events.find(({ event }) => event === 'V8_KEEPER_PREHASH_SUBMIT_FAILURE');
+  const telemetry = events.find(({ event }) => event === 'V8_KEEPER_SIGNING_FAILURE');
   assert.equal(telemetry.failureCode, 'GENLAYER_PROCESS_ERROR');
   assert.equal(telemetry.failureMessage, '[redacted] CLI exited before printing a hash.');
   assert.equal(telemetry.lowerLevelCategory, 'RETRYABLE_TRANSPORT');
@@ -712,7 +759,7 @@ test('an abandoned retry attempt cannot authorize attempt three', async () => {
     leaseSeconds: 900,
   })).lease;
   const prepared = await journal.client.prepareOperation({ lease, operation: input });
-  assert.equal(prepared.canBroadcast, false);
+  assert.equal(prepared.canSign, false);
   assert.equal(prepared.inserted, false);
   assert.equal(prepared.operation.attemptNumber, '2');
   assert.equal(journal.operations.size, 2);
@@ -724,7 +771,7 @@ test('production timing budget and structural gate sign at most one fresh write 
   const startMs = Date.UTC(2027, 0, 15, 10, 0, 0);
   let nowMs = startMs;
   const submissions = [];
-  const operator = {
+  const operator = installDurableTestWrites({
     journalClient: journal.client,
     canSignLockedAccount: true,
     getNetworkInfo: async () => ({ alias: 'testnet-bradbury', chainId: 4221 }),
@@ -753,7 +800,7 @@ test('production timing budget and structural gate sign at most one fresh write 
         callData: { method: submissions[0].method, args: submissions[0].args },
       },
     }),
-  };
+  });
   const result = await runV8KeeperOnce({
     config: config({
       maxWritesPerRun: 2,

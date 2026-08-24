@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { StrictKeeperJsonParser } from './http.mjs';
 import {
@@ -7,6 +7,7 @@ import {
   keeperAttemptOperationId,
   normalizedIdempotencyKey,
 } from './schema.mjs';
+import { normalizeDurableSignedEvidence } from './signed-transaction.mjs';
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
 
@@ -165,7 +166,10 @@ function validatedOperation(value) {
     'operationId', 'logicalOperationId', 'attemptNumber', 'retryOfOperationId',
     'deploymentAlias', 'network', 'chainId', 'signerAddress',
     'contractAddress', 'subjectType', 'subjectId', 'method', 'args', 'valueAtto',
-    'state', 'transactionHash', 'lifecycleStatus', 'lifecycleObservedAt',
+    'state', 'submissionProtocol', 'outerTransactionHash', 'outerSenderNonce',
+    'signedEvidenceSha256', 'signedAt', 'signedTransactionEvidence',
+    'outerReceiptObservedAt', 'submissionEvidence', 'outerOutcomeEvidence',
+    'transactionHash', 'lifecycleStatus', 'lifecycleObservedAt',
     'pipelineSlot', 'handoffPredecessorOperationId', 'acceptedAt',
     'acceptanceRevalidatedAt', 'acceptanceEvidence',
     'prehashAbandonedAt', 'prehashAbandonmentEvidence',
@@ -174,7 +178,7 @@ function validatedOperation(value) {
   ];
   exactResponseKeys(value, keys, 'operation');
   const states = new Set([
-    'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'VERIFIED',
+    'PREPARED', 'SIGNED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'VERIFIED',
     'FINALIZED_FAILURE', 'QUARANTINED', 'STATE_SATISFIED_UNPROVEN',
     'ABANDONED_PREHASH',
   ]);
@@ -191,6 +195,100 @@ function validatedOperation(value) {
   const reasonCode = (entry) => entry === null || /^[A-Z][A-Z0-9_]{0,79}$/.test(entry);
   const acceptanceEvidence = value.acceptanceEvidence;
   const prehashAbandonmentEvidence = value.prehashAbandonmentEvidence;
+  const signedTransactionEvidence = value.signedTransactionEvidence;
+  const submissionEvidence = value.submissionEvidence;
+  const outerOutcomeEvidence = value.outerOutcomeEvidence;
+  const exactKeys = (candidate, expected) => candidate && typeof candidate === 'object'
+    && !Array.isArray(candidate)
+    && Object.keys(candidate).sort().length === expected.length
+    && [...expected].sort().every((key, index) => key === Object.keys(candidate).sort()[index]);
+  const validSignedEvidence = signedTransactionEvidence === null || (
+    exactKeys(signedTransactionEvidence, [
+      'protocolVersion', 'outerTransactionHash', 'outerNonce', 'chainId',
+      'signerAddress', 'consensusAddress', 'contractAddress', 'method',
+      'arguments', 'valueAtto', 'gasLimit', 'gasPriceWei', 'validUntil',
+      'calldataSha256',
+    ])
+    && signedTransactionEvidence.protocolVersion === 'BRADBURY_DURABLE_RAW_V1'
+    && signedTransactionEvidence.outerTransactionHash === value.outerTransactionHash
+    && signedTransactionEvidence.outerNonce === value.outerSenderNonce
+    && signedTransactionEvidence.chainId === value.chainId
+    && signedTransactionEvidence.signerAddress === value.signerAddress
+    && signedTransactionEvidence.consensusAddress
+      === '0x0112bf6e83497965a5fdd6dad1e447a6e004271d'
+    && signedTransactionEvidence.contractAddress === value.contractAddress
+    && signedTransactionEvidence.method === value.method
+    && JSON.stringify(signedTransactionEvidence.arguments) === JSON.stringify(value.args)
+    && signedTransactionEvidence.valueAtto === value.valueAtto
+    && canonicalUnsigned(signedTransactionEvidence.gasLimit)
+    && canonicalUnsigned(signedTransactionEvidence.gasPriceWei)
+    && canonicalUnsigned(signedTransactionEvidence.validUntil)
+    && /^[0-9a-f]{64}$/.test(signedTransactionEvidence.calldataSha256)
+  );
+  const validSubmissionEvidence = submissionEvidence === null || (
+    exactKeys(submissionEvidence, [
+      'transactionHash', 'outerTransactionHash', 'receiptBlockHash',
+      'receiptBlockNumber', 'finalizedHeadBlockNumber', 'eventTopic', 'logIndex', 'eventActivator',
+      'receiptIdentityVerified', 'evidenceSha256',
+    ])
+    && submissionEvidence.transactionHash === value.transactionHash
+    && submissionEvidence.outerTransactionHash === value.outerTransactionHash
+    && /^0x[0-9a-f]{64}$/.test(submissionEvidence.receiptBlockHash)
+    && canonicalUnsigned(submissionEvidence.receiptBlockNumber)
+    && canonicalUnsigned(submissionEvidence.finalizedHeadBlockNumber)
+    && BigInt(submissionEvidence.receiptBlockNumber)
+      <= BigInt(submissionEvidence.finalizedHeadBlockNumber)
+    && submissionEvidence.eventTopic
+      === '0xdab9102861c7483a187584d6371d88316f005af507982ccf95c110879f3ed5a5'
+    && canonicalUnsigned(submissionEvidence.logIndex)
+    && /^0x[0-9a-f]{40}$/.test(submissionEvidence.eventActivator)
+    && !/^0x0{40}$/.test(submissionEvidence.eventActivator)
+    && submissionEvidence.receiptIdentityVerified === true
+    && submissionEvidence.evidenceSha256 === value.signedEvidenceSha256
+  );
+  const validOuterFailureEvidence = outerOutcomeEvidence !== null
+    && value.state === 'FINALIZED_FAILURE'
+    && value.stateReasonCode === 'OUTER_RECEIPT_REVERTED'
+    && exactKeys(outerOutcomeEvidence, [
+      'outerTransactionHash', 'receiptBlockHash', 'receiptBlockNumber',
+      'finalizedHeadBlockNumber', 'receiptStatus', 'receiptCanonical',
+      'newTransactionEventCount', 'failureCode', 'evidenceSha256',
+    ])
+    && outerOutcomeEvidence.outerTransactionHash === value.outerTransactionHash
+    && /^0x[0-9a-f]{64}$/.test(outerOutcomeEvidence.receiptBlockHash)
+    && canonicalUnsigned(outerOutcomeEvidence.receiptBlockNumber)
+    && canonicalUnsigned(outerOutcomeEvidence.finalizedHeadBlockNumber)
+    && BigInt(outerOutcomeEvidence.receiptBlockNumber)
+      <= BigInt(outerOutcomeEvidence.finalizedHeadBlockNumber)
+    && outerOutcomeEvidence.receiptStatus === '0'
+    && outerOutcomeEvidence.receiptCanonical === true
+    && outerOutcomeEvidence.newTransactionEventCount === '0'
+    && outerOutcomeEvidence.failureCode === 'OUTER_RECEIPT_REVERTED'
+    && outerOutcomeEvidence.evidenceSha256 === value.signedEvidenceSha256;
+  const validOuterAmbiguityEvidence = outerOutcomeEvidence !== null
+    && value.state === 'QUARANTINED'
+    && value.stateReasonCode === 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS'
+    && value.quarantineReason === 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS'
+    && exactKeys(outerOutcomeEvidence, [
+      'outerTransactionHash', 'receiptBlockHash', 'receiptBlockNumber',
+      'finalizedHeadBlockNumber', 'receiptStatus', 'receiptCanonical',
+      'newTransactionEventCount', 'receiptIdentityVerified', 'ambiguityCode',
+      'evidenceSha256',
+    ])
+    && outerOutcomeEvidence.outerTransactionHash === value.outerTransactionHash
+    && /^0x[0-9a-f]{64}$/.test(outerOutcomeEvidence.receiptBlockHash)
+    && canonicalUnsigned(outerOutcomeEvidence.receiptBlockNumber)
+    && canonicalUnsigned(outerOutcomeEvidence.finalizedHeadBlockNumber)
+    && BigInt(outerOutcomeEvidence.receiptBlockNumber)
+      <= BigInt(outerOutcomeEvidence.finalizedHeadBlockNumber)
+    && outerOutcomeEvidence.receiptStatus === '1'
+    && outerOutcomeEvidence.receiptCanonical === true
+    && canonicalUnsigned(outerOutcomeEvidence.newTransactionEventCount)
+    && outerOutcomeEvidence.receiptIdentityVerified === false
+    && outerOutcomeEvidence.ambiguityCode === 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS'
+    && outerOutcomeEvidence.evidenceSha256 === value.signedEvidenceSha256;
+  const validOuterOutcomeEvidence = outerOutcomeEvidence === null
+    || validOuterFailureEvidence || validOuterAmbiguityEvidence;
   const prehashKeys = prehashAbandonmentEvidence && typeof prehashAbandonmentEvidence === 'object'
     && !Array.isArray(prehashAbandonmentEvidence)
     ? Object.keys(prehashAbandonmentEvidence).sort()
@@ -337,10 +435,47 @@ function validatedOperation(value) {
       || value.args[0] !== value.subjectId
       || value.valueAtto !== '0'
       || !states.has(value.state)
+      || ![null, 'BRADBURY_DURABLE_RAW_V1'].includes(value.submissionProtocol)
+      || (value.outerTransactionHash !== null
+        && !/^0x[0-9a-f]{64}$/.test(value.outerTransactionHash))
+      || (value.outerSenderNonce !== null && !canonicalUnsigned(value.outerSenderNonce))
+      || (value.signedEvidenceSha256 !== null
+        && !/^[0-9a-f]{64}$/.test(value.signedEvidenceSha256))
+      || !nullableTimestamp(value.signedAt)
+      || !nullableTimestamp(value.outerReceiptObservedAt)
+      || !validSignedEvidence
+      || !validSubmissionEvidence
+      || !validOuterOutcomeEvidence
+      || ([value.outerTransactionHash, value.outerSenderNonce,
+        value.signedEvidenceSha256, value.signedAt, signedTransactionEvidence]
+        .some((entry) => entry !== null)
+        && [value.outerTransactionHash, value.outerSenderNonce,
+          value.signedEvidenceSha256, value.signedAt, signedTransactionEvidence]
+          .some((entry) => entry === null))
+      || ([
+        value.outerReceiptObservedAt === null
+          && submissionEvidence === null && outerOutcomeEvidence === null,
+        value.outerReceiptObservedAt !== null
+          && submissionEvidence !== null && outerOutcomeEvidence === null,
+        value.outerReceiptObservedAt !== null
+          && submissionEvidence === null && outerOutcomeEvidence !== null,
+      ].filter(Boolean).length !== 1)
+      || (signedTransactionEvidence !== null
+        && value.submissionProtocol !== 'BRADBURY_DURABLE_RAW_V1')
+      || ((submissionEvidence !== null || outerOutcomeEvidence !== null)
+        && signedTransactionEvidence === null)
+      || (value.state === 'SIGNED' && (
+        signedTransactionEvidence === null
+        || submissionEvidence !== null
+        || outerOutcomeEvidence !== null
+        || value.transactionHash !== null
+      ))
+      || (value.submissionProtocol === 'BRADBURY_DURABLE_RAW_V1'
+        && value.transactionHash !== null && submissionEvidence === null)
       || (value.transactionHash !== null && !/^0x[0-9a-f]{64}$/.test(value.transactionHash))
       || (value.lifecycleStatus !== null && !lifecycleStatuses.has(value.lifecycleStatus))
       || (value.pipelineSlot !== null && ![0, 1].includes(value.pipelineSlot))
-      || (['PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'QUARANTINED',
+      || (['PREPARED', 'SIGNED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'QUARANTINED',
         'STATE_SATISFIED_UNPROVEN'].includes(value.state) && value.pipelineSlot === null)
       || (value.handoffPredecessorOperationId !== null
         && !/^[0-9a-f]{64}$/.test(value.handoffPredecessorOperationId))
@@ -356,6 +491,7 @@ function validatedOperation(value) {
       || !validPrehashEvidence
       || (value.state === 'ABANDONED_PREHASH' && (
         value.transactionHash !== null
+        || signedTransactionEvidence !== null
         || value.prehashAbandonedAt === null
         || !['DEFINITE_LOCAL_PRESPAWN_FAILURE', 'AUDITED_NO_BROADCAST']
           .includes(value.stateReasonCode)
@@ -372,8 +508,10 @@ function validatedOperation(value) {
       || !timestamp(value.updatedAt)
       || ((value.transactionHash === null) !== (value.submittedAt === null))
       || (value.state === 'PREPARED' && value.transactionHash !== null)
-      || (['SUBMITTED', 'FINALIZED_SUCCESS', 'VERIFIED', 'FINALIZED_FAILURE'].includes(value.state)
+      || (['SUBMITTED', 'FINALIZED_SUCCESS', 'VERIFIED'].includes(value.state)
           && value.transactionHash === null)
+      || (value.state === 'FINALIZED_FAILURE' && value.transactionHash === null
+        && !validOuterFailureEvidence)
       || (['FINALIZED_SUCCESS', 'VERIFIED', 'FINALIZED_FAILURE'].includes(value.state)
           && (value.lifecycleStatus !== 'FINALIZED' || value.finalizedAt === null))
       || (value.state === 'VERIFIED' && value.verifiedAt === null)
@@ -426,6 +564,20 @@ function validatedOperation(value) {
   return Object.freeze({
     ...value,
     args: Object.freeze([...value.args]),
+    signedTransactionEvidence: signedTransactionEvidence === null
+      ? null
+      : Object.freeze({
+        ...signedTransactionEvidence,
+        arguments: Object.freeze([...signedTransactionEvidence.arguments]),
+      }),
+    submissionEvidence: submissionEvidence === null
+      ? null
+      : Object.freeze({ ...submissionEvidence }),
+    outerOutcomeEvidence: outerOutcomeEvidence === null
+      ? null
+      : Object.freeze({ ...outerOutcomeEvidence }),
+    signedAt: canonicalTime(value.signedAt),
+    outerReceiptObservedAt: canonicalTime(value.outerReceiptObservedAt),
     lifecycleObservedAt: canonicalTime(value.lifecycleObservedAt),
     acceptedAt: canonicalTime(value.acceptedAt),
     acceptanceRevalidatedAt: canonicalTime(value.acceptanceRevalidatedAt),
@@ -456,10 +608,11 @@ function assertPreparedResponseIdentity(result, requested, lease) {
       'Keeper journal prepare response identity does not match the request.',
     );
   }
-  if (result.canBroadcast === true
+  if (result.canSign === true
       && (result.inserted !== true
           || operation.state !== 'PREPARED'
-          || operation.transactionHash !== null)) {
+          || operation.transactionHash !== null
+          || operation.signedTransactionEvidence !== null)) {
     throw new KeeperJournalClientError(
       'KEEPER_JOURNAL_RESPONSE_AUTHORIZATION',
       'Keeper journal returned an invalid broadcast authorization.',
@@ -483,7 +636,7 @@ function validatedSuccess(action, payload) {
       && payload.configuration.signerConfigured === true;
     const databaseReady = payload.database.configured === true
       && payload.database.ready === true
-      && payload.database.schemaVersion === 9;
+      && payload.database.schemaVersion === 10;
     if (!['ready', 'degraded'].includes(payload.status)
         || payload.service !== 'liquidity-arena-keeper-journal'
         || typeof payload.ready !== 'boolean'
@@ -494,7 +647,7 @@ function validatedSuccess(action, payload) {
         || typeof payload.configuration.signerConfigured !== 'boolean'
         || typeof payload.database.configured !== 'boolean'
         || typeof payload.database.ready !== 'boolean'
-      || ![null, 9].includes(payload.database.schemaVersion)
+      || ![null, 10].includes(payload.database.schemaVersion)
         || (payload.ready === true
           ? payload.status !== 'ready' || !configurationReady || !databaseReady
           : payload.status !== 'degraded')) {
@@ -522,14 +675,14 @@ function validatedSuccess(action, payload) {
   }
   if (action === 'PREPARE') {
     exactResponseKeys(payload, [
-      'status', 'action', 'operation', 'canBroadcast', 'inserted', 'auditedRetryNonce',
+      'status', 'action', 'operation', 'canSign', 'inserted', 'auditedRetryNonce',
     ], 'prepare response');
     if (payload.status !== 'ok' || payload.action !== action
-        || typeof payload.canBroadcast !== 'boolean' || typeof payload.inserted !== 'boolean'
+        || typeof payload.canSign !== 'boolean' || typeof payload.inserted !== 'boolean'
         || (payload.auditedRetryNonce !== null
           && (typeof payload.auditedRetryNonce !== 'string'
             || !/^(?:0|[1-9]\d*)$/.test(payload.auditedRetryNonce)
-            || payload.canBroadcast !== true || payload.inserted !== true))) {
+            || payload.canSign !== true || payload.inserted !== true))) {
       throw new KeeperJournalClientError('KEEPER_JOURNAL_RESPONSE_SHAPE', 'Keeper journal returned an invalid prepare response.');
     }
     const operation = validatedOperation(payload.operation);
@@ -538,7 +691,8 @@ function validatedSuccess(action, payload) {
     }
     return Object.freeze({ ...payload, operation });
   }
-  if (['BIND_SUBMISSION', 'TRANSITION', 'OBSERVE_LIFECYCLE', 'ACCEPT_HANDOFF',
+  if (['BIND_SIGNED', 'BIND_SUBMISSION', 'BIND_OUTER_OUTCOME', 'LOAD_OPERATION', 'TRANSITION',
+    'OBSERVE_LIFECYCLE', 'ACCEPT_HANDOFF',
     'ABANDON_PREHASH'].includes(action)) {
     const keys = action === 'OBSERVE_LIFECYCLE'
       ? ['status', 'action', 'operation', 'receiptIdentityVerified']
@@ -549,6 +703,30 @@ function validatedSuccess(action, payload) {
       throw new KeeperJournalClientError('KEEPER_JOURNAL_RESPONSE_SHAPE', 'Keeper journal returned an invalid operation response.');
     }
     return Object.freeze({ ...payload, operation: validatedOperation(payload.operation) });
+  }
+  if (action === 'LOAD_SIGNED') {
+    exactResponseKeys(payload, [
+      'status', 'action', 'operationId', 'fencingToken', 'evidence',
+    ], 'private signed transaction response');
+    let evidence;
+    try {
+      evidence = normalizeDurableSignedEvidence(payload.evidence);
+    } catch (error) {
+      throw new KeeperJournalClientError(
+        'KEEPER_JOURNAL_RESPONSE_SHAPE',
+        'Keeper journal returned invalid private signed transaction evidence.',
+        { cause: error },
+      );
+    }
+    if (payload.status !== 'ok' || payload.action !== action
+        || !/^[0-9a-f]{64}$/.test(payload.operationId)
+        || !/^[1-9]\d{0,18}$/.test(payload.fencingToken)) {
+      throw new KeeperJournalClientError(
+        'KEEPER_JOURNAL_RESPONSE_SHAPE',
+        'Keeper journal returned an invalid private signed transaction response.',
+      );
+    }
+    return Object.freeze({ ...payload, evidence });
   }
   if (action === 'RECOVER') {
     exactResponseKeys(payload, ['status', 'action', 'operations', 'page'], 'recovery response');
@@ -697,16 +875,115 @@ export function createKeeperJournalClient({
       return result;
     },
 
-    async bindSubmission({ lease, operationId, transactionHash, idempotencyKey }) {
+    async bindSigned({ lease, operationId, evidence: evidenceValue, idempotencyKey }) {
+      let evidence;
+      try {
+        evidence = normalizeDurableSignedEvidence(evidenceValue);
+      } catch (error) {
+        throw new KeeperJournalClientError(
+          'KEEPER_JOURNAL_CLIENT_SCHEMA',
+          'Signed transaction evidence is invalid.',
+          { cause: error },
+        );
+      }
+      const result = await post({
+        action: 'BIND_SIGNED',
+        ...leaseFields(lease),
+        operationId,
+        evidence,
+      }, idempotencyKey);
+      const digest = createHash('sha256').update(JSON.stringify(evidence), 'utf8').digest('hex');
+      if (result.operation.operationId !== String(operationId).toLowerCase()
+          || result.operation.state !== 'SIGNED'
+          || result.operation.outerTransactionHash !== evidence.outerTransactionHash
+          || result.operation.outerSenderNonce !== evidence.outerNonce
+          || result.operation.signedEvidenceSha256 !== digest
+          || result.operation.signedTransactionEvidence?.rawTransaction !== undefined) {
+        throw new KeeperJournalClientError(
+          'KEEPER_JOURNAL_RESPONSE_IDENTITY',
+          'Keeper journal signed persistence acknowledgement does not match the request.',
+        );
+      }
+      return result;
+    },
+
+    async loadSigned({ lease, operationId, idempotencyKey }) {
+      const identity = leaseFields(lease);
+      const result = await post({
+        action: 'LOAD_SIGNED',
+        ...identity,
+        operationId,
+      }, idempotencyKey);
+      if (result.operationId !== String(operationId).toLowerCase()
+          || result.fencingToken !== identity.fencingToken
+          || result.evidence.signerAddress !== identity.signerAddress.toLowerCase()) {
+        throw new KeeperJournalClientError(
+          'KEEPER_JOURNAL_RESPONSE_IDENTITY',
+          'Keeper journal private signed transaction response does not match the active fence.',
+        );
+      }
+      return result;
+    },
+
+    async loadOperation({ lease, operationId, idempotencyKey }) {
+      const result = await post({
+        action: 'LOAD_OPERATION',
+        ...leaseFields(lease),
+        operationId,
+      }, idempotencyKey);
+      if (result.operation.operationId !== String(operationId).toLowerCase()) {
+        throw new KeeperJournalClientError(
+          'KEEPER_JOURNAL_RESPONSE_IDENTITY',
+          'Keeper journal operation response does not match the request.',
+        );
+      }
+      return result;
+    },
+
+    async bindSubmission({
+      lease, operationId, transactionHash, submissionEvidence, idempotencyKey,
+    }) {
       const result = await post({
         action: 'BIND_SUBMISSION',
         ...leaseFields(lease),
         operationId,
         transactionHash,
+        submissionEvidence,
       }, idempotencyKey);
       if (result.operation.operationId !== String(operationId).toLowerCase()
-          || result.operation.transactionHash !== String(transactionHash).toLowerCase()) {
+          || result.operation.transactionHash !== String(transactionHash).toLowerCase()
+          || JSON.stringify(result.operation.submissionEvidence)
+            !== JSON.stringify(submissionEvidence)) {
         throw new KeeperJournalClientError('KEEPER_JOURNAL_RESPONSE_IDENTITY', 'Keeper journal submission response identity does not match the request.');
+      }
+      return result;
+    },
+
+    async bindOuterOutcome({
+      lease, operationId, outerOutcomeEvidence, idempotencyKey,
+    }) {
+      const result = await post({
+        action: 'BIND_OUTER_OUTCOME',
+        ...leaseFields(lease),
+        operationId,
+        outerOutcomeEvidence,
+      }, idempotencyKey);
+      const expectedState = outerOutcomeEvidence?.receiptStatus === '0'
+        ? 'FINALIZED_FAILURE' : 'QUARANTINED';
+      const expectedReason = outerOutcomeEvidence?.receiptStatus === '0'
+        ? 'OUTER_RECEIPT_REVERTED' : 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS';
+      if (result.operation.operationId !== String(operationId).toLowerCase()
+          || result.operation.state !== expectedState
+          || result.operation.transactionHash !== null
+          || result.operation.stateReasonCode !== expectedReason
+          || (expectedState === 'QUARANTINED'
+            && result.operation.quarantineReason !== expectedReason)
+          || JSON.stringify(result.operation.outerOutcomeEvidence)
+            !== JSON.stringify(outerOutcomeEvidence)) {
+        throw new KeeperJournalClientError(
+          'KEEPER_JOURNAL_RESPONSE_IDENTITY',
+          'Keeper journal outer outcome response identity does not match the request.',
+        );
       }
       return result;
     },
@@ -765,6 +1042,13 @@ export function createKeeperJournalClient({
     },
 
     async transition({ lease, operationId, targetState, reasonCode = null, metadata = {}, idempotencyKey }) {
+      if (['OUTER_RECEIPT_REVERTED', 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS']
+        .includes(reasonCode)) {
+        throw new KeeperJournalClientError(
+          'KEEPER_JOURNAL_CLIENT_SCHEMA',
+          'Outer receipt outcome reasons require BIND_OUTER_OUTCOME.',
+        );
+      }
       const result = await post({
         action: 'TRANSITION',
         ...leaseFields(lease),
@@ -803,40 +1087,15 @@ export function createKeeperJournalClientFromEnvironment(environment = process.e
 }
 
 export async function runPreparedKeeperBroadcast({
-  client,
-  lease,
-  operation,
-  idempotencyKey,
-  broadcast,
+  client: _client,
+  lease: _lease,
+  operation: _operation,
+  idempotencyKey: _idempotencyKey,
+  broadcast: _broadcast,
 }) {
-  if (typeof broadcast !== 'function') {
-    throw new KeeperJournalClientError(
-      'KEEPER_JOURNAL_CLIENT_SCHEMA',
-      'Keeper broadcast function is required.',
-    );
-  }
-  const prepared = await client.prepareOperation({ lease, operation, idempotencyKey });
-  const normalized = canonicalKeeperOperation(operation);
-  const identity = leaseFields(lease);
-  if (prepared === null || typeof prepared !== 'object'
-      || typeof prepared.canBroadcast !== 'boolean'
-      || typeof prepared.inserted !== 'boolean') {
-    throw new KeeperJournalClientError(
-      'KEEPER_JOURNAL_RESPONSE_SHAPE',
-      'Keeper journal returned an invalid prepare response.',
-    );
-  }
-  const validated = Object.freeze({
-    ...prepared,
-    operation: validatedOperation(prepared.operation),
-  });
-  assertPreparedResponseIdentity(validated, normalized, identity);
-  if (validated.canBroadcast !== true) {
-    throw new KeeperJournalClientError(
-      'KEEPER_JOURNAL_BROADCAST_BLOCKED',
-      'Keeper operation is not a newly authorized broadcast for this fencing token.',
-      { statusCode: 409 },
-    );
-  }
-  return broadcast(validated.operation);
+  throw new KeeperJournalClientError(
+    'KEEPER_JOURNAL_DURABLE_SIGNING_REQUIRED',
+    'Direct PREPARED broadcast is disabled; sign, BIND_SIGNED, then replay the exact durable bytes.',
+    { statusCode: 409 },
+  );
 }

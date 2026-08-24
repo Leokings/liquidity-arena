@@ -3,12 +3,21 @@ import { readFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 
+import { abi, createClient } from 'genlayer-js';
+import { testnetBradbury } from 'genlayer-js/chains';
+
 import {
   createGenLayerRpcProxyMiddleware,
   genLayerRpcProxyPlugin,
   normalizeJsonRpcIds,
   restoreJsonRpcIds,
 } from './genlayer-rpc-proxy.js';
+import {
+  ROUND_NOT_SCHEDULED_NOTICE,
+  ROUND_NOT_SCHEDULED_RPC_CODE,
+  ROUND_NOT_SCHEDULED_RPC_MESSAGE,
+  isRoundNotScheduledError,
+} from './round-probe-error.js';
 import { createClientIpResolver } from '../server/app.mjs';
 
 function responseRecorder() {
@@ -46,6 +55,42 @@ async function invoke(middleware, {
   return { res, nextCalled };
 }
 
+function genCallRequest(id, method = 'get_epoch', args = [2_000_000_000n]) {
+  return {
+    jsonrpc: '2.0',
+    id,
+    method: 'gen_call',
+    params: [{
+      type: 'read',
+      to: '0x1111111111111111111111111111111111111111',
+      from: '0x2222222222222222222222222222222222222222',
+      data: abi.transactions.serialize([
+        abi.calldata.encode(abi.calldata.makeCalldataObject(method, args, undefined)),
+        false,
+      ]),
+      transaction_hash_variant: 'latest-nonfinal',
+    }],
+  };
+}
+
+function encodedGenvmErrorData(contractMessage = '[EXPECTED] EPOCH_UNKNOWN') {
+  return Buffer.from(abi.calldata.encode(new Map([
+    ['data', contractMessage],
+    ['events', []],
+    ['fingerprint', new Map([['frames', []]])],
+    ['kind', 'UserError'],
+    ['storage_changes', []],
+  ]))).toString('hex');
+}
+
+function genvmError(contractMessage = '[EXPECTED] EPOCH_UNKNOWN') {
+  return {
+    code: -32_000,
+    message: 'execution failed: &genvm.VMResult{Kind:0x1, ReturnData:[]uint8{0x01,0x02}}: genvm execution error',
+    data: encodedGenvmErrorData(contractMessage),
+  };
+}
+
 test('normalizes a string request ID to a safe number and restores it', async () => {
   let upstreamRequest;
   const middleware = createGenLayerRpcProxyMiddleware({
@@ -74,6 +119,101 @@ test('normalizes a string request ID to a safe number and restores it', async ()
   });
   assert.equal(res.statusCode, 200);
   assert.equal(res.headers['access-control-allow-origin'], '*');
+});
+
+test('canonical get_epoch EPOCH_UNKNOWN is reduced to the bounded browser-safe state', async () => {
+  const rawError = genvmError();
+  const middleware = createGenLayerRpcProxyMiddleware({
+    fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body);
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        id: request.id,
+        error: rawError,
+      }));
+    },
+  });
+  const { res } = await invoke(middleware, {
+    body: JSON.stringify(genCallRequest('round-probe')),
+  });
+  const payload = JSON.parse(res.body);
+
+  assert.deepEqual(payload, {
+    jsonrpc: '2.0',
+    id: 'round-probe',
+    error: {
+      code: ROUND_NOT_SCHEDULED_RPC_CODE,
+      message: ROUND_NOT_SCHEDULED_RPC_MESSAGE,
+    },
+  });
+  assert.doesNotMatch(res.body, /ReturnData|genvm execution error/);
+  assert.equal(res.body.includes(rawError.data), false);
+});
+
+test('the real SDK logs and throws only sanitized round-probe data', { concurrency: false }, async () => {
+  const rawError = genvmError();
+  const middleware = createGenLayerRpcProxyMiddleware({
+    fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body);
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0', id: request.id, error: rawError,
+      }));
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  const originalConsoleError = console.error;
+  const consoleLines = [];
+  let caught;
+  try {
+    globalThis.fetch = async (_url, options) => {
+      const { res } = await invoke(middleware, { body: options.body });
+      return new Response(res.body, {
+        status: res.statusCode,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    console.error = (...values) => consoleLines.push(values.map(String).join(' '));
+    const client = createClient({
+      chain: testnetBradbury,
+      endpoint: 'https://arena.example/genlayer-rpc',
+    });
+    await client.readContract({
+      address: '0x1111111111111111111111111111111111111111',
+      functionName: 'get_epoch',
+      args: [2_000_000_000n],
+    });
+  } catch (error) {
+    caught = error;
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(isRoundNotScheduledError(caught), true);
+  const browserSurface = [caught?.message, ROUND_NOT_SCHEDULED_NOTICE, ...consoleLines].join('\n');
+  assert.match(browserSurface, /round is not scheduled yet/i);
+  assert.doesNotMatch(browserSurface, /ReturnData|genvm execution error/);
+  assert.equal(browserSurface.includes(rawError.data), false);
+});
+
+test('lookalike and non-epoch GenVM errors stay failed and lose all raw VM bytes', async () => {
+  const variants = [
+    { request: genCallRequest(1, 'get_epoch_asset', [2_000_000_000n, 'BTC']), error: genvmError() },
+    { request: genCallRequest(2), error: genvmError('[EXPECTED] EPOCH_DUPLICATE') },
+    { request: genCallRequest(3), error: { ...genvmError(), extra: true } },
+  ];
+  for (const { request, error } of variants) {
+    const middleware = createGenLayerRpcProxyMiddleware({
+      fetchImpl: async () => new Response(JSON.stringify({
+        jsonrpc: '2.0', id: request.id, error,
+      })),
+    });
+    const { res } = await invoke(middleware, { body: JSON.stringify(request) });
+    const payload = JSON.parse(res.body);
+    assert.deepEqual(payload.error, { code: -32_000, message: 'GenLayer contract call failed.' });
+    assert.doesNotMatch(res.body, /ReturnData|genvm execution error/);
+    assert.equal(res.body.includes(error.data), false);
+  }
 });
 
 test('numeric-ID transaction proofs preserve GenLayer integer digits byte-for-byte', async () => {

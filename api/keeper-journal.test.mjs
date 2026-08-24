@@ -108,7 +108,7 @@ test('health is authenticated but does not require an idempotency key', async ()
   assert.equal(res.headers['cache-control'], 'no-store');
 });
 
-test('client readiness requires the exact Bradbury version 9 journal schema', async () => {
+test('client readiness requires the exact Bradbury version 10 journal schema', async () => {
   const ready = {
     status: 'ready',
     service: 'liquidity-arena-keeper-journal',
@@ -120,7 +120,7 @@ test('client readiness requires the exact Bradbury version 9 journal schema', as
       authenticationConfigured: true,
       signerConfigured: true,
     },
-    database: { configured: true, ready: true, schemaVersion: 9 },
+    database: { configured: true, ready: true, schemaVersion: 10 },
   };
   const client = createKeeperJournalClient({
     endpoint: 'https://example.test/api/keeper-journal',
@@ -130,7 +130,7 @@ test('client readiness requires the exact Bradbury version 9 journal schema', as
       headers: { 'content-type': 'application/json' },
     }),
   });
-  assert.equal((await client.health()).database.schemaVersion, 9);
+  assert.equal((await client.health()).database.schemaVersion, 10);
 
   const staleClient = createKeeperJournalClient({
     endpoint: 'https://example.test/api/keeper-journal',
@@ -191,7 +191,7 @@ test('outage before PREPARE acknowledgment causes zero broadcasts', async () => 
       idempotencyKey: 'keeper:test:prepare1',
       broadcast() { broadcasts += 1; },
     }),
-    (error) => error === unavailable,
+    (error) => error.code === 'KEEPER_JOURNAL_DURABLE_SIGNING_REQUIRED',
   );
   assert.equal(broadcasts, 0);
 });
@@ -263,6 +263,15 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
     args: ['1800014400'],
     valueAtto: '0',
     state: 'PREPARED',
+    submissionProtocol: 'BRADBURY_DURABLE_RAW_V1',
+    outerTransactionHash: null,
+    outerSenderNonce: null,
+    signedEvidenceSha256: null,
+    signedAt: null,
+    signedTransactionEvidence: null,
+    outerReceiptObservedAt: null,
+    submissionEvidence: null,
+    outerOutcomeEvidence: null,
     transactionHash: null,
     lifecycleStatus: null,
     lifecycleObservedAt: null,
@@ -289,7 +298,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
     fetchImpl: async (_url, options) => {
       authorization = options.headers.authorization;
       return new Response(JSON.stringify({
-        status: 'ok', action: 'PREPARE', operation, canBroadcast: true, inserted: true,
+        status: 'ok', action: 'PREPARE', operation, canSign: true, inserted: true,
         auditedRetryNonce: null,
       }), { status: 200, headers: { 'content-type': 'application/json' } });
     },
@@ -299,7 +308,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
     operation: requestedOperation,
     idempotencyKey: 'keeper:test:00000003',
   });
-  assert.equal(result.canBroadcast, true);
+  assert.equal(result.canSign, true);
   assert.equal(result.operation.operationId, operation.operationId);
   assert.equal(authorization, `Bearer ${SECRET}`);
 
@@ -313,7 +322,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
     endpoint: 'https://example.test/api/keeper-journal',
     secret: SECRET,
     fetchImpl: async () => new Response(JSON.stringify({
-      status: 'ok', action: 'PREPARE', operation: retryOperation, canBroadcast: true, inserted: true,
+      status: 'ok', action: 'PREPARE', operation: retryOperation, canSign: true, inserted: true,
       auditedRetryNonce: '73',
     }), { status: 200, headers: { 'content-type': 'application/json' } }),
   });
@@ -334,7 +343,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
       status: 'ok',
       action: 'PREPARE',
       operation: { ...operation, method: 'activate_timeout_refund' },
-      canBroadcast: true,
+      canSign: true,
       inserted: true,
       auditedRetryNonce: null,
     }), { status: 200, headers: { 'content-type': 'application/json' } }),
@@ -350,6 +359,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
 
   const submitted = {
     ...operation,
+    submissionProtocol: null,
     state: 'SUBMITTED',
     transactionHash: `0x${'b'.repeat(64)}`,
     lifecycleStatus: 'PENDING',
@@ -362,7 +372,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
     endpoint: 'https://example.test/api/keeper-journal',
     secret: SECRET,
     fetchImpl: async () => new Response(JSON.stringify({
-      status: 'ok', action: 'PREPARE', operation: submitted, canBroadcast: true, inserted: false,
+      status: 'ok', action: 'PREPARE', operation: submitted, canSign: true, inserted: false,
       auditedRetryNonce: null,
     }), { status: 200, headers: { 'content-type': 'application/json' } }),
   });
@@ -379,7 +389,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
     endpoint: 'https://example.test/api/keeper-journal',
     secret: SECRET,
     fetchImpl: async () => new Response(JSON.stringify({
-      status: 'ok', action: 'PREPARE', operation, canBroadcast: true, inserted: false,
+      status: 'ok', action: 'PREPARE', operation, canSign: true, inserted: false,
       auditedRetryNonce: null,
     }), { status: 200, headers: { 'content-type': 'application/json' } }),
   });
@@ -397,7 +407,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
     runPreparedKeeperBroadcast({
       client: {
         async prepareOperation() {
-          return { operation: submitted, canBroadcast: true, inserted: false };
+          return { operation: submitted, canSign: true, inserted: false };
         },
       },
       lease: { holderId: HOLDER, signerAddress: SIGNER, fencingToken: '1' },
@@ -405,7 +415,7 @@ test('PREPARE response can authorize only the exact newly fenced operation', asy
       idempotencyKey: 'keeper:test:00000006',
       broadcast() { broadcasts += 1; },
     }),
-    (error) => error.code === 'KEEPER_JOURNAL_RESPONSE_AUTHORIZATION',
+    (error) => error.code === 'KEEPER_JOURNAL_DURABLE_SIGNING_REQUIRED',
   );
   assert.equal(broadcasts, 0);
 });

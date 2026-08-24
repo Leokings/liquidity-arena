@@ -11,6 +11,11 @@ import {
   normalizedIdempotencyKey,
   parseKeeperJournalRequest,
 } from '../keeper-journal/schema.mjs';
+import {
+  durableOuterAmbiguityEvidence,
+  durableOuterFailureEvidence,
+  durableSignedEvidence,
+} from './durable-signed-test-helper.mjs';
 
 const SIGNER_MIXED = '0x12BA664A1EC9CA78B070D103C6A69E20673F4B51';
 const CONTRACT_MIXED = '0xB2AE59AE641F571726AE81E30080F8C2192B15EF';
@@ -393,6 +398,96 @@ test('request schemas reject unknown fields and require bounded idempotency keys
   );
   assert.throws(() => normalizedIdempotencyKey('short'), /Idempotency-Key/);
   assert.equal(normalizedIdempotencyKey('keeper:test:00000001'), 'keeper:test:00000001');
+});
+
+test('durable outer outcomes are exact finalized tagged unions and reserved from TRANSITION', async () => {
+  const signed = await durableSignedEvidence({
+    contractAddress: CONTRACT_MIXED.toLowerCase(),
+    method: 'resolve_epoch',
+    args: [EPOCH],
+  });
+  const base = {
+    action: 'BIND_OUTER_OUTCOME',
+    holderId: HOLDER,
+    signerAddress: SIGNER_MIXED,
+    fencingToken: '7',
+    operationId: 'a'.repeat(64),
+  };
+  const failure = durableOuterFailureEvidence(signed);
+  const parsedFailure = parseKeeperJournalRequest({
+    ...base,
+    outerOutcomeEvidence: failure,
+  });
+  assert.equal(parsedFailure.outerOutcomeEvidence.receiptStatus, '0');
+  assert.equal(parsedFailure.outerOutcomeEvidence.newTransactionEventCount, '0');
+
+  const ambiguity = durableOuterAmbiguityEvidence(signed, '2');
+  const parsedAmbiguity = parseKeeperJournalRequest({
+    ...base,
+    outerOutcomeEvidence: ambiguity,
+  });
+  assert.equal(parsedAmbiguity.outerOutcomeEvidence.receiptStatus, '1');
+  assert.equal(parsedAmbiguity.outerOutcomeEvidence.newTransactionEventCount, '2');
+
+  for (const invalid of [
+    { ...failure, newTransactionEventCount: null },
+    { ...failure, finalizedHeadBlockNumber: '18790586' },
+    { ...ambiguity, receiptCanonical: null },
+    { ...ambiguity, extra: 'forbidden' },
+  ]) {
+    assert.throws(
+      () => parseKeeperJournalRequest({ ...base, outerOutcomeEvidence: invalid }),
+      /outer|canonical|unexpected|finalized/i,
+    );
+  }
+  for (const [targetState, reasonCode, metadata] of [
+    ['FINALIZED_FAILURE', 'OUTER_RECEIPT_REVERTED', {
+      transactionHash: TRANSACTION_HASH,
+      lifecycleStatus: 'FINALIZED',
+      receiptIdentityVerified: true,
+      executionVerified: true,
+      executionSucceeded: false,
+    }],
+    ['QUARANTINED', 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS', {
+      transactionHash: TRANSACTION_HASH,
+      lifecycleStatus: 'FINALIZED',
+      receiptIdentityVerified: false,
+      ambiguityCode: 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS',
+    }],
+  ]) {
+    assert.throws(
+      () => parseKeeperJournalRequest({
+        action: 'TRANSITION',
+        holderId: HOLDER,
+        signerAddress: SIGNER_MIXED,
+        fencingToken: '7',
+        operationId: 'a'.repeat(64),
+        targetState,
+        reasonCode,
+        metadata,
+      }),
+      /BIND_OUTER_OUTCOME/,
+    );
+  }
+});
+
+test('durable signing request rejects raw envelopes larger than four KiB', async () => {
+  const evidence = await durableSignedEvidence({
+    contractAddress: CONTRACT_MIXED.toLowerCase(),
+    method: 'resolve_epoch',
+    args: [EPOCH],
+  });
+  assert.throws(
+    () => parseKeeperJournalRequest({
+      action: 'BIND_SIGNED',
+      holderId: HOLDER,
+      signerAddress: SIGNER_MIXED,
+      fencingToken: '7',
+      operationId: 'a'.repeat(64),
+      evidence: { ...evidence, rawTransaction: `0x${'aa'.repeat(4097)}` },
+    }),
+    /4096 bytes|too large/i,
+  );
 });
 
 test('recovery cursors are canonical, opaque, and round-trip immutable keyset fields', () => {
