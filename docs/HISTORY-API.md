@@ -39,13 +39,13 @@ The synchronizer uses a persisted rotating payout cursor plus bounded epoch work
 
 `GET /api/history-health` is ready only when:
 
-- migrations 001–009 have exact checksums;
-- no migration newer than version 9 exists;
+- migrations 001–010 have exact checksums;
+- no migration newer than version 10 exists;
 - exactly one configured Bradbury V8 deployment is active;
 - legacy deployments are inactive;
 - epoch and payout projections are complete;
 - required payout-stage evidence is present and internally consistent;
-- keeper journal schema V9 is healthy.
+- keeper journal schema V10 is healthy.
 
 Migration 004 is append-only and intentionally refuses a second application. Its checksum is `1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910`.
 Migration 005 (`keeper_receipt_identity_revalidation`) is likewise append-only and checksum-pinned at `a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59`.
@@ -53,8 +53,12 @@ Migration 006 (`keeper_accepted_handoff`) is append-only and checksum-pinned at 
 Migration 007 (`keeper_prehash_abandonment`) is append-only and checksum-pinned at `4fa4e8103a1b3caa7022cff2ea1b4868ea6128a4f6b359cdb93a8a6320e0a8f3`.
 Migration 008 (`keeper_prehash_legacy_constraint_cleanup`) is append-only and checksum-pinned at `030604d61f54ad9f6e388f497723d7eaa7118632866574cff976dd0bd43f680a`.
 Migration 009 (`keeper_create_prehash_recovery`) is append-only and checksum-pinned at `5be4175a165d872112f97b88323f3ed013b47eb0aca37b17c2e8c6953cde6694`.
+Migration 010 (`keeper_durable_signed_envelope`) is append-only and stores one private raw signed
+envelope before broadcast, with immutable outer-hash/nonce evidence and finalized canonical
+`NewTransaction` receipt evidence before the inner transaction ID is bound.
+Its checksum is `4f59d7ba919df88f2bef6c409f2449d6d76da47f25d96e02c7c013fd6c9d6fcf`.
 
-Schema V9 preserves every abandoned hashless attempt and its immutable evidence, and removes the
+Schema V10 preserves every abandoned hashless attempt and its immutable evidence, and removes the
 legacy submission constraint that predated `ABANDONED_PREHASH`. Audited
 no-broadcast evidence additionally binds the target contract and is limited to an exact
 `resolve_epoch` or `create_epoch` operation. The former requires the unchanged resolvable epoch;

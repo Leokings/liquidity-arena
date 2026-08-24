@@ -43,10 +43,13 @@ The keeper never calls EVM `withdraw()` and has no recipient key.
 
 ## Durable journal
 
-Journal schema V9 supports epoch and payout subjects, a hard two-slot pipeline, immutable handoff
+Journal schema V10 supports epoch and payout subjects, a hard two-slot pipeline, immutable handoff
 lineage, same-subject exclusion, and narrowly gated revalidation of a finalized generic
-receipt-identity quarantine. An operation is prepared before broadcast and records the exact
-method, arguments, signer, contract, transaction identity, attempt, and receipts.
+receipt-identity quarantine. A V10 operation moves `PREPARED -> SIGNED -> SUBMITTED`: the exact
+signed Bradbury raw envelope, outer transaction hash, sender nonce, and decoded call evidence are
+durable before any broadcast. Only a verified `NewTransaction` outer receipt may bind the inner
+GenLayer transaction ID. Generic operation and recovery responses redact the raw bytes; an active
+fenced lease may retrieve them only through `LOAD_SIGNED` for exact replay.
 An exact hashless attempt may become `ABANDONED_PREHASH` only after structural proof that the
 process never started or an audited Bradbury transaction/nonce scan confirms that no canonical or
 pending transaction was observed. The scan does not claim that no network packet was ever sent.
@@ -69,8 +72,8 @@ rechecks that attestation immediately before recording it.
 npm run keeper:v8:abandon-prehash -- --operation-id <64-hex-operation-id> --evidence-json <audited-evidence.json>
 ```
 
-Operational order is strict: apply migrations 007–009, deploy the schema-v9 application, wait
-for journal health to report version 9, run the audited non-signing recovery, and only then permit the
+Operational order is strict: apply migrations 007–010, deploy the schema-v10 application, wait
+for journal health to report version 10, run the audited non-signing recovery, and only then permit the
 keeper to create attempt two. The watchdog remains disabled until the controlled retry and
 readiness checks pass.
 
@@ -92,20 +95,21 @@ Recovery rules:
 1. Acquire the Bradbury lease.
 2. Probe every unresolved row nonblocking before preparing new work.
 3. Suppress duplicate logical operations and every operation for an in-flight subject.
-4. Never rebroadcast or replace a durably bound transaction hash.
+4. A `SIGNED` row may replay only its exact stored raw bytes; never sign a replacement or reuse its nonce.
 5. Permit one independent successor only when the predecessor has a fresh, exact `ACCEPTED` proof.
 6. Refuse a third attention row; slots `0` and `1` are database-enforced.
 7. Accept only the exact finalized receipt and monotonic post-state as verification.
 8. Quarantine contradictory finalized hashes, arguments, or domain identity.
 
-Scheduled recovery performs a bounded live probe and stops safely on a provider failure; it never
-rebroadcasts the recorded operation. A newly submitted transaction may use up to 480 reads at
+Scheduled recovery performs a bounded live probe and stops safely on a provider failure. It may
+replay an exact `SIGNED` raw envelope by its deterministic outer hash, but cannot construct or sign
+a replacement. A newly submitted transaction may use up to 480 reads at
 five-second intervals (about 40 minutes) to reach exact `ACCEPTED` or `FINALIZED`, beneath the
 keeper's hard 45-minute run deadline. Before signing any fresh write, the keeper reserves that
 budget plus the bounded post-state verification margin. After one fresh signature, every remaining
 action is deferred to the next scheduled run.
 
-Migration 004 checksum is `1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910`. Migration 005 (`keeper_receipt_identity_revalidation`) checksum is `a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59`. Migration 006 (`keeper_accepted_handoff`) checksum is `5b81d291c121cae31962b164608e5ad5fc65a19158bed95cd96fae0348e13bdf`. Migration 007 (`keeper_prehash_abandonment`) checksum is `4fa4e8103a1b3caa7022cff2ea1b4868ea6128a4f6b359cdb93a8a6320e0a8f3`. Migration 008 (`keeper_prehash_legacy_constraint_cleanup`) checksum is `030604d61f54ad9f6e388f497723d7eaa7118632866574cff976dd0bd43f680a`. Migration 009 (`keeper_create_prehash_recovery`) checksum is `5be4175a165d872112f97b88323f3ed013b47eb0aca37b17c2e8c6953cde6694`. Keeper health requires exact migrations 001–009, the named finalized-state constraint, and rejects any version newer than 9.
+Migration 004 checksum is `1c713e2f54f873b6ffd8ae771ac9dd9e67ed61293d667b48a394e2182a26e910`. Migration 005 (`keeper_receipt_identity_revalidation`) checksum is `a9473b780b659ea6bf04809d8c1b59bdaf6e0c8707328a7b03109e7ab5b5dd59`. Migration 006 (`keeper_accepted_handoff`) checksum is `5b81d291c121cae31962b164608e5ad5fc65a19158bed95cd96fae0348e13bdf`. Migration 007 (`keeper_prehash_abandonment`) checksum is `4fa4e8103a1b3caa7022cff2ea1b4868ea6128a4f6b359cdb93a8a6320e0a8f3`. Migration 008 (`keeper_prehash_legacy_constraint_cleanup`) checksum is `030604d61f54ad9f6e388f497723d7eaa7118632866574cff976dd0bd43f680a`. Migration 009 (`keeper_create_prehash_recovery`) checksum is `5be4175a165d872112f97b88323f3ed013b47eb0aca37b17c2e8c6953cde6694`. Migration 010 (`keeper_durable_signed_envelope`) checksum is `4f59d7ba919df88f2bef6c409f2449d6d76da47f25d96e02c7c013fd6c9d6fcf`. Keeper health requires exact migrations 001–010, the named V10 durable-envelope constraints and indexes, and rejects any version newer than 10.
 
 The isolated PostgreSQL regression for migration 008 is
 `migrations/regressions/008_keeper_prehash_legacy_constraint_cleanup.sql`. It recreates the exact

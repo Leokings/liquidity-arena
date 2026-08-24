@@ -7,7 +7,8 @@ import { newKeeperJournalHolderId } from '../keeper-journal/client.mjs';
 const TRANSACTION_HASH = /^0x[0-9a-f]{64}$/;
 const OPERATION_ID = /^[0-9a-f]{64}$/;
 const RECOVERABLE_STATES = new Set([
-  'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'QUARANTINED', 'STATE_SATISFIED_UNPROVEN',
+  'PREPARED', 'SIGNED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'QUARANTINED',
+  'STATE_SATISFIED_UNPROVEN',
 ]);
 const JOURNAL_STATES = new Set([
   ...RECOVERABLE_STATES, 'VERIFIED', 'FINALIZED_FAILURE', 'ABANDONED_PREHASH',
@@ -167,6 +168,20 @@ export function validateRecoveredKeeperOperation(operation) {
       && !TRANSACTION_HASH.test(String(operation.transactionHash || ''))) {
     fail('KEEPER_JOURNAL_SCHEMA', 'Recovered operation transaction hash is malformed.');
   }
+  if (operation.signedTransactionEvidence?.rawTransaction !== undefined
+      || (operation.state === 'SIGNED' && (
+        operation.transactionHash !== null
+        || operation.signedTransactionEvidence === null
+        || operation.outerTransactionHash === null
+        || operation.outerSenderNonce === null
+        || operation.signedEvidenceSha256 === null
+        || operation.signedAt === null
+        || operation.submissionEvidence !== null
+      ))
+      || (operation.submissionProtocol === 'BRADBURY_DURABLE_RAW_V1'
+        && operation.transactionHash !== null && operation.submissionEvidence === null)) {
+    fail('KEEPER_JOURNAL_SCHEMA', 'Recovered durable signed identity is malformed.');
+  }
   if (['SUBMITTED', 'FINALIZED_SUCCESS'].includes(operation.state)
       && operation.transactionHash === null) {
     fail('KEEPER_JOURNAL_SCHEMA', 'Recovered submitted operation has no transaction hash.');
@@ -270,10 +285,10 @@ export function createAuthoritativeKeeperSession({
         || health?.configuration?.signerConfigured !== true
         || health?.database?.configured !== true
         || health?.database?.ready !== true
-        || health?.database?.schemaVersion !== 9) {
+        || health?.database?.schemaVersion !== 10) {
       fail(
         'KEEPER_JOURNAL_NOT_READY',
-        'The authoritative keeper journal is not ready on schema version 9; no lease or write is permitted.',
+        'The authoritative keeper journal is not ready on schema version 10; no lease or write is permitted.',
       );
     }
     const response = await client.acquireLease({
@@ -403,12 +418,43 @@ export function createAuthoritativeKeeperSession({
         idempotencyKey: key(`prepare-${operation.method}-${operation.subjectId}`),
       });
     },
-    async bind(operationId, transactionHash) {
+    async bindSigned(operationId, evidence) {
+      return client.bindSigned({
+        lease: requireLease(),
+        operationId,
+        evidence,
+        idempotencyKey: key(`bind-signed-${operationId}`),
+      });
+    },
+    async loadSigned(operationId) {
+      return client.loadSigned({
+        lease: requireLease(),
+        operationId,
+        idempotencyKey: key(`load-signed-${operationId}`),
+      });
+    },
+    async loadOperation(operationId) {
+      return client.loadOperation({
+        lease: requireLease(),
+        operationId,
+        idempotencyKey: key(`load-operation-${operationId}`),
+      });
+    },
+    async bind(operationId, transactionHash, submissionEvidence) {
       return client.bindSubmission({
         lease: requireLease(),
         operationId,
         transactionHash,
+        submissionEvidence,
         idempotencyKey: key(`bind-${operationId}`),
+      });
+    },
+    async bindOuterOutcome(operationId, outerOutcomeEvidence) {
+      return client.bindOuterOutcome({
+        lease: requireLease(),
+        operationId,
+        outerOutcomeEvidence,
+        idempotencyKey: key(`bind-outer-outcome-${operationId}`),
       });
     },
     async observe(operationId, lifecycleStatus) {
@@ -559,11 +605,85 @@ export async function reconcileAuthoritativeOperation({
     });
   }
   const action = keeperActionForOperation(operation);
-  if (operation.state === 'PREPARED' || operation.transactionHash === null) {
+  if (operation.state === 'PREPARED') {
     return Object.freeze({
       verified: false,
       operation,
       pending: pending(operation, 'PREPARED_WITHOUT_DURABLE_HASH'),
+    });
+  }
+  if (operation.state === 'SIGNED') {
+    if (typeof operator?.broadcastSignedWrite !== 'function') {
+      return Object.freeze({
+        verified: false,
+        operation,
+        pending: pending(operation, 'SIGNED_REPLAY_UNAVAILABLE'),
+      });
+    }
+    try {
+      const replay = await operator.broadcastSignedWrite(operation, session);
+      if (!replay || typeof replay !== 'object') {
+        fail('KEEPER_JOURNAL_SCHEMA', 'Durable signed replay returned an invalid outcome.');
+      }
+      if (replay.outcome === 'SUBMITTED') {
+        if (!replay.submissionEvidence || typeof replay.submissionEvidence !== 'object'
+            || replay.transactionHash === undefined
+            || replay.submissionEvidence.transactionHash !== replay.transactionHash) {
+          fail('KEEPER_JOURNAL_SCHEMA', 'Durable signed replay returned invalid submission evidence.');
+        }
+        const bound = await session.bind(
+          operation.operationId,
+          replay.transactionHash,
+          replay.submissionEvidence,
+        );
+        operation = validateRecoveredKeeperOperation(bound?.operation || bound);
+      } else if (replay.outcome === 'OUTER_FAILURE') {
+        if (!replay.outerFailureEvidence || typeof replay.outerFailureEvidence !== 'object') {
+          fail('KEEPER_JOURNAL_SCHEMA', 'Durable signed replay returned invalid outer failure evidence.');
+        }
+        const bound = await session.bindOuterOutcome(
+          operation.operationId,
+          replay.outerFailureEvidence,
+        );
+        operation = validateRecoveredKeeperOperation(bound?.operation || bound);
+        return Object.freeze({
+          verified: false,
+          operation,
+          pending: pending(operation, 'OUTER_RECEIPT_REVERTED'),
+        });
+      } else if (replay.outcome === 'OUTER_AMBIGUOUS') {
+        if (!replay.outerAmbiguityEvidence
+            || typeof replay.outerAmbiguityEvidence !== 'object') {
+          fail('KEEPER_JOURNAL_SCHEMA', 'Durable signed replay returned invalid outer ambiguity evidence.');
+        }
+        const bound = await session.bindOuterOutcome(
+          operation.operationId,
+          replay.outerAmbiguityEvidence,
+        );
+        operation = validateRecoveredKeeperOperation(bound?.operation || bound);
+        return Object.freeze({
+          verified: false,
+          operation,
+          pending: pending(operation, 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS'),
+        });
+      } else {
+        fail('KEEPER_JOURNAL_SCHEMA', 'Durable signed replay returned an unknown outcome.');
+      }
+    } catch (error) {
+      return Object.freeze({
+        verified: false,
+        operation,
+        pending: pending(operation, 'SIGNED_REPLAY_PENDING', {
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      });
+    }
+  }
+  if (operation.transactionHash === null) {
+    return Object.freeze({
+      verified: false,
+      operation,
+      pending: pending(operation, `JOURNAL_${operation.state}_WITHOUT_INNER_HASH`),
     });
   }
   if (operation.state === 'QUARANTINED') {
@@ -871,12 +991,46 @@ export async function recoverAuthoritativeOperations(options) {
   const recovered = [];
   const accepted = [];
   const pendingOperations = [];
+  const reconciliationByOperationId = new Map();
   for (const operation of orderedOperations) {
+    if (operation.state === 'SIGNED' && operation.handoffPredecessorOperationId !== null) {
+      const predecessorId = operation.handoffPredecessorOperationId;
+      const predecessorResult = reconciliationByOperationId.get(predecessorId);
+      let predecessorAuthorized = predecessorResult?.verified === true
+        || predecessorResult?.accepted === true;
+      let predecessorState = predecessorResult?.operation?.state || null;
+      let predecessorError = null;
+      if (!predecessorResult) {
+        try {
+          const loaded = await options.session.loadOperation(predecessorId);
+          const predecessor = validateRecoveredKeeperOperation(loaded?.operation || loaded);
+          predecessorState = predecessor.state;
+          predecessorAuthorized = predecessor.state === 'VERIFIED';
+        } catch (error) {
+          predecessorError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      if (!predecessorAuthorized) {
+        const blockedResult = Object.freeze({
+          verified: false,
+          operation,
+          pending: pending(operation, 'SIGNED_PREDECESSOR_NOT_REVALIDATED', {
+            handoffPredecessorOperationId: predecessorId,
+            predecessorState,
+            ...(predecessorError === null ? {} : { message: predecessorError }),
+          }),
+        });
+        reconciliationByOperationId.set(operation.operationId, blockedResult);
+        pendingOperations.push(blockedResult.pending);
+        continue;
+      }
+    }
     const result = await reconcileAuthoritativeOperation({
       ...options,
       lifecycleAttempts: options.recoveryLifecycleAttempts ?? 1,
       operation,
     });
+    reconciliationByOperationId.set(operation.operationId, result);
     if (result.verified) recovered.push(Object.freeze({
       ...result.action,
       operationId: operation.operationId,

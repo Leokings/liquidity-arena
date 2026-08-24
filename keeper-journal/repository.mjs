@@ -1,6 +1,12 @@
+import { createHash } from 'node:crypto';
+
 import { keeperJournalDatabaseUrl } from './config.mjs';
 import { KeeperJournalError } from './errors.mjs';
 import { publicKeeperOperation } from './schema.mjs';
+import {
+  assertSignedEvidenceMatchesOperation,
+  normalizeDurableSignedEvidence,
+} from './signed-transaction.mjs';
 
 export const KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM = 'd2609dfc884eae97d2fed12bf2b582f5a3a3d53de65c719e606d1a53afea6266';
 export const KEEPER_JOURNAL_SCHEMA_CHECKSUM = '9af77d57fe7bd9317b8a2723bfc0d74ad48146ff3bb677a0b12c6944eb1dea70';
@@ -10,6 +16,7 @@ export const KEEPER_JOURNAL_SCHEMA_V6_CHECKSUM = '5b81d291c121cae31962b164608e5a
 export const KEEPER_JOURNAL_SCHEMA_V7_CHECKSUM = '4fa4e8103a1b3caa7022cff2ea1b4868ea6128a4f6b359cdb93a8a6320e0a8f3';
 export const KEEPER_JOURNAL_SCHEMA_V8_CHECKSUM = '030604d61f54ad9f6e388f497723d7eaa7118632866574cff976dd0bd43f680a';
 export const KEEPER_JOURNAL_SCHEMA_V9_CHECKSUM = '5be4175a165d872112f97b88323f3ed013b47eb0aca37b17c2e8c6953cde6694';
+export const KEEPER_JOURNAL_SCHEMA_V10_CHECKSUM = '4f59d7ba919df88f2bef6c409f2449d6d76da47f25d96e02c7c013fd6c9d6fcf';
 export const KEEPER_JOURNAL_MAX_PIPELINE_DEPTH = 2;
 const QUERY_TIMEOUT_MS = 8_000;
 const LEASE_SCOPE = 'bradbury:4221:keeper';
@@ -129,6 +136,18 @@ export function createNeonKeeperJournalRepository({
                 AND position(
                   '''ACCEPT_HANDOFF''' IN pg_get_constraintdef(request_action_constraint.oid)
                 ) > 0
+                AND position(
+                  '''BIND_SIGNED''' IN pg_get_constraintdef(request_action_constraint.oid)
+                ) > 0
+                AND position(
+                  '''LOAD_SIGNED''' IN pg_get_constraintdef(request_action_constraint.oid)
+                ) > 0
+                AND position(
+                  '''LOAD_OPERATION''' IN pg_get_constraintdef(request_action_constraint.oid)
+                ) > 0
+                AND position(
+                  '''BIND_OUTER_OUTCOME''' IN pg_get_constraintdef(request_action_constraint.oid)
+                ) > 0
            ) AS request_action_constraint_valid,
            to_regprocedure('public.arena_guard_keeper_operation_update()') IS NOT NULL AS guard_function_exists,
            EXISTS (
@@ -140,14 +159,20 @@ export function createNeonKeeperJournalRepository({
            ) AS guard_trigger_exists,
            to_regclass('public.arena_keeper_operations_logical_attempt_key') IS NOT NULL
              AS logical_attempt_key_exists,
-           to_regclass('public.arena_keeper_operations_pipeline_slot_v6_idx') IS NOT NULL
+           to_regclass('public.arena_keeper_operations_pipeline_slot_v10_idx') IS NOT NULL
              AS pipeline_slot_index_exists,
-           to_regclass('public.arena_keeper_operations_attention_subject_v6_idx') IS NOT NULL
+           to_regclass('public.arena_keeper_operations_attention_subject_v10_idx') IS NOT NULL
              AS attention_subject_index_exists,
            to_regclass('public.arena_keeper_operations_handoff_predecessor_v6_idx') IS NOT NULL
              AS handoff_predecessor_index_exists,
-           to_regclass('public.arena_keeper_operations_attention_v6_idx') IS NOT NULL
+           to_regclass('public.arena_keeper_operations_attention_v10_idx') IS NOT NULL
              AS attention_index_exists,
+           to_regclass('public.arena_keeper_operations_recovery_v10_idx') IS NOT NULL
+             AS recovery_index_exists,
+           to_regclass('public.arena_keeper_operations_outer_transaction_hash_v10_idx') IS NOT NULL
+             AS outer_hash_index_exists,
+           to_regclass('public.arena_keeper_operations_outer_nonce_v10_idx') IS NOT NULL
+             AS outer_nonce_index_exists,
            to_regclass('public.arena_keeper_operations_one_unresolved_signer_idx') IS NULL
              AS legacy_unresolved_index_absent,
            to_regprocedure('public.arena_guard_keeper_accepted_handoff()') IS NOT NULL
@@ -192,7 +217,7 @@ export function createNeonKeeperJournalRepository({
                WHERE conrelid = 'public.arena_keeper_operations'::regclass
                  AND conname IN (
                    'arena_keeper_operations_pipeline_slot_v6_check',
-                   'arena_keeper_operations_attention_slot_v6_check',
+                   'arena_keeper_operations_attention_slot_v10_check',
                    'arena_keeper_operations_handoff_predecessor_v6_fk',
                    'arena_keeper_operations_acceptance_evidence_v6_check'
                  )
@@ -211,11 +236,40 @@ export function createNeonKeeperJournalRepository({
                 FROM pg_constraint
                WHERE conrelid = 'public.arena_keeper_operations'::regclass
                   AND conname IN (
-                    'arena_keeper_operations_state_v7_check',
-                    'arena_keeper_operations_submission_v7_check',
+                    'arena_keeper_operations_state_v10_check',
+                    'arena_keeper_operations_submission_v10_check',
                     'arena_keeper_operations_prehash_abandonment_v9_check'
                   )
              ) AS prehash_abandonment_constraints_exist,
+            (
+              SELECT count(*) = 10
+                FROM information_schema.columns
+               WHERE table_schema = 'public'
+                 AND table_name = 'arena_keeper_operations'
+                 AND column_name IN (
+                   'submission_protocol', 'signed_raw_transaction',
+                   'outer_transaction_hash', 'outer_sender_nonce',
+                   'signed_evidence_sha256', 'signed_at',
+                   'signed_transaction_metadata', 'outer_receipt_observed_at',
+                   'submission_evidence', 'outer_outcome_evidence'
+                 )
+            ) AS durable_signed_columns_exist,
+            (
+              SELECT count(*) = 9
+                FROM pg_constraint
+               WHERE conrelid = 'public.arena_keeper_operations'::regclass
+                 AND conname IN (
+                   'arena_keeper_operations_attention_slot_v10_check',
+                   'arena_keeper_operations_submission_protocol_v10_check',
+                   'arena_keeper_operations_signed_envelope_v10_check',
+                   'arena_keeper_operations_signed_state_v10_check',
+                   'arena_keeper_operations_submission_evidence_v10_check',
+                   'arena_keeper_operations_outer_outcome_v10_check',
+                   'arena_keeper_operations_outer_reason_v10_check',
+                   'arena_keeper_operations_v10_receipt_required_check',
+                   'arena_keeper_operations_abandoned_unsigned_v10_check'
+                 )
+            ) AS durable_signed_constraints_exist,
             EXISTS (
               SELECT 1
                 FROM pg_constraint finalized_state_constraint
@@ -296,9 +350,15 @@ export function createNeonKeeperJournalRepository({
               WHERE version = 9
                 AND name = 'keeper_create_prehash_recovery'
                 AND schema_checksum = $8
+           ) AS v9_migration_valid,
+           EXISTS (
+             SELECT 1 FROM arena_schema_migrations
+              WHERE version = 10
+                AND name = 'keeper_durable_signed_envelope'
+                AND schema_checksum = $9
            ) AS migration_valid,
            NOT EXISTS (
-             SELECT 1 FROM arena_schema_migrations WHERE version > 9
+             SELECT 1 FROM arena_schema_migrations WHERE version > 10
            ) AS no_unknown_migrations`,
         [
           KEEPER_JOURNAL_SCHEMA_V2_CHECKSUM,
@@ -309,6 +369,7 @@ export function createNeonKeeperJournalRepository({
           KEEPER_JOURNAL_SCHEMA_V7_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_V8_CHECKSUM,
           KEEPER_JOURNAL_SCHEMA_V9_CHECKSUM,
+          KEEPER_JOURNAL_SCHEMA_V10_CHECKSUM,
         ],
         3_000,
       );
@@ -325,6 +386,9 @@ export function createNeonKeeperJournalRepository({
         && row.attention_subject_index_exists === true
         && row.handoff_predecessor_index_exists === true
         && row.attention_index_exists === true
+        && row.recovery_index_exists === true
+        && row.outer_hash_index_exists === true
+        && row.outer_nonce_index_exists === true
         && row.legacy_unresolved_index_absent === true
         && row.accepted_guard_function_exists === true
         && row.accepted_guard_trigger_exists === true
@@ -334,6 +398,8 @@ export function createNeonKeeperJournalRepository({
         && row.accepted_handoff_constraints_exist === true
         && row.prehash_abandonment_columns_exist === true
         && row.prehash_abandonment_constraints_exist === true
+        && row.durable_signed_columns_exist === true
+        && row.durable_signed_constraints_exist === true
         && row.finalized_state_constraint_valid === true
         && row.legacy_prehash_submission_constraint_absent === true
         && row.base_migration_valid === true
@@ -343,9 +409,10 @@ export function createNeonKeeperJournalRepository({
         && row.v6_migration_valid === true
         && row.v7_migration_valid === true
         && row.v8_migration_valid === true
+        && row.v9_migration_valid === true
         && row.migration_valid === true
         && row.no_unknown_migrations === true;
-      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 9 : null });
+      return Object.freeze({ configured: true, ready, schemaVersion: ready ? 10 : null });
     },
 
     async claimRequest({ keyHash, requestHash, action }) {
@@ -407,14 +474,78 @@ export function createNeonKeeperJournalRepository({
             WHERE NOT EXISTS (SELECT 1 FROM acquired)
          ), fenced_operations AS (
            UPDATE arena_keeper_operations operation
-              SET last_fencing_token = selected_lease.fencing_token::bigint
+              SET state = CASE
+                    WHEN selected_lease.newly_acquired
+                     AND operation.state = 'PREPARED'
+                     AND operation.submission_protocol = 'BRADBURY_DURABLE_RAW_V1'
+                     AND operation.prepared_fencing_token < selected_lease.fencing_token::bigint
+                     AND operation.signed_raw_transaction IS NULL
+                     AND operation.outer_transaction_hash IS NULL
+                     AND operation.outer_sender_nonce IS NULL
+                     AND operation.signed_evidence_sha256 IS NULL
+                     AND operation.signed_at IS NULL
+                     AND operation.signed_transaction_metadata IS NULL
+                     AND operation.transaction_hash IS NULL
+                     AND operation.submission_evidence IS NULL
+                    THEN 'ABANDONED_PREHASH'
+                    ELSE operation.state
+                  END,
+                  state_reason_code = CASE
+                    WHEN selected_lease.newly_acquired
+                     AND operation.state = 'PREPARED'
+                     AND operation.submission_protocol = 'BRADBURY_DURABLE_RAW_V1'
+                     AND operation.prepared_fencing_token < selected_lease.fencing_token::bigint
+                     AND operation.signed_raw_transaction IS NULL
+                     AND operation.transaction_hash IS NULL
+                    THEN 'DEFINITE_LOCAL_PRESPAWN_FAILURE'
+                    ELSE operation.state_reason_code
+                  END,
+                  prehash_abandoned_at = CASE
+                    WHEN selected_lease.newly_acquired
+                     AND operation.state = 'PREPARED'
+                     AND operation.submission_protocol = 'BRADBURY_DURABLE_RAW_V1'
+                     AND operation.prepared_fencing_token < selected_lease.fencing_token::bigint
+                     AND operation.signed_raw_transaction IS NULL
+                     AND operation.transaction_hash IS NULL
+                    THEN now()
+                    ELSE operation.prehash_abandoned_at
+                  END,
+                  prehash_abandonment_metadata = CASE
+                    WHEN selected_lease.newly_acquired
+                     AND operation.state = 'PREPARED'
+                     AND operation.submission_protocol = 'BRADBURY_DURABLE_RAW_V1'
+                     AND operation.prepared_fencing_token < selected_lease.fencing_token::bigint
+                     AND operation.signed_raw_transaction IS NULL
+                     AND operation.transaction_hash IS NULL
+                    THEN jsonb_build_object(
+                      'evidenceVersion', 'LOCAL_PRESPAWN_FAILURE_V1',
+                      'broadcastAttempted', false,
+                      'transactionHashObserved', false,
+                      'failureCode', 'UNSIGNED_PREPARE_FENCED',
+                      'failureMessage', 'A newer signer fence superseded this unsigned durable prepare.',
+                      'lowerLevelErrorRetained', true,
+                      'operationId', operation.operation_id,
+                      'logicalOperationId', operation.logical_operation_id,
+                      'contractAddress', operation.contract_address,
+                      'method', operation.method,
+                      'arguments', operation.arguments,
+                      'subjectType', operation.subject_type,
+                      'subjectId', operation.subject_id,
+                      'preparedAt', to_char(
+                        operation.prepared_at AT TIME ZONE 'UTC',
+                        'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+                      )
+                    )
+                    ELSE operation.prehash_abandonment_metadata
+                  END,
+                  last_fencing_token = selected_lease.fencing_token::bigint
              FROM selected_lease
              WHERE operation.signer_address = selected_lease.signer_address
                AND operation.deployment_alias = 'v8'
                AND operation.network = 'bradbury'
                AND operation.chain_id = 4221
                AND operation.state IN (
-                'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS',
+                'PREPARED', 'SIGNED', 'SUBMITTED', 'FINALIZED_SUCCESS',
                 'QUARANTINED', 'STATE_SATISFIED_UNPROVEN'
               )
               AND operation.last_fencing_token < selected_lease.fencing_token::bigint
@@ -525,7 +656,7 @@ export function createNeonKeeperJournalRepository({
               AND candidate.network = 'bradbury'
               AND candidate.chain_id = 4221
               AND candidate.state IN (
-                'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS',
+                'PREPARED', 'SIGNED', 'SUBMITTED', 'FINALIZED_SUCCESS',
                 'QUARANTINED', 'STATE_SATISFIED_UNPROVEN'
               )
          ), candidate_attempt AS (
@@ -607,7 +738,7 @@ export function createNeonKeeperJournalRepository({
              contract_address, method, arguments, value_atto,
              epoch_end_timestamp, subject_type, subject_id,
              canonical_operation, state, prepared_fencing_token, last_fencing_token,
-             pipeline_slot, handoff_predecessor_operation_id
+             pipeline_slot, handoff_predecessor_operation_id, submission_protocol
            )
            SELECT CASE
                     WHEN candidate_attempt.attempt_number = 1 THEN $5
@@ -628,7 +759,8 @@ export function createNeonKeeperJournalRepository({
                   $11, $12, $13, 'PREPARED',
                   candidate_attempt.fencing_token, candidate_attempt.fencing_token,
                   candidate_attempt.pipeline_slot,
-                  candidate_attempt.handoff_predecessor_operation_id
+                  candidate_attempt.handoff_predecessor_operation_id,
+                  'BRADBURY_DURABLE_RAW_V1'
              FROM candidate_attempt
             WHERE (
                 NOT EXISTS (SELECT 1 FROM logical_latest)
@@ -736,16 +868,18 @@ export function createNeonKeeperJournalRepository({
         );
       }
       const operationPublic = publicKeeperOperation(operationRow);
-      const canBroadcast = operationRow.inserted_now === true
+      const canSign = operationRow.inserted_now === true
         && operationPublic.state === 'PREPARED'
         && operationPublic.transactionHash === null
+        && operationPublic.signedTransactionEvidence === null
+        && operationPublic.submissionProtocol === 'BRADBURY_DURABLE_RAW_V1'
         && String(operationRow.prepared_fencing_token) === String(fencingToken);
       const auditedRetryNonce = row.audited_retry_nonce == null
         ? null
         : String(row.audited_retry_nonce);
       if (auditedRetryNonce !== null
           && (!/^(?:0|[1-9]\d*)$/.test(auditedRetryNonce)
-            || operationPublic.attemptNumber !== '2' || canBroadcast !== true)) {
+            || operationPublic.attemptNumber !== '2' || canSign !== true)) {
         throw new KeeperJournalError(
           'KEEPER_JOURNAL_DATABASE_SHAPE',
           'Keeper journal returned an invalid audited retry nonce.',
@@ -754,13 +888,16 @@ export function createNeonKeeperJournalRepository({
       }
       return Object.freeze({
         operation: operationPublic,
-        canBroadcast,
+        canSign,
         inserted: operationRow.inserted_now === true,
         auditedRetryNonce,
       });
     },
 
-    async bindSubmission({ holderId, signerAddress, fencingToken, operationId, transactionHash }) {
+    async bindSigned({ holderId, signerAddress, fencingToken, operationId, evidence }) {
+      const signedEvidenceSha256 = createHash('sha256')
+        .update(JSON.stringify(evidence), 'utf8').digest('hex');
+      const { rawTransaction: _privateRawTransaction, ...signedTransactionMetadata } = evidence;
       const rows = await query(
         `WITH active AS (
            SELECT fencing_token
@@ -773,12 +910,290 @@ export function createNeonKeeperJournalRepository({
               AND lease_expires_at > now()
             FOR UPDATE
          ), target AS (
-           SELECT operation.*,
-                  EXISTS (
-                    SELECT 1 FROM arena_keeper_operations other
-                     WHERE other.transaction_hash = $6
-                       AND other.operation_id <> operation.operation_id
-                  ) AS hash_bound_elsewhere
+           SELECT operation.*
+             FROM arena_keeper_operations operation, active
+            WHERE operation.operation_id = $5
+              AND operation.signer_address = $2
+              AND operation.deployment_alias = 'v8'
+              AND operation.network = 'bradbury'
+              AND operation.chain_id = 4221
+              AND NOT EXISTS (
+                SELECT 1 FROM arena_keeper_operations later
+                 WHERE later.logical_operation_id = operation.logical_operation_id
+                   AND later.attempt_number > operation.attempt_number
+              )
+            FOR UPDATE OF operation
+         ), updated AS (
+           UPDATE arena_keeper_operations operation SET
+             state = CASE WHEN target.state = 'PREPARED' THEN 'SIGNED' ELSE target.state END,
+             signed_raw_transaction = COALESCE(target.signed_raw_transaction, $6),
+             outer_transaction_hash = COALESCE(target.outer_transaction_hash, $7),
+             outer_sender_nonce = COALESCE(target.outer_sender_nonce, $8::numeric),
+             signed_evidence_sha256 = COALESCE(target.signed_evidence_sha256, $9),
+             signed_at = COALESCE(target.signed_at, now()),
+             signed_transaction_metadata = COALESCE(
+               target.signed_transaction_metadata,
+               $10::jsonb
+             ),
+             last_fencing_token = active.fencing_token
+           FROM target, active
+           WHERE operation.operation_id = target.operation_id
+             AND target.submission_protocol = 'BRADBURY_DURABLE_RAW_V1'
+             AND target.contract_address = $10::jsonb ->> 'contractAddress'
+             AND target.method = $10::jsonb ->> 'method'
+             AND target.arguments = $10::jsonb -> 'arguments'
+             AND target.value_atto::text = $10::jsonb ->> 'valueAtto'
+             AND target.signer_address = $10::jsonb ->> 'signerAddress'
+             AND (
+               (
+                 target.state = 'PREPARED'
+                 AND target.signed_raw_transaction IS NULL
+                 AND target.outer_transaction_hash IS NULL
+                 AND target.outer_sender_nonce IS NULL
+                 AND target.signed_evidence_sha256 IS NULL
+                 AND target.signed_at IS NULL
+                 AND target.signed_transaction_metadata IS NULL
+                 AND NOT EXISTS (
+                   SELECT 1 FROM arena_keeper_operations other
+                    WHERE other.operation_id <> target.operation_id
+                      AND (
+                        other.outer_transaction_hash = $7
+                        OR (
+                          other.network = target.network
+                          AND other.chain_id = target.chain_id
+                          AND other.signer_address = target.signer_address
+                          AND other.outer_sender_nonce = $8::numeric
+                        )
+                      )
+                 )
+               )
+               OR (
+                 target.state = 'SIGNED'
+                 AND target.signed_raw_transaction = $6
+                 AND target.outer_transaction_hash = $7
+                 AND target.outer_sender_nonce = $8::numeric
+                 AND target.signed_evidence_sha256 = $9
+                 AND target.signed_transaction_metadata = $10::jsonb
+               )
+             )
+           RETURNING operation.*
+         )
+         SELECT
+           EXISTS (SELECT 1 FROM active) AS lease_valid,
+           EXISTS (
+             SELECT 1 FROM arena_keeper_operations
+              WHERE operation_id = $5
+                AND signer_address = $2
+                AND deployment_alias = 'v8'
+                AND network = 'bradbury'
+                AND chain_id = 4221
+           ) AS operation_exists,
+           EXISTS (
+             SELECT 1
+               FROM arena_keeper_operations operation
+               JOIN arena_keeper_operations later
+                 ON later.logical_operation_id = operation.logical_operation_id
+                AND later.attempt_number > operation.attempt_number
+              WHERE operation.operation_id = $5
+                AND operation.signer_address = $2
+                AND operation.deployment_alias = 'v8'
+                AND operation.network = 'bradbury'
+                AND operation.chain_id = 4221
+           ) AS attempt_frozen,
+           (SELECT to_jsonb(updated)
+                   || jsonb_build_object(
+                     'chain_id', updated.chain_id::text,
+                     'value_atto', updated.value_atto::text,
+                     'attempt_number', updated.attempt_number::text,
+                     'prepared_fencing_token', updated.prepared_fencing_token::text,
+                     'last_fencing_token', updated.last_fencing_token::text,
+                     'revision', updated.revision::text
+                   )
+              FROM updated LIMIT 1) AS operation`,
+        [
+          LEASE_SCOPE,
+          signerAddress,
+          holderId,
+          fencingToken,
+          operationId,
+          evidence.rawTransaction,
+          evidence.outerTransactionHash,
+          evidence.outerNonce,
+          signedEvidenceSha256,
+          JSON.stringify(signedTransactionMetadata),
+        ],
+      );
+      const row = rows[0] || {};
+      if (row.lease_valid !== true) leaseRejected();
+      if (row.operation_exists !== true) {
+        throw new KeeperJournalError(
+          'KEEPER_JOURNAL_OPERATION_NOT_FOUND',
+          'Keeper operation was not found.',
+          { statusCode: 404 },
+        );
+      }
+      if (row.attempt_frozen === true) attemptFrozen();
+      const operation = operationResult(row);
+      if (!operation || operation.state !== 'SIGNED'
+          || operation.outerTransactionHash !== evidence.outerTransactionHash
+          || operation.outerSenderNonce !== evidence.outerNonce
+          || operation.signedEvidenceSha256 !== signedEvidenceSha256) {
+        throw new KeeperJournalError(
+          'KEEPER_JOURNAL_SIGNED_CONFLICT',
+          'Signed keeper transaction identity conflicts with durable journal evidence.',
+          { statusCode: 409 },
+        );
+      }
+      return operation;
+    },
+
+    async loadOperation({ holderId, signerAddress, fencingToken, operationId }) {
+      const rows = await query(
+        `SELECT operation.*
+           FROM arena_keeper_signer_leases lease
+           JOIN arena_keeper_operations operation
+             ON operation.signer_address = lease.signer_address
+          WHERE lease.lease_scope = $1
+            AND lease.signer_address = $2
+            AND lease.holder_id = $3::uuid
+            AND lease.fencing_token = $4::bigint
+            AND lease.released_at IS NULL
+            AND lease.lease_expires_at > now()
+            AND operation.operation_id = $5
+            AND operation.deployment_alias = 'v8'
+            AND operation.network = 'bradbury'
+            AND operation.chain_id = 4221
+          FOR SHARE OF lease, operation`,
+        [LEASE_SCOPE, signerAddress, holderId, fencingToken, operationId],
+      );
+      if (rows.length !== 1) {
+        const leaseRows = await query(
+          `SELECT 1 FROM arena_keeper_signer_leases
+            WHERE lease_scope = $1
+              AND signer_address = $2
+              AND holder_id = $3::uuid
+              AND fencing_token = $4::bigint
+              AND released_at IS NULL
+              AND lease_expires_at > now()`,
+          [LEASE_SCOPE, signerAddress, holderId, fencingToken],
+        );
+        if (leaseRows.length !== 1) leaseRejected();
+        throw new KeeperJournalError(
+          'KEEPER_JOURNAL_OPERATION_NOT_FOUND',
+          'Keeper operation was not found.',
+          { statusCode: 404 },
+        );
+      }
+      return publicKeeperOperation(rows[0]);
+    },
+
+    async loadSigned({ holderId, signerAddress, fencingToken, operationId }) {
+      const rows = await query(
+        `SELECT operation.*, lease.fencing_token::text AS active_fencing_token
+           FROM arena_keeper_signer_leases lease
+           JOIN arena_keeper_operations operation
+             ON operation.signer_address = lease.signer_address
+          WHERE lease.lease_scope = $1
+            AND lease.signer_address = $2
+            AND lease.holder_id = $3::uuid
+            AND lease.fencing_token = $4::bigint
+            AND lease.released_at IS NULL
+            AND lease.lease_expires_at > now()
+            AND operation.operation_id = $5
+            AND operation.deployment_alias = 'v8'
+            AND operation.network = 'bradbury'
+            AND operation.chain_id = 4221
+            AND operation.state = 'SIGNED'
+            AND operation.signed_raw_transaction IS NOT NULL
+            AND operation.signed_transaction_metadata IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM arena_keeper_operations later
+               WHERE later.logical_operation_id = operation.logical_operation_id
+                 AND later.attempt_number > operation.attempt_number
+            )
+          FOR SHARE OF lease, operation`,
+        [LEASE_SCOPE, signerAddress, holderId, fencingToken, operationId],
+      );
+      if (rows.length !== 1) {
+        const operationRows = await query(
+          `SELECT EXISTS (
+             SELECT 1 FROM arena_keeper_operations
+              WHERE operation_id = $1
+                AND signer_address = $2
+                AND deployment_alias = 'v8'
+                AND network = 'bradbury'
+                AND chain_id = 4221
+           ) AS operation_exists`,
+          [operationId, signerAddress],
+        );
+        if (operationRows[0]?.operation_exists !== true) {
+          throw new KeeperJournalError(
+            'KEEPER_JOURNAL_OPERATION_NOT_FOUND',
+            'Keeper operation was not found.',
+            { statusCode: 404 },
+          );
+        }
+        leaseRejected();
+      }
+      const row = rows[0];
+      let evidence;
+      try {
+        evidence = normalizeDurableSignedEvidence({
+          ...row.signed_transaction_metadata,
+          rawTransaction: row.signed_raw_transaction,
+        });
+        assertSignedEvidenceMatchesOperation(evidence, {
+          signerAddress: row.signer_address,
+          contractAddress: row.contract_address,
+          method: row.method,
+          args: row.arguments,
+        });
+      } catch (error) {
+        throw new KeeperJournalError(
+          'KEEPER_JOURNAL_DATABASE_SHAPE',
+          'Durable signed keeper evidence is invalid.',
+          { statusCode: 503, cause: error },
+        );
+      }
+      const digest = createHash('sha256').update(JSON.stringify(evidence), 'utf8').digest('hex');
+      if (evidence.rawTransaction !== String(row.signed_raw_transaction)
+          || evidence.outerTransactionHash !== String(row.outer_transaction_hash)
+          || evidence.outerNonce !== String(row.outer_sender_nonce)
+          || digest !== String(row.signed_evidence_sha256)) {
+        throw new KeeperJournalError(
+          'KEEPER_JOURNAL_DATABASE_SHAPE',
+          'Durable signed keeper columns do not match their evidence.',
+          { statusCode: 503 },
+        );
+      }
+      return Object.freeze({
+        operationId: String(row.operation_id),
+        fencingToken: String(row.active_fencing_token),
+        evidence,
+      });
+    },
+
+    async bindSubmission({
+      holderId,
+      signerAddress,
+      fencingToken,
+      operationId,
+      transactionHash,
+      submissionEvidence,
+    }) {
+      const rows = await query(
+        `WITH active AS (
+           SELECT fencing_token
+             FROM arena_keeper_signer_leases
+            WHERE lease_scope = $1
+              AND signer_address = $2
+              AND holder_id = $3::uuid
+              AND fencing_token = $4::bigint
+              AND released_at IS NULL
+              AND lease_expires_at > now()
+            FOR UPDATE
+         ), target AS (
+           SELECT operation.*
              FROM arena_keeper_operations operation, active
              WHERE operation.operation_id = $5
                AND operation.signer_address = $2
@@ -790,43 +1205,45 @@ export function createNeonKeeperJournalRepository({
                  WHERE later.logical_operation_id = operation.logical_operation_id
                    AND later.attempt_number > operation.attempt_number
               )
+            FOR UPDATE OF operation
          ), updated AS (
            UPDATE arena_keeper_operations operation SET
-             transaction_hash = CASE
-               WHEN target.transaction_hash IS NULL AND NOT target.hash_bound_elsewhere THEN $6
-               ELSE target.transaction_hash
-             END,
-             state = CASE
-               WHEN target.hash_bound_elsewhere
-                 OR (target.transaction_hash IS NOT NULL AND target.transaction_hash <> $6)
-                 THEN 'QUARANTINED'
-               WHEN target.state IN ('PREPARED', 'STATE_SATISFIED_UNPROVEN') THEN 'SUBMITTED'
-               ELSE target.state
-             END,
-             lifecycle_status = CASE
-               WHEN target.transaction_hash IS NULL AND NOT target.hash_bound_elsewhere
-                 THEN COALESCE(target.lifecycle_status, 'UNKNOWN')
-               ELSE target.lifecycle_status
-             END,
-             quarantine_reason = CASE
-               WHEN target.hash_bound_elsewhere
-                 OR (target.transaction_hash IS NOT NULL AND target.transaction_hash <> $6)
-                 THEN 'SUBMISSION_HASH_CONFLICT'
-               ELSE target.quarantine_reason
-             END,
+             transaction_hash = COALESCE(target.transaction_hash, $6),
+             state = CASE WHEN target.state = 'SIGNED' THEN 'SUBMITTED' ELSE target.state END,
+             lifecycle_status = COALESCE(target.lifecycle_status, 'UNKNOWN'),
+             outer_receipt_observed_at = COALESCE(target.outer_receipt_observed_at, now()),
+             submission_evidence = COALESCE(target.submission_evidence, $7::jsonb),
              last_fencing_token = active.fencing_token
            FROM target, active
            WHERE operation.operation_id = target.operation_id
+             AND target.signed_raw_transaction IS NOT NULL
+             AND target.outer_transaction_hash = $7::jsonb ->> 'outerTransactionHash'
+             AND target.signed_evidence_sha256 = $7::jsonb ->> 'evidenceSha256'
+             AND $7::jsonb ->> 'transactionHash' = $6
+             AND $7::jsonb ->> 'eventTopic'
+               = '0xdab9102861c7483a187584d6371d88316f005af507982ccf95c110879f3ed5a5'
+             AND $7::jsonb @> '{"receiptIdentityVerified":true}'::jsonb
+             AND NOT EXISTS (
+               SELECT 1 FROM arena_keeper_operations other
+                WHERE other.transaction_hash = $6
+                  AND other.operation_id <> target.operation_id
+             )
+             AND (
+               (
+                 target.state = 'SIGNED'
+                 AND target.transaction_hash IS NULL
+                 AND target.submission_evidence IS NULL
+                 AND target.outer_outcome_evidence IS NULL
+                 AND target.outer_receipt_observed_at IS NULL
+               )
+               OR (
+                 target.state = 'SUBMITTED'
+                 AND target.transaction_hash = $6
+                 AND target.submission_evidence = $7::jsonb
+                 AND target.outer_receipt_observed_at IS NOT NULL
+               )
+             )
            RETURNING operation.*
-         ), conflict AS (
-           INSERT INTO arena_keeper_operation_conflicts (
-             operation_id, conflicting_transaction_hash, fencing_token
-           )
-           SELECT updated.operation_id, $6, $4::bigint
-             FROM updated
-            WHERE updated.quarantine_reason = 'SUBMISSION_HASH_CONFLICT'
-           ON CONFLICT DO NOTHING
-           RETURNING operation_id
          )
          SELECT
            EXISTS (SELECT 1 FROM active) AS lease_valid,
@@ -850,7 +1267,6 @@ export function createNeonKeeperJournalRepository({
                  AND operation.network = 'bradbury'
                  AND operation.chain_id = 4221
             ) AS attempt_frozen,
-           EXISTS (SELECT 1 FROM conflict) AS hash_conflict,
            (SELECT to_jsonb(updated)
                    || jsonb_build_object(
                      'chain_id', updated.chain_id::text,
@@ -861,7 +1277,15 @@ export function createNeonKeeperJournalRepository({
                      'revision', updated.revision::text
                    )
               FROM updated LIMIT 1) AS operation`,
-        [LEASE_SCOPE, signerAddress, holderId, fencingToken, operationId, transactionHash],
+        [
+          LEASE_SCOPE,
+          signerAddress,
+          holderId,
+          fencingToken,
+          operationId,
+          transactionHash,
+          JSON.stringify(submissionEvidence),
+        ],
       );
       const row = rows[0] || {};
       if (row.lease_valid !== true) leaseRejected();
@@ -874,11 +1298,191 @@ export function createNeonKeeperJournalRepository({
       }
       if (row.attempt_frozen === true) attemptFrozen();
       const operation = operationResult(row);
-      if (!operation) leaseRejected();
-      if (row.hash_conflict === true || operation.state === 'QUARANTINED') {
+      if (!operation || operation.state !== 'SUBMITTED'
+          || operation.transactionHash !== transactionHash
+          || JSON.stringify(operation.submissionEvidence) !== JSON.stringify(submissionEvidence)) {
         throw new KeeperJournalError(
-          'KEEPER_JOURNAL_HASH_CONFLICT',
-          'A conflicting submission hash quarantined the keeper operation.',
+          'KEEPER_JOURNAL_SUBMISSION_EVIDENCE_CONFLICT',
+          'Outer receipt evidence conflicts with the durable signed keeper transaction.',
+          { statusCode: 409 },
+        );
+      }
+      return operation;
+    },
+
+    async bindOuterOutcome({
+      holderId,
+      signerAddress,
+      fencingToken,
+      operationId,
+      outerOutcomeEvidence,
+    }) {
+      const rows = await query(
+        `WITH active AS (
+           SELECT fencing_token
+             FROM arena_keeper_signer_leases
+            WHERE lease_scope = $1
+              AND signer_address = $2
+              AND holder_id = $3::uuid
+              AND fencing_token = $4::bigint
+              AND released_at IS NULL
+              AND lease_expires_at > now()
+            FOR UPDATE
+         ), target AS (
+           SELECT operation.*
+             FROM arena_keeper_operations operation, active
+            WHERE operation.operation_id = $5
+              AND operation.signer_address = $2
+              AND operation.deployment_alias = 'v8'
+              AND operation.network = 'bradbury'
+              AND operation.chain_id = 4221
+              AND NOT EXISTS (
+                SELECT 1 FROM arena_keeper_operations later
+                 WHERE later.logical_operation_id = operation.logical_operation_id
+                   AND later.attempt_number > operation.attempt_number
+              )
+            FOR UPDATE OF operation
+         ), updated AS (
+           UPDATE arena_keeper_operations operation SET
+             state = CASE
+               WHEN target.state = 'SIGNED' AND $6::jsonb ->> 'receiptStatus' = '0'
+                 THEN 'FINALIZED_FAILURE'
+               WHEN target.state = 'SIGNED' AND $6::jsonb ->> 'receiptStatus' = '1'
+                 THEN 'QUARANTINED'
+               ELSE target.state
+             END,
+             lifecycle_status = CASE
+               WHEN target.state = 'SIGNED' THEN 'FINALIZED'
+               ELSE target.lifecycle_status
+             END,
+             state_reason_code = CASE
+               WHEN target.state = 'SIGNED' AND $6::jsonb ->> 'receiptStatus' = '0'
+                 THEN 'OUTER_RECEIPT_REVERTED'
+               WHEN target.state = 'SIGNED' AND $6::jsonb ->> 'receiptStatus' = '1'
+                 THEN 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS'
+               ELSE target.state_reason_code
+             END,
+             quarantine_reason = CASE
+               WHEN target.state = 'SIGNED' AND $6::jsonb ->> 'receiptStatus' = '1'
+                 THEN 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS'
+               ELSE target.quarantine_reason
+             END,
+             outer_receipt_observed_at = COALESCE(target.outer_receipt_observed_at, now()),
+             outer_outcome_evidence = COALESCE(target.outer_outcome_evidence, $6::jsonb),
+             last_fencing_token = active.fencing_token
+           FROM target, active
+           WHERE operation.operation_id = target.operation_id
+             AND target.signed_raw_transaction IS NOT NULL
+             AND target.outer_transaction_hash = $6::jsonb ->> 'outerTransactionHash'
+             AND target.signed_evidence_sha256 = $6::jsonb ->> 'evidenceSha256'
+             AND $6::jsonb @> '{"receiptCanonical":true}'::jsonb
+             AND (
+               (
+                 $6::jsonb ->> 'receiptStatus' = '0'
+                 AND $6::jsonb ->> 'newTransactionEventCount' = '0'
+                 AND $6::jsonb ->> 'failureCode' = 'OUTER_RECEIPT_REVERTED'
+               )
+               OR (
+                 $6::jsonb ->> 'receiptStatus' = '1'
+                 AND $6::jsonb ->> 'ambiguityCode'
+                   = 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS'
+                 AND $6::jsonb @> '{"receiptIdentityVerified":false}'::jsonb
+               )
+             )
+             AND (
+               (
+                 target.state = 'SIGNED'
+                 AND target.transaction_hash IS NULL
+                 AND target.submission_evidence IS NULL
+                 AND target.outer_outcome_evidence IS NULL
+                 AND target.outer_receipt_observed_at IS NULL
+               )
+               OR (
+                 (
+                   ($6::jsonb ->> 'receiptStatus' = '0'
+                     AND target.state = 'FINALIZED_FAILURE'
+                     AND target.state_reason_code = 'OUTER_RECEIPT_REVERTED'
+                     AND target.quarantine_reason IS NULL)
+                   OR
+                   ($6::jsonb ->> 'receiptStatus' = '1'
+                     AND target.state = 'QUARANTINED'
+                     AND target.state_reason_code = 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS'
+                     AND target.quarantine_reason = 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS')
+                 )
+                 AND target.transaction_hash IS NULL
+                 AND target.submission_evidence IS NULL
+                 AND target.outer_outcome_evidence = $6::jsonb
+                 AND target.outer_receipt_observed_at IS NOT NULL
+               )
+             )
+           RETURNING operation.*
+         )
+         SELECT
+           EXISTS (SELECT 1 FROM active) AS lease_valid,
+           EXISTS (
+             SELECT 1 FROM arena_keeper_operations
+              WHERE operation_id = $5
+                AND signer_address = $2
+                AND deployment_alias = 'v8'
+                AND network = 'bradbury'
+                AND chain_id = 4221
+           ) AS operation_exists,
+           EXISTS (
+             SELECT 1
+               FROM arena_keeper_operations operation
+               JOIN arena_keeper_operations later
+                 ON later.logical_operation_id = operation.logical_operation_id
+                AND later.attempt_number > operation.attempt_number
+              WHERE operation.operation_id = $5
+                AND operation.signer_address = $2
+                AND operation.deployment_alias = 'v8'
+                AND operation.network = 'bradbury'
+                AND operation.chain_id = 4221
+           ) AS attempt_frozen,
+           (SELECT to_jsonb(updated)
+                   || jsonb_build_object(
+                     'chain_id', updated.chain_id::text,
+                     'value_atto', updated.value_atto::text,
+                     'attempt_number', updated.attempt_number::text,
+                     'prepared_fencing_token', updated.prepared_fencing_token::text,
+                     'last_fencing_token', updated.last_fencing_token::text,
+                     'revision', updated.revision::text
+                   )
+              FROM updated LIMIT 1) AS operation`,
+        [
+          LEASE_SCOPE,
+          signerAddress,
+          holderId,
+          fencingToken,
+          operationId,
+          JSON.stringify(outerOutcomeEvidence),
+        ],
+      );
+      const row = rows[0] || {};
+      if (row.lease_valid !== true) leaseRejected();
+      if (row.operation_exists !== true) {
+        throw new KeeperJournalError(
+          'KEEPER_JOURNAL_OPERATION_NOT_FOUND',
+          'Keeper operation was not found.',
+          { statusCode: 404 },
+        );
+      }
+      if (row.attempt_frozen === true) attemptFrozen();
+      const operation = operationResult(row);
+      const expectedState = outerOutcomeEvidence.receiptStatus === '0'
+        ? 'FINALIZED_FAILURE' : 'QUARANTINED';
+      const expectedReason = outerOutcomeEvidence.receiptStatus === '0'
+        ? 'OUTER_RECEIPT_REVERTED' : 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS';
+      if (!operation || operation.state !== expectedState
+          || operation.transactionHash !== null
+          || operation.stateReasonCode !== expectedReason
+          || (expectedState === 'QUARANTINED'
+            && operation.quarantineReason !== expectedReason)
+          || JSON.stringify(operation.outerOutcomeEvidence)
+            !== JSON.stringify(outerOutcomeEvidence)) {
+        throw new KeeperJournalError(
+          'KEEPER_JOURNAL_OUTER_OUTCOME_CONFLICT',
+          'Finalized outer receipt outcome conflicts with the durable signed keeper transaction.',
           { statusCode: 409 },
         );
       }
@@ -1483,7 +2087,7 @@ export function createNeonKeeperJournalRepository({
             AND operation.network = 'bradbury'
             AND operation.chain_id = 4221
             AND operation.state IN (
-              'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS',
+              'PREPARED', 'SIGNED', 'SUBMITTED', 'FINALIZED_SUCCESS',
               'QUARANTINED', 'STATE_SATISFIED_UNPROVEN'
             )
             AND ($5::timestamptz IS NULL

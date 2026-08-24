@@ -98,9 +98,33 @@ export function createKeeperJournalService({
           status: 'ok',
           action: request.action,
           operation: prepared.operation,
-          canBroadcast: prepared.canBroadcast === true,
+          canSign: prepared.canSign === true,
           inserted: prepared.inserted === true,
           auditedRetryNonce: prepared.auditedRetryNonce ?? null,
+        });
+      }
+      if (request.action === 'BIND_SIGNED') {
+        return Object.freeze({
+          status: 'ok',
+          action: request.action,
+          operation: await repository.bindSigned(request),
+        });
+      }
+      if (request.action === 'LOAD_SIGNED') {
+        const loaded = await repository.loadSigned(request);
+        return Object.freeze({
+          status: 'ok',
+          action: request.action,
+          operationId: loaded.operationId,
+          fencingToken: loaded.fencingToken,
+          evidence: loaded.evidence,
+        });
+      }
+      if (request.action === 'LOAD_OPERATION') {
+        return Object.freeze({
+          status: 'ok',
+          action: request.action,
+          operation: await repository.loadOperation(request),
         });
       }
       if (request.action === 'BIND_SUBMISSION') {
@@ -108,6 +132,13 @@ export function createKeeperJournalService({
           status: 'ok',
           action: request.action,
           operation: await repository.bindSubmission(request),
+        });
+      }
+      if (request.action === 'BIND_OUTER_OUTCOME') {
+        return Object.freeze({
+          status: 'ok',
+          action: request.action,
+          operation: await repository.bindOuterOutcome(request),
         });
       }
       if (request.action === 'OBSERVE_LIFECYCLE') {

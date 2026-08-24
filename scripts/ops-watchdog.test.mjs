@@ -35,7 +35,7 @@ function healthyFetch(requests) {
       });
     }
     if (parsed.pathname === '/api/keeper-journal') {
-      return response({ status: 'ready', ready: true, network: 'bradbury', chainId: '4221', database: { schemaVersion: 9 } });
+      return response({ status: 'ready', ready: true, network: 'bradbury', chainId: '4221', database: { schemaVersion: 10 } });
     }
     if (parsed.pathname.endsWith('/actions/workflows/bradbury-v8-keeper.yml/runs')) {
       return response({ workflow_runs: [{

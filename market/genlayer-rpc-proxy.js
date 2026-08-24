@@ -1,3 +1,11 @@
+import { decodeRlp, getBytes } from 'ethers';
+import { abi } from 'genlayer-js';
+
+import {
+  ROUND_NOT_SCHEDULED_RPC_CODE,
+  ROUND_NOT_SCHEDULED_RPC_MESSAGE,
+} from './round-probe-error.js';
+
 const DEFAULT_ROUTE = '/genlayer-rpc';
 const DEFAULT_UPSTREAM = 'https://rpc-bradbury.genlayer.com';
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
@@ -9,7 +17,12 @@ const DEFAULT_MAX_RATE_LIMIT_CLIENTS = 4_096;
 const DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 32;
 const RAW_TRANSACTION_PROOF_MAX_RESPONSE_BYTES = 512 * 1024;
+const MAX_GENVM_ERROR_HEX_CHARACTERS = 128 * 1024;
+const MAX_GENVM_CALL_HEX_CHARACTERS = 128 * 1024;
 const TRANSACTION_HASH_PATTERN = /^0x[0-9a-fA-F]{64}$/;
+const GENVM_ERROR_PREFIX = 'execution failed: &genvm.VMResult{Kind:0x1, ReturnData:';
+const GENVM_ERROR_SUFFIX = ': genvm execution error';
+const GENERIC_GENVM_ERROR_MESSAGE = 'GenLayer contract call failed.';
 
 const ALLOWED_GENLAYER_METHODS = new Set([
   'gen_call',
@@ -73,6 +86,118 @@ function jsonRpcError(res, statusCode, code, message, id = null) {
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasExactKeys(value, keys) {
+  return isPlainObject(value)
+    && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
+}
+
+function isExactGetEpochProbe(request) {
+  if (!hasExactKeys(request, ['id', 'jsonrpc', 'method', 'params'])
+      || request.jsonrpc !== '2.0' || request.method !== 'gen_call'
+      || !Array.isArray(request.params) || request.params.length !== 1) return false;
+  const [call] = request.params;
+  if (!hasExactKeys(call, ['data', 'from', 'to', 'transaction_hash_variant', 'type'])
+      || call.type !== 'read'
+      || !/^0x[0-9a-f]{40}$/i.test(String(call.to || ''))
+      || !/^0x[0-9a-f]{40}$/i.test(String(call.from || ''))
+      || call.transaction_hash_variant !== 'latest-nonfinal'
+      || typeof call.data !== 'string'
+      || call.data.length < 4 || call.data.length > MAX_GENVM_CALL_HEX_CHARACTERS
+      || !/^0x[0-9a-f]+$/.test(call.data)) return false;
+  try {
+    const transaction = decodeRlp(call.data);
+    if (!Array.isArray(transaction) || transaction.length !== 2 || transaction[1] !== '0x00') return false;
+    const decoded = abi.calldata.decode(getBytes(transaction[0]));
+    if (!(decoded instanceof Map)
+        || [...decoded.keys()].sort().join(',') !== 'args,method'
+        || decoded.get('method') !== 'get_epoch') return false;
+    const args = decoded.get('args');
+    if (!Array.isArray(args) || args.length !== 1 || typeof args[0] !== 'bigint'
+        || args[0] <= 0n || args[0] > BigInt(Number.MAX_SAFE_INTEGER)) return false;
+    return abi.transactions.serialize([abi.calldata.encode(decoded), false]) === call.data;
+  } catch {
+    return false;
+  }
+}
+
+function isGenvmExecutionError(error) {
+  return isPlainObject(error)
+    && error.code === -32_000
+    && typeof error.message === 'string'
+    && error.message.startsWith(GENVM_ERROR_PREFIX)
+    && error.message.endsWith(GENVM_ERROR_SUFFIX);
+}
+
+function isExactEpochUnknownGenvmError(error) {
+  if (!hasExactKeys(error, ['code', 'data', 'message'])
+      || !isGenvmExecutionError(error)
+      || error.message.length > MAX_GENVM_ERROR_HEX_CHARACTERS
+      || typeof error.data !== 'string'
+      || error.data.length < 2 || error.data.length > MAX_GENVM_ERROR_HEX_CHARACTERS
+      || error.data.length % 2 !== 0 || !/^[0-9a-f]+$/.test(error.data)) return false;
+  try {
+    const encoded = getBytes(`0x${error.data}`);
+    const decoded = abi.calldata.decode(encoded);
+    if (Buffer.from(abi.calldata.encode(decoded)).toString('hex') !== error.data
+        || !(decoded instanceof Map)
+        || [...decoded.keys()].sort().join(',') !== 'data,events,fingerprint,kind,storage_changes'
+        || decoded.get('data') !== '[EXPECTED] EPOCH_UNKNOWN'
+        || !Array.isArray(decoded.get('events')) || decoded.get('events').length !== 0
+        || !(decoded.get('fingerprint') instanceof Map)
+        || decoded.get('kind') !== 'UserError'
+        || !Array.isArray(decoded.get('storage_changes'))
+        || decoded.get('storage_changes').length !== 0) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeSingleGenCallResponse(requests, response, allowExpectedState) {
+  const genCalls = requests.filter((request) => request?.method === 'gen_call');
+  if (genCalls.length === 0
+      || !hasExactKeys(response, ['error', 'id', 'jsonrpc'])
+      || !isGenvmExecutionError(response.error)) return response;
+  if (allowExpectedState
+      && response.jsonrpc === '2.0'
+      && genCalls.length === 1
+      && isExactGetEpochProbe(genCalls[0])
+      && isExactEpochUnknownGenvmError(response.error)) {
+    return {
+      jsonrpc: '2.0',
+      id: response.id,
+      error: {
+        code: ROUND_NOT_SCHEDULED_RPC_CODE,
+        message: ROUND_NOT_SCHEDULED_RPC_MESSAGE,
+      },
+    };
+  }
+  // GenVM execution messages embed raw ReturnData bytes. They are diagnostic
+  // material, not browser-safe copy, so every other exact GenVM envelope is
+  // reduced to a generic fail-closed error at the same-origin boundary.
+  return {
+    jsonrpc: '2.0',
+    id: response.id,
+    error: { code: -32_000, message: GENERIC_GENVM_ERROR_MESSAGE },
+  };
+}
+
+function sanitizeGenCallResponse(request, response) {
+  const requests = Array.isArray(request) ? request : [request];
+  const responses = Array.isArray(response) ? response : [response];
+  const allGenCalls = requests.filter((candidate) => candidate?.method === 'gen_call');
+  const sanitized = responses.map((entry) => {
+    const matching = requests.filter((candidate) =>
+      Object.hasOwn(candidate, 'id') && candidate.id === entry?.id);
+    return sanitizeSingleGenCallResponse(
+      matching.length > 0 ? matching : allGenCalls,
+      entry,
+      matching.length === 1,
+    );
+  });
+  return Array.isArray(response) ? sanitized : sanitized[0];
 }
 
 function isValidRequestId(id) {
@@ -443,6 +568,8 @@ export function createGenLayerRpcProxyMiddleware({
         jsonRpcError(res, 502, -32000, 'GenLayer returned a malformed JSON-RPC response.');
         return;
       }
+
+      responsePayload = sanitizeGenCallResponse(normalized.payload, responsePayload);
 
       if (rawTransactionProof) {
         const requestId = normalized.payload.id;

@@ -1,14 +1,18 @@
+import { createHash } from 'node:crypto';
+
 import {
   canonicalKeeperOperation,
   keeperAttemptOperationId,
 } from '../keeper-journal/schema.mjs';
 
 const NONTERMINAL = new Set([
-  'PREPARED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'QUARANTINED', 'STATE_SATISFIED_UNPROVEN',
+  'PREPARED', 'SIGNED', 'SUBMITTED', 'FINALIZED_SUCCESS', 'QUARANTINED',
+  'STATE_SATISFIED_UNPROVEN',
 ]);
 
 function publicOperation(operation) {
-  return structuredClone(operation);
+  const { privateSignedEvidence: _privateSignedEvidence, ...publicFields } = operation;
+  return structuredClone(publicFields);
 }
 
 export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}) {
@@ -60,6 +64,15 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       args: [...canonical.args],
       valueAtto: canonical.valueAtto,
       state: 'PREPARED',
+      submissionProtocol: 'BRADBURY_DURABLE_RAW_V1',
+      outerTransactionHash: null,
+      outerSenderNonce: null,
+      signedEvidenceSha256: null,
+      signedAt: null,
+      signedTransactionEvidence: null,
+      outerReceiptObservedAt: null,
+      submissionEvidence: null,
+      outerOutcomeEvidence: null,
       transactionHash: null,
       lifecycleStatus: null,
       lifecycleObservedAt: null,
@@ -97,7 +110,7 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
           authenticationConfigured: true,
           signerConfigured: true,
         },
-        database: { configured: true, ready: true, schemaVersion: 9 },
+        database: { configured: true, ready: true, schemaVersion: 10 },
       };
     },
     async acquireLease(request) {
@@ -157,7 +170,7 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
           status: 'ok',
           action: 'PREPARE',
           operation: publicOperation(latest),
-          canBroadcast: false,
+          canSign: false,
           inserted: false,
           auditedRetryNonce: null,
         };
@@ -209,25 +222,110 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
         status: 'ok',
         action: 'PREPARE',
         operation: publicOperation(operation),
-        canBroadcast: true,
+        canSign: true,
         inserted: true,
         auditedRetryNonce: latest?.stateReasonCode === 'AUDITED_NO_BROADCAST'
           ? latest.prehashAbandonmentEvidence?.nonceAtStart ?? null
           : null,
       };
     },
+    async bindSigned(request) {
+      calls.push({ method: 'bindSigned', request: structuredClone(request) });
+      assertLease(request.lease);
+      await hooks.bindSigned?.(request);
+      const operation = operations.get(request.operationId);
+      if (!operation || operation.state !== 'PREPARED'
+          || operation.signedTransactionEvidence !== null) {
+        throw new Error('fake signed binding rejected');
+      }
+      const evidence = structuredClone(request.evidence);
+      const { rawTransaction: _privateRawTransaction, ...publicEvidence } = evidence;
+      operation.state = 'SIGNED';
+      operation.outerTransactionHash = evidence.outerTransactionHash;
+      operation.outerSenderNonce = evidence.outerNonce;
+      operation.signedEvidenceSha256 = createHash('sha256')
+        .update(JSON.stringify(evidence), 'utf8').digest('hex');
+      operation.signedAt = timestamp();
+      operation.signedTransactionEvidence = publicEvidence;
+      operation.privateSignedEvidence = evidence;
+      operation.updatedAt = operation.signedAt;
+      operation.revision = String(BigInt(operation.revision) + 1n);
+      return { status: 'ok', action: 'BIND_SIGNED', ...responseOperation(operation) };
+    },
+    async loadSigned(request) {
+      calls.push({ method: 'loadSigned', request: structuredClone(request) });
+      assertLease(request.lease);
+      await hooks.loadSigned?.(request);
+      const operation = operations.get(request.operationId);
+      if (!operation || operation.state !== 'SIGNED' || !operation.privateSignedEvidence) {
+        throw new Error('fake private signed load rejected');
+      }
+      return {
+        status: 'ok',
+        action: 'LOAD_SIGNED',
+        operationId: operation.operationId,
+        fencingToken: activeLease.fencingToken,
+        evidence: structuredClone(operation.privateSignedEvidence),
+      };
+    },
+    async loadOperation(request) {
+      calls.push({ method: 'loadOperation', request: structuredClone(request) });
+      assertLease(request.lease);
+      await hooks.loadOperation?.(request);
+      const operation = operations.get(request.operationId);
+      if (!operation) throw new Error('fake operation load rejected');
+      return { status: 'ok', action: 'LOAD_OPERATION', ...responseOperation(operation) };
+    },
     async bindSubmission(request) {
       calls.push({ method: 'bindSubmission', request: structuredClone(request) });
       assertLease(request.lease);
       await hooks.bindSubmission?.(request);
       const operation = operations.get(request.operationId);
-      if (!operation || operation.state !== 'PREPARED') throw new Error('fake bind rejected');
+      if (!operation || operation.state !== 'SIGNED'
+          || request.submissionEvidence?.transactionHash !== request.transactionHash
+          || request.submissionEvidence?.outerTransactionHash
+            !== operation.outerTransactionHash
+          || request.submissionEvidence?.evidenceSha256
+            !== operation.signedEvidenceSha256) {
+        throw new Error('fake bind rejected');
+      }
       operation.state = 'SUBMITTED';
       operation.transactionHash = request.transactionHash.toLowerCase();
       operation.submittedAt = timestamp();
+      operation.outerReceiptObservedAt = operation.submittedAt;
+      operation.submissionEvidence = structuredClone(request.submissionEvidence);
       operation.updatedAt = operation.submittedAt;
       operation.revision = String(Number(operation.revision) + 1);
       return { status: 'ok', action: 'BIND_SUBMISSION', ...responseOperation(operation) };
+    },
+    async bindOuterOutcome(request) {
+      calls.push({ method: 'bindOuterOutcome', request: structuredClone(request) });
+      assertLease(request.lease);
+      await hooks.bindOuterOutcome?.(request);
+      const operation = operations.get(request.operationId);
+      const evidence = request.outerOutcomeEvidence;
+      if (!operation || operation.state !== 'SIGNED'
+          || evidence?.outerTransactionHash !== operation.outerTransactionHash
+          || evidence?.evidenceSha256 !== operation.signedEvidenceSha256
+          || !['0', '1'].includes(evidence?.receiptStatus)) {
+        throw new Error('fake outer outcome rejected');
+      }
+      operation.outerReceiptObservedAt = timestamp();
+      operation.outerOutcomeEvidence = structuredClone(evidence);
+      operation.lifecycleStatus = 'FINALIZED';
+      operation.lifecycleObservedAt = operation.outerReceiptObservedAt;
+      if (evidence.receiptStatus === '0') {
+        operation.state = 'FINALIZED_FAILURE';
+        operation.stateReasonCode = 'OUTER_RECEIPT_REVERTED';
+        operation.finalizedAt = operation.outerReceiptObservedAt;
+      } else {
+        operation.state = 'QUARANTINED';
+        operation.stateReasonCode = 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS';
+        operation.quarantineReason = 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS';
+      }
+      operation.updatedAt = operation.outerReceiptObservedAt;
+      operation.revision = String(BigInt(operation.revision) + 1n);
+      return { status: 'ok', action: 'BIND_OUTER_OUTCOME', ...responseOperation(operation) };
     },
     async observeLifecycle(request) {
       calls.push({ method: 'observeLifecycle', request: structuredClone(request) });
@@ -364,6 +462,15 @@ export function createMemoryAuthoritativeKeeperJournalClient({ hooks = {} } = {}
       args: [...canonical.args],
       valueAtto: canonical.valueAtto,
       state,
+      submissionProtocol: null,
+      outerTransactionHash: null,
+      outerSenderNonce: null,
+      signedEvidenceSha256: null,
+      signedAt: null,
+      signedTransactionEvidence: null,
+      outerReceiptObservedAt: null,
+      submissionEvidence: null,
+      outerOutcomeEvidence: null,
       transactionHash: transactionHash?.toLowerCase() ?? null,
       lifecycleStatus,
       lifecycleObservedAt: lifecycleStatus ? now : null,

@@ -28,9 +28,14 @@ import {
   resolveGenlayerCommand,
   runGenlayerCall,
   runGenlayerStreamingCommand,
-  submitGenlayerWrite,
   waitForGenlayerFinalizedReceipt,
 } from './genlayer-command.mjs';
+import {
+  broadcastDurableSignedGenlayerWrite,
+  createDurableSignedGenlayerWrite,
+  persistDurableSignedGenlayerWrite,
+  resolveKeeperKeystorePath,
+} from './genlayer-durable-write.mjs';
 import {
   expectedEpochRecord,
   loadV8KeeperConfig,
@@ -825,11 +830,22 @@ async function executeAction(context, action, acceptedPredecessor = null) {
     context.config.expected.keeperAddress,
     context.operator.canSignLockedAccount === true,
   );
+  if (typeof context.operator.createSignedWrite !== 'function'
+      || typeof context.operator.persistSignedWrite !== 'function'
+      || typeof context.operator.broadcastSignedWrite !== 'function'
+      || typeof context.journalSession.bindSigned !== 'function'
+      || typeof context.journalSession.loadSigned !== 'function'
+      || typeof context.journalSession.bindOuterOutcome !== 'function') {
+    fail(
+      'DURABLE_WRITE_CONFIGURATION',
+      'execute mode requires durable sign, persist, fenced load, and exact replay capabilities',
+    );
+  }
   await context.journalSession.renew();
   const prepared = await context.journalSession.prepare(identity.operation);
-  if (prepared?.canBroadcast !== true) {
+  if (prepared?.canSign !== true) {
     const operation = prepared?.operation ? validateRecoveredKeeperOperation(prepared.operation) : null;
-    return Object.freeze({ ...action, transactionHash: operation?.transactionHash || null, pendingReceipt: true, reason: 'AUTHORITATIVE_PREPARE_NOT_BROADCASTABLE' });
+    return Object.freeze({ ...action, transactionHash: operation?.transactionHash || null, pendingReceipt: true, reason: 'AUTHORITATIVE_PREPARE_NOT_SIGNABLE' });
   }
   let operation = validateRecoveredKeeperOperation(prepared.operation);
   if (prepared.inserted !== true || operation.state !== 'PREPARED'
@@ -841,28 +857,25 @@ async function executeAction(context, action, acceptedPredecessor = null) {
     auditedRetryNonce: prepared.auditedRetryNonce ?? null,
   });
   let transactionHash;
+  let signedWrite;
   try {
-    await context.operator.submitWrite(identity.call.method, identity.call.args, async (hash) => {
-      transactionHash = hash;
-      const bound = await context.journalSession.bind(operation.operationId, hash);
-      operation = validateRecoveredKeeperOperation(bound?.operation);
-      if (operation.state !== 'SUBMITTED' || operation.transactionHash !== String(hash).toLowerCase()) fail('KEEPER_JOURNAL_IDENTITY', 'submission hash was not durably bound');
-    });
+    signedWrite = await context.operator.createSignedWrite(operation, context.journalSession);
   } catch (error) {
     const failure = sanitizedSubmitFailure(error);
-    const transactionHashObserved = Boolean(transactionHash || error?.transactionHash);
-    const broadcastDefinitelyNotAttempted = error?.broadcastAttempted === false;
+    const definitelyUnsigned = error?.walletSignAttempted === false
+      && error?.broadcastAttempted === false;
     context.logger({
-      event: 'V8_KEEPER_PREHASH_SUBMIT_FAILURE',
+      event: 'V8_KEEPER_SIGNING_FAILURE',
       operationId: operation.operationId,
       method: operation.method,
       subjectType: operation.subjectType,
       subjectId: operation.subjectId,
       ...failure,
-      transactionHashObserved,
-      broadcastAttempted: broadcastDefinitelyNotAttempted ? false : null,
+      transactionHashObserved: false,
+      walletSignAttempted: error?.walletSignAttempted === false ? false : null,
+      broadcastAttempted: error?.broadcastAttempted === false ? false : null,
     });
-    if (!transactionHashObserved && broadcastDefinitelyNotAttempted) {
+    if (definitelyUnsigned) {
       const abandoned = await context.journalSession.abandonPrehash(
         operation.operationId,
         'DEFINITE_LOCAL_PRESPAWN_FAILURE',
@@ -885,16 +898,81 @@ async function executeAction(context, action, acceptedPredecessor = null) {
       );
       operation = validateRecoveredKeeperOperation(abandoned?.operation);
       if (operation.state !== 'ABANDONED_PREHASH') {
-        fail('KEEPER_JOURNAL_IDENTITY', 'pre-hash abandonment was not durably recorded');
+        fail('KEEPER_JOURNAL_IDENTITY', 'pre-sign abandonment was not durably recorded');
       }
-      context.logger({
-        event: 'V8_KEEPER_PREHASH_ABANDONED',
-        operationId: operation.operationId,
-        reasonCode: operation.stateReasonCode,
-        ...failure,
-      });
     }
     throw error;
+  }
+
+  operation = validateRecoveredKeeperOperation(await context.operator.persistSignedWrite(
+    signedWrite,
+    operation,
+    context.journalSession,
+  ));
+  if (operation.state !== 'SIGNED' || operation.transactionHash !== null
+      || operation.outerTransactionHash === null || operation.outerSenderNonce === null) {
+    fail('KEEPER_JOURNAL_IDENTITY', 'signed keeper bytes were not durably persisted');
+  }
+  context.logger({
+    event: 'V8_KEEPER_WRITE_SIGNED_DURABLY',
+    operationId: operation.operationId,
+    outerTransactionHash: operation.outerTransactionHash,
+    outerNonce: operation.outerSenderNonce,
+    method: operation.method,
+    subjectType: operation.subjectType,
+    subjectId: operation.subjectId,
+  });
+
+  const submitted = await context.operator.broadcastSignedWrite(
+    operation,
+    context.journalSession,
+  );
+  if (submitted?.outcome === 'OUTER_FAILURE') {
+    const failed = await context.journalSession.bindOuterOutcome(
+      operation.operationId,
+      submitted.outerFailureEvidence,
+    );
+    operation = validateRecoveredKeeperOperation(failed?.operation || failed);
+    if (operation.state !== 'FINALIZED_FAILURE' || operation.transactionHash !== null) {
+      fail('KEEPER_JOURNAL_IDENTITY', 'finalized outer failure was not durably bound');
+    }
+    return Object.freeze({
+      ...action,
+      transactionHash: null,
+      status: 'OUTER_RECEIPT_REVERTED',
+      operation,
+    });
+  }
+  if (submitted?.outcome === 'OUTER_AMBIGUOUS') {
+    const quarantined = await context.journalSession.bindOuterOutcome(
+      operation.operationId,
+      submitted.outerAmbiguityEvidence,
+    );
+    operation = validateRecoveredKeeperOperation(quarantined?.operation || quarantined);
+    if (operation.state !== 'QUARANTINED'
+        || operation.quarantineReason !== 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS') {
+      fail('KEEPER_JOURNAL_IDENTITY', 'ambiguous outer receipt was not durably quarantined');
+    }
+    return Object.freeze({
+      ...action,
+      transactionHash: null,
+      pendingReceipt: true,
+      reason: 'OUTER_RECEIPT_IDENTITY_AMBIGUOUS',
+    });
+  }
+  if (submitted?.outcome !== 'SUBMITTED') {
+    fail('DURABLE_WRITE_OUTCOME', 'durable broadcast returned an unknown outer outcome');
+  }
+  transactionHash = submitted.transactionHash;
+  const bound = await context.journalSession.bind(
+    operation.operationId,
+    transactionHash,
+    submitted.submissionEvidence,
+  );
+  operation = validateRecoveredKeeperOperation(bound?.operation);
+  if (operation.state !== 'SUBMITTED'
+      || operation.transactionHash !== String(transactionHash).toLowerCase()) {
+    fail('KEEPER_JOURNAL_IDENTITY', 'durable signed submission was not bound to its inner hash');
   }
   if (!/^0x[0-9a-f]{64}$/i.test(String(transactionHash || ''))) fail('TRANSACTION_HASH_NOT_DURABLE', 'write exited without a durable transaction hash');
   const reconciled = await reconcileAuthoritativeOperation({ ...recoveryOptions(context), operation });
@@ -1121,14 +1199,18 @@ export function createCliV8KeeperOperator({ config, environment = process.env } 
       spawnImpl: password ? createPasswordWritingSpawn(password) : nodeSpawn,
       ...quiet,
     }),
-    submitWrite: (method, args, onTransactionHash) => submitGenlayerWrite({
-      invocation,
-      args: [config.contractAddress, method, '--args', ...args.map(String)],
-      onTransactionHash,
-      stdin: password ? 'pipe' : 'inherit',
-      spawnImpl: password ? createPasswordWritingSpawn(password) : nodeSpawn,
-      ...quiet,
+    createSignedWrite: (operation, session) => createDurableSignedGenlayerWrite({
+      operation,
+      password,
+      keystorePath: resolveKeeperKeystorePath(environment),
+      beforeSign: () => session.renew(),
     }),
+    persistSignedWrite: (signedWrite, operation, journalSession) => (
+      persistDurableSignedGenlayerWrite({ signedWrite, operation, journalSession })
+    ),
+    broadcastSignedWrite: (operation, journalSession) => (
+      broadcastDurableSignedGenlayerWrite({ operation, journalSession })
+    ),
     waitFinalized: (transactionHash, policy) => waitForGenlayerFinalizedReceipt({
       invocation,
       transactionHash,
@@ -1142,7 +1224,7 @@ export function createCliV8KeeperOperator({ config, environment = process.env } 
 }
 
 function usage() {
-  return 'Reconcile Liquidity Arena V8 epochs and EVM-backed payouts on Bradbury.\n\nUsage:\n  node scripts/v8-keeper.mjs --config <file> [--execute]\n\nThe default is a read-only plan. --execute requires the fenced V8 keeper, schema-v9 journal, and exact testnet-bradbury network. The keeper never calls an EVM vault withdrawal; only recipients can withdraw.';
+  return 'Reconcile Liquidity Arena V8 epochs and EVM-backed payouts on Bradbury.\n\nUsage:\n  node scripts/v8-keeper.mjs --config <file> [--execute]\n\nThe default is a read-only plan. --execute requires the fenced V8 keeper, schema-v10 journal, and exact testnet-bradbury network. The keeper never calls an EVM vault withdrawal; only recipients can withdraw.';
 }
 
 function parseArguments(argv) {
