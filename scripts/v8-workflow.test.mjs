@@ -29,6 +29,20 @@ test('V8 keeper refuses arbitrary workflow_dispatch refs before exposing its key
   assert.match(source, /V8_KEEPER_KEYSTORE_B64: \$\{\{ secrets\.V8_KEEPER_KEYSTORE_B64 \}\}/);
 });
 
+test('successful durable-pending keeper exit continues directly to bounded history sync', () => {
+  const source = workflow('bradbury-v8-keeper.yml');
+  const keeperStep = source.indexOf('- name: Reconcile Bradbury V8 epochs and payouts');
+  const historyStep = source.indexOf('- name: Synchronize bounded V8 epoch and payout history');
+  const cleanupStep = source.indexOf('- name: Remove temporary keystore');
+  assert.ok(keeperStep > 0);
+  assert.ok(historyStep > keeperStep);
+  assert.ok(cleanupStep > historyStep);
+  const historyBlock = source.slice(historyStep, cleanupStep);
+  assert.doesNotMatch(historyBlock, /^\s+if:/m);
+  assert.match(historyBlock, /node scripts\/history-sync\.mjs/);
+  assert.match(historyBlock, /--deployment v8/);
+});
+
 test('V8 watchdog also gates its journal secret to protected main', () => {
   const source = workflow('bradbury-v8-ops-watchdog.yml');
   assertProtectedMainGate(source, /\$\{\{\s*secrets\.KEEPER_JOURNAL_SECRET\s*\}\}/);

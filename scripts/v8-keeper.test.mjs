@@ -8,9 +8,11 @@ import {
   assertV8Schema,
   classifyOpenEpoch,
   classifyPayoutAction,
+  isHealthyDurablePendingSummary,
   isProvablyEmptyEpoch,
   plannedDueEpochIds,
   plannedPayoutScanRanges,
+  runV8KeeperCli,
   runV8KeeperOnce,
   V8_FACTORY_VIEW_ABI,
   V8_KEEPER_ABI,
@@ -28,6 +30,7 @@ import {
   durableSubmissionEvidence,
   TEST_DURABLE_SIGNER,
 } from '../history/durable-signed-test-helper.mjs';
+import { validateDurablePendingOutcome } from './authoritative-keeper-journal.mjs';
 import { createMemoryAuthoritativeKeeperJournalClient } from './authoritative-keeper-journal.test-helper.mjs';
 
 const CONTRACT = '0x1111111111111111111111111111111111111111';
@@ -365,6 +368,22 @@ test('journal identities separate Bradbury epoch and payout subjects', () => {
   assert.equal(epoch.network, 'bradbury');
   assert.notEqual(epoch.operationId, payout.operationId);
   assert.throws(() => canonicalKeeperOperation({ ...payout, deploymentAlias: 'v7' }), /unexpected fields|v8/);
+});
+
+test('durable finality-pending evidence requires a positive finalized head number', () => {
+  const outerTransactionHash = `0x${'d'.repeat(64)}`;
+  assert.throws(() => validateDurablePendingOutcome({
+    outcome: 'PENDING',
+    pendingReason: 'OUTER_FINALITY_PENDING',
+    outerTransactionHash,
+    receiptBlockHash: `0x${'e'.repeat(64)}`,
+    receiptBlockNumber: '500',
+    finalizedHeadBlockNumber: '0',
+  }, {
+    state: 'SIGNED',
+    transactionHash: null,
+    outerTransactionHash,
+  }), (error) => error.code === 'KEEPER_JOURNAL_SCHEMA');
 });
 
 test('open epoch classifier resolves before timeout and activates timeout afterward', () => {
@@ -732,6 +751,279 @@ test('ambiguous hashless CLI failure logs its cause and leaves PREPARED blocking
     /hunter2|rpc\.example\.invalid|a{64}|very-secret-token|alpha beta gamma/i,
   );
   assert.equal(telemetry.broadcastAttempted, null);
+});
+
+test('durable outer pending stays SIGNED across fresh execution and authoritative recovery', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  const receiptBlockHash = `0x${'e'.repeat(64)}`;
+  let signatureCalls = 0;
+  let broadcastCalls = 0;
+  const operator = emptyExecutionOperator({
+    createSignedWrite: async (operation) => {
+      signatureCalls += 1;
+      return createTestSignedWrite(operation);
+    },
+    broadcastSignedWrite: async (operation, session) => {
+      broadcastCalls += 1;
+      const loaded = await session.loadSigned(operation.operationId);
+      assert.equal(loaded.status, 'ok');
+      assert.equal(loaded.action, 'LOAD_SIGNED');
+      assert.match(loaded.evidence.rawTransaction, /^0x[0-9a-f]+$/i);
+      if (broadcastCalls === 1) {
+        return Object.freeze({
+          outcome: 'PENDING',
+          pendingReason: 'OUTER_RECEIPT_PENDING',
+          outerTransactionHash: operation.outerTransactionHash,
+        });
+      }
+      return Object.freeze({
+        outcome: 'PENDING',
+        pendingReason: 'OUTER_FINALITY_PENDING',
+        outerTransactionHash: operation.outerTransactionHash,
+        receiptBlockHash,
+        receiptBlockNumber: '500',
+        finalizedHeadBlockNumber: '499',
+      });
+    },
+  });
+  const options = {
+    config: config({ maxWritesPerRun: 5 }),
+    execute: true,
+    operator,
+    journalClient: journal.client,
+    nowEpochSeconds: NOW,
+    logger: () => {},
+    sleep: async () => {},
+    journalSessionOptions: {
+      setIntervalImpl: () => ({ unref() {} }),
+      clearIntervalImpl: () => {},
+    },
+  };
+
+  const fresh = await runV8KeeperOnce(options);
+  assert.equal(fresh.blocked, true);
+  assert.deepEqual(fresh.failures, []);
+  assert.equal(fresh.pending.length, 1);
+  assert.equal(fresh.pending[0].reason, 'OUTER_RECEIPT_PENDING');
+  assert.equal(fresh.pending[0].state, 'SIGNED');
+  assert.equal(fresh.pending[0].transactionHash, null);
+  assert.equal(fresh.pending[0].pendingReceipt, true);
+  assert.equal(fresh.pending[0].outerTransactionHash.length, 66);
+  assert.ok(fresh.skipped.every(({ reason }) => reason === 'BLOCKED_BY_NONTERMINAL_OPERATION'));
+  assert.equal(isHealthyDurablePendingSummary(fresh), true);
+  assert.doesNotMatch(JSON.stringify(fresh), /rawTransaction|privateSignedEvidence/);
+
+  const [operation] = [...journal.operations.values()];
+  assert.equal(operation.state, 'SIGNED');
+  assert.equal(operation.transactionHash, null);
+  assert.match(operation.privateSignedEvidence.rawTransaction, /^0x[0-9a-f]+$/i);
+  const signedRevision = operation.revision;
+  const signedOuterHash = operation.outerTransactionHash;
+
+  const recovered = await runV8KeeperOnce(options);
+  assert.equal(recovered.blocked, true);
+  assert.deepEqual(recovered.failures, []);
+  assert.equal(recovered.actions.length, 0);
+  assert.equal(recovered.pending.length, 1);
+  assert.equal(recovered.pending[0].reason, 'OUTER_FINALITY_PENDING');
+  assert.equal(recovered.pending[0].state, 'SIGNED');
+  assert.equal(recovered.pending[0].transactionHash, null);
+  assert.equal(recovered.pending[0].outerTransactionHash, signedOuterHash);
+  assert.equal(recovered.pending[0].receiptBlockHash, receiptBlockHash);
+  assert.equal(recovered.pending[0].receiptBlockNumber, '500');
+  assert.equal(recovered.pending[0].finalizedHeadBlockNumber, '499');
+  assert.equal(isHealthyDurablePendingSummary(recovered), true);
+  assert.doesNotMatch(JSON.stringify(recovered), /rawTransaction|privateSignedEvidence/);
+
+  assert.equal(signatureCalls, 1, 'recovery must not create the next signature');
+  assert.equal(broadcastCalls, 2, 'recovery checks only the exact persisted SIGNED write');
+  assert.equal(operation.state, 'SIGNED');
+  assert.equal(operation.transactionHash, null);
+  assert.equal(operation.revision, signedRevision);
+  assert.equal(journal.calls.filter(({ method }) => method === 'bindSigned').length, 1);
+  assert.equal(journal.calls.filter(({ method }) => method === 'loadSigned').length, 2);
+  assert.equal(journal.calls.filter(({ method }) => method === 'bindSubmission').length, 0);
+  assert.equal(journal.calls.filter(({ method }) => method === 'bindOuterOutcome').length, 0);
+  assert.equal(journal.calls.filter(({ method }) => method === 'transition').length, 0);
+});
+
+test('CLI succeeds only for exact allowlisted durable pending with zero real failures', async () => {
+  const outerTransactionHash = `0x${'d'.repeat(64)}`;
+  const healthy = Object.freeze({
+    execute: true,
+    blocked: true,
+    failures: [],
+    pending: [Object.freeze({
+      operationId: 'a'.repeat(64),
+      logicalOperationId: 'a'.repeat(64),
+      type: 'CREATE',
+      epochEndTimestamp: NOW + 7_200,
+      state: 'SIGNED',
+      transactionHash: null,
+      pendingReceipt: true,
+      reason: 'OUTER_RECEIPT_PENDING',
+      outerTransactionHash,
+    })],
+  });
+  const dependenciesFor = (summary) => ({
+    environment: {},
+    loadConfig: () => config(),
+    createOperator: () => ({}),
+    createJournalClient: () => ({}),
+    runOnce: async () => summary,
+  });
+
+  assert.equal(isHealthyDurablePendingSummary(healthy), true);
+  assert.equal(
+    await runV8KeeperCli(['--config', 'ignored.json', '--execute'], dependenciesFor(healthy)),
+    healthy,
+  );
+
+  const recoveredIdentity = canonicalKeeperOperation({
+    deploymentAlias: 'v8',
+    chainId: '4221',
+    contractAddress: CONTRACT,
+    subjectType: 'epoch',
+    subjectId: String(NOW + 7_200),
+    method: 'create_epoch',
+    args: [String(NOW + 7_200)],
+    valueAtto: '0',
+  });
+  const healthyRecovery = {
+    execute: true,
+    blocked: true,
+    failures: [],
+    pending: [{
+      operationId: recoveredIdentity.operationId,
+      logicalOperationId: recoveredIdentity.operationId,
+      attemptNumber: '1',
+      retryOfOperationId: null,
+      deploymentAlias: 'v8',
+      method: 'create_epoch',
+      subjectType: 'epoch',
+      subjectId: String(NOW + 7_200),
+      transactionHash: null,
+      state: 'SIGNED',
+      lifecycleStatus: null,
+      reason: 'OUTER_FINALITY_PENDING',
+      outerTransactionHash,
+      receiptBlockHash: `0x${'e'.repeat(64)}`,
+      receiptBlockNumber: '500',
+      finalizedHeadBlockNumber: '499',
+    }],
+  };
+  assert.equal(isHealthyDurablePendingSummary(healthyRecovery), true);
+  assert.equal(
+    await runV8KeeperCli(
+      ['--config', 'ignored.json', '--execute'],
+      dependenciesFor(healthyRecovery),
+    ),
+    healthyRecovery,
+  );
+
+  const missingIdentityEntry = { ...healthy.pending[0] };
+  delete missingIdentityEntry.operationId;
+  const falsePendingReceipt = {
+    ...healthy,
+    pending: [{ ...healthy.pending[0], pendingReceipt: false }],
+  };
+  const extraFreshField = {
+    ...healthy,
+    pending: [{ ...healthy.pending[0], unexpected: 'public-looking' }],
+  };
+  const missingRecoveryIdentity = { ...healthyRecovery.pending[0] };
+  delete missingRecoveryIdentity.logicalOperationId;
+  const recoveryWithPendingReceipt = {
+    ...healthyRecovery,
+    pending: [{ ...healthyRecovery.pending[0], pendingReceipt: false }],
+  };
+  const extraRecoveryField = {
+    ...healthyRecovery,
+    pending: [{ ...healthyRecovery.pending[0], unexpected: 'public-looking' }],
+  };
+  for (const adversarial of [
+    { ...healthy, pending: [missingIdentityEntry] },
+    falsePendingReceipt,
+    extraFreshField,
+    { ...healthyRecovery, pending: [missingRecoveryIdentity] },
+    recoveryWithPendingReceipt,
+    extraRecoveryField,
+  ]) {
+    assert.equal(isHealthyDurablePendingSummary(adversarial), false);
+    await assert.rejects(
+      runV8KeeperCli(['--config', 'ignored.json', '--execute'], dependenciesFor(adversarial)),
+      (error) => error.code === 'RUN_BLOCKED',
+    );
+  }
+
+  const nonAllowlisted = {
+    ...healthy,
+    pending: [{ ...healthy.pending[0], reason: 'SIGNED_REPLAY_PENDING' }],
+  };
+  assert.equal(isHealthyDurablePendingSummary(nonAllowlisted), false);
+  await assert.rejects(
+    runV8KeeperCli(['--config', 'ignored.json', '--execute'], dependenciesFor(nonAllowlisted)),
+    (error) => error.code === 'RUN_BLOCKED',
+  );
+
+  const malformedFinality = {
+    ...healthy,
+    pending: [{
+      ...healthy.pending[0],
+      reason: 'OUTER_FINALITY_PENDING',
+      receiptBlockHash: `0x${'e'.repeat(64)}`,
+      receiptBlockNumber: '500',
+      finalizedHeadBlockNumber: '500',
+    }],
+  };
+  assert.equal(isHealthyDurablePendingSummary(malformedFinality), false);
+  await assert.rejects(
+    runV8KeeperCli(['--config', 'ignored.json', '--execute'], dependenciesFor(malformedFinality)),
+    (error) => error.code === 'RUN_BLOCKED',
+  );
+
+  const zeroFinalizedHead = {
+    ...healthy,
+    pending: [{
+      ...healthy.pending[0],
+      reason: 'OUTER_FINALITY_PENDING',
+      receiptBlockHash: `0x${'e'.repeat(64)}`,
+      receiptBlockNumber: '500',
+      finalizedHeadBlockNumber: '0',
+    }],
+  };
+  assert.equal(isHealthyDurablePendingSummary(zeroFinalizedHead), false);
+  await assert.rejects(
+    runV8KeeperCli(['--config', 'ignored.json', '--execute'], dependenciesFor(zeroFinalizedHead)),
+    (error) => error.code === 'RUN_BLOCKED',
+  );
+
+  const nonpublic = {
+    ...healthy,
+    pending: [{ ...healthy.pending[0], rawTransaction: '0x01' }],
+  };
+  assert.equal(isHealthyDurablePendingSummary(nonpublic), false);
+  await assert.rejects(
+    runV8KeeperCli(['--config', 'ignored.json', '--execute'], dependenciesFor(nonpublic)),
+    (error) => error.code === 'RUN_BLOCKED',
+  );
+
+  const realFailure = {
+    ...healthy,
+    failures: [{ code: 'DURABLE_WRITE_FINALITY', message: 'invalid finalized head' }],
+  };
+  assert.equal(isHealthyDurablePendingSummary(realFailure), false);
+  await assert.rejects(
+    runV8KeeperCli(['--config', 'ignored.json', '--execute'], dependenciesFor(realFailure)),
+    (error) => error.code === 'RUN_BLOCKED',
+  );
+
+  const inconsistent = { ...healthy, blocked: false };
+  assert.equal(isHealthyDurablePendingSummary(inconsistent), false);
+  await assert.rejects(
+    runV8KeeperCli(['--config', 'ignored.json', '--execute'], dependenciesFor(inconsistent)),
+    (error) => error.code === 'RUN_BLOCKED',
+  );
 });
 
 test('an abandoned retry attempt cannot authorize attempt three', async () => {

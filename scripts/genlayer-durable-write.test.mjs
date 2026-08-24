@@ -289,6 +289,7 @@ function replayProvider(evidence, {
   sendResult = evidence.outerTransactionHash,
   receiptOverride,
   finalizedNumber = '0x1235',
+  finalizedOverride,
 } = {}) {
   const receipt = receiptOverride || newTransactionReceipt(evidence);
   let receiptCalls = 0;
@@ -307,7 +308,9 @@ function replayProvider(evidence, {
     },
     eth_getBlockByNumber: ([tag]) => {
       if (tag === 'latest') return { number: '0x1233', hash: FINALIZED_HASH, timestamp: '0x64' };
-      if (tag === 'finalized') return { number: finalizedNumber, hash: FINALIZED_HASH, timestamp: '0x65' };
+      if (tag === 'finalized') return finalizedOverride === undefined
+        ? { number: finalizedNumber, hash: FINALIZED_HASH, timestamp: '0x65' }
+        : finalizedOverride;
       return canonicalBlock(evidence);
     },
     eth_sendRawTransaction: sendResult,
@@ -507,15 +510,112 @@ test('exact pending outer transaction suppresses rebroadcast and is not mislabel
   assert.equal(rpc.calls.some(({ method }) => method === 'eth_sendRawTransaction'), false);
 });
 
-test('durable replay rejects unfinalized receipts and quarantines ambiguous events', async () => {
+test('exact outer transaction without a receipt returns public pending without rebroadcast', async () => {
   const fixture = await signedFixture();
+  const rpc = provider({
+    eth_getTransactionReceipt: null,
+    eth_getTransactionByHash: canonicalOuterTransaction(fixture.evidence),
+    eth_getTransactionCount: ['0x7', '0x8'],
+  });
+  const result = await replay(fixture, rpc, { receiptAttempts: 1 });
+  assert.deepEqual(result, {
+    outcome: 'PENDING',
+    pendingReason: 'OUTER_RECEIPT_PENDING',
+    outerTransactionHash: fixture.evidence.outerTransactionHash,
+  });
+  assert.equal(rpc.calls.some(({ method }) => method === 'eth_sendRawTransaction'), false);
+  assert.equal(JSON.stringify(result).includes(fixture.evidence.rawTransaction), false);
+});
+
+test('unavailable receipt or exact-transaction lookups never become healthy pending', async () => {
+  const fixture = await signedFixture();
+  for (const rpc of [
+    provider({
+      eth_getTransactionReceipt: new Error('receipt RPC unavailable'),
+    }),
+    provider({
+      eth_getTransactionReceipt: null,
+      eth_getTransactionByHash: new Error('transaction RPC unavailable'),
+    }),
+  ]) {
+    await assert.rejects(
+      replay(fixture, rpc, { receiptAttempts: 1 }),
+      (error) => error.code === 'DURABLE_WRITE_RECEIPT',
+    );
+    assert.equal(rpc.calls.some(({ method }) => method === 'eth_sendRawTransaction'), false);
+  }
+});
+
+test('canonical status-one receipt below a valid finalized head returns public finality pending', async () => {
+  const fixture = await signedFixture();
+  const result = await replay(fixture, replayProvider(fixture.evidence, {
+    receiptInitially: true,
+    finalizedNumber: '0x1233',
+  }));
+  assert.deepEqual(result, {
+    outcome: 'PENDING',
+    pendingReason: 'OUTER_FINALITY_PENDING',
+    outerTransactionHash: fixture.evidence.outerTransactionHash,
+    receiptBlockHash: BLOCK_HASH,
+    receiptBlockNumber: '4660',
+    finalizedHeadBlockNumber: '4659',
+  });
+  assert.equal(JSON.stringify(result).includes(fixture.evidence.rawTransaction), false);
+});
+
+test('a malformed status-one receipt below the finalized head remains a hard identity failure', async () => {
+  const fixture = await signedFixture();
+  const wrongRecipient = newTransactionReceipt(fixture.evidence);
+  wrongRecipient.logs[0].topics[2] = zeroPadValue(
+    '0x2222222222222222222222222222222222222222',
+    32,
+  ).toLowerCase();
   await assert.rejects(
     replay(fixture, replayProvider(fixture.evidence, {
       receiptInitially: true,
+      receiptOverride: wrongRecipient,
       finalizedNumber: '0x1233',
     })),
+    (error) => error.code === 'DURABLE_WRITE_RECEIPT',
+  );
+});
+
+test('invalid or unavailable finalized heads and finalized revalidation drift remain hard failures', async () => {
+  const fixture = await signedFixture();
+  for (const finalizedOverride of [
+    null,
+    { number: '0x0', hash: FINALIZED_HASH, timestamp: '0x65' },
+    { number: '0x1233', hash: `0x${'0'.repeat(64)}`, timestamp: '0x65' },
+  ]) {
+    await assert.rejects(
+      replay(fixture, replayProvider(fixture.evidence, {
+        receiptInitially: true,
+        finalizedOverride,
+      })),
+      (error) => error.code === 'DURABLE_WRITE_FINALITY',
+    );
+  }
+
+  const initialReceipt = newTransactionReceipt(fixture.evidence);
+  const changedReceipt = structuredClone(initialReceipt);
+  changedReceipt.logs[0].data = '0x01';
+  const rpc = provider({
+    eth_getTransactionReceipt: [initialReceipt, changedReceipt],
+    eth_getTransactionByHash: canonicalOuterTransaction(fixture.evidence),
+    eth_getBlockByNumber: ([tag]) => (
+      tag === 'finalized'
+        ? { number: '0x1235', hash: FINALIZED_HASH, timestamp: '0x65' }
+        : canonicalBlock(fixture.evidence)
+    ),
+  });
+  await assert.rejects(
+    replay(fixture, rpc),
     (error) => error.code === 'DURABLE_WRITE_FINALITY',
   );
+});
+
+test('durable replay quarantines ambiguous finalized events', async () => {
+  const fixture = await signedFixture();
 
   const wrongRecipient = newTransactionReceipt(fixture.evidence);
   wrongRecipient.logs[0].topics[2] = zeroPadValue(

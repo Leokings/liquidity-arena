@@ -785,12 +785,18 @@ async function assertFinalizedCanonicalReceipt({
     finalizedHead.number,
     'finalized Bradbury EVM head number',
   );
+  if (finalizedHeadBlockNumber === 0n) {
+    refuse('DURABLE_WRITE_FINALITY', 'finalized Bradbury EVM head number is zero');
+  }
   if (hash(finalizedHead.hash, 'finalized Bradbury EVM head hash')
       === `0x${'0'.repeat(64)}`) {
     refuse('DURABLE_WRITE_FINALITY', 'finalized Bradbury EVM head hash is zero');
   }
   if (finalizedHeadBlockNumber < BigInt(canonicalOuter.blockNumber)) {
-    refuse('DURABLE_WRITE_FINALITY', 'outer receipt block is not finalized on Bradbury EVM');
+    return Object.freeze({
+      finalityPending: true,
+      finalizedHeadBlockNumber: finalizedHeadBlockNumber.toString(),
+    });
   }
 
   // Re-read the exact receipt, outer transaction, and block after observing a
@@ -823,6 +829,7 @@ async function assertFinalizedCanonicalReceipt({
     refuse('DURABLE_WRITE_FINALITY', 'finalized outer receipt identity changed during revalidation');
   }
   return Object.freeze({
+    finalityPending: false,
     finalizedHeadBlockNumber: finalizedHeadBlockNumber.toString(),
     canonicalOuter: revalidatedOuter,
     receipt: revalidatedReceipt,
@@ -835,6 +842,7 @@ async function getOuterReceipt(provider, evidence, {
   sleep,
   rpcPolicy,
 }) {
+  let receiptRpcError = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (rpcPolicy.deadlineAtMs - rpcPolicy.clockMs() <= 0) {
       refuse('DURABLE_WRITE_DEADLINE', 'receipt polling exceeded the keeper deadline');
@@ -847,8 +855,10 @@ async function getOuterReceipt(provider, evidence, {
         [evidence.outerTransactionHash],
         rpcPolicy,
       );
-    } catch {
+      receiptRpcError = null;
+    } catch (error) {
       receipt = null;
+      receiptRpcError = error;
     }
     if (receipt) return receipt;
     if (attempt + 1 < attempts) {
@@ -858,6 +868,9 @@ async function getOuterReceipt(provider, evidence, {
       }
       await sleep(intervalMs);
     }
+  }
+  if (receiptRpcError) {
+    refuse('DURABLE_WRITE_RECEIPT', 'outer receipt lookup is unavailable');
   }
   return null;
 }
@@ -910,7 +923,6 @@ export async function broadcastDurableSignedGenlayerWrite({
     refuse('DURABLE_WRITE_POLICY', 'outer receipt polling policy is invalid');
   }
   const rpcPolicy = Object.freeze({ rpcTimeoutMs, deadlineAtMs, clockMs });
-  let exactOuterObserved = false;
   let broadcastHashMismatch = false;
   let receipt = await getOuterReceipt(provider, evidence, {
     attempts: 1,
@@ -928,10 +940,9 @@ export async function broadcastDurableSignedGenlayerWrite({
         rpcPolicy,
       );
     } catch {
-      transaction = null;
+      refuse('DURABLE_WRITE_RECEIPT', 'exact outer transaction lookup is unavailable');
     }
     if (transaction) assertExactOuterTransaction(transaction, evidence);
-    exactOuterObserved = transaction !== null;
     if (!transaction) {
       await assertReplayValidityMargin(provider, evidence, clockSeconds, rpcPolicy);
       const reloadedEvidence = await loadPersistedEvidence();
@@ -971,10 +982,9 @@ export async function broadcastDurableSignedGenlayerWrite({
         rpcPolicy,
       );
     } catch {
-      exactTransaction = null;
+      refuse('DURABLE_WRITE_PENDING', 'exact outer transaction lookup is unavailable after replay');
     }
     if (exactTransaction) assertExactOuterTransaction(exactTransaction, evidence);
-    exactOuterObserved ||= exactTransaction !== null;
     let latest;
     let pending;
     try {
@@ -1002,9 +1012,20 @@ export async function broadcastDurableSignedGenlayerWrite({
         'Bradbury returned a different hash and the exact persisted outer receipt is absent',
       );
     }
-    if (!exactOuterObserved && (quantity(latest, 'latest nonce after replay') > nonce
-        || quantity(pending, 'pending nonce after replay') > nonce)) {
+    const latestNonce = quantity(latest, 'latest nonce after replay');
+    const pendingNonce = quantity(pending, 'pending nonce after replay');
+    if (pendingNonce < latestNonce) {
+      refuse('DURABLE_WRITE_NONCE_STATE', 'latest and pending nonce state is inconsistent');
+    }
+    if (!exactTransaction && (latestNonce > nonce || pendingNonce > nonce)) {
       refuse('DURABLE_WRITE_NONCE_CONSUMED', 'signed nonce was consumed without the exact outer receipt');
+    }
+    if (exactTransaction) {
+      return Object.freeze({
+        outcome: 'PENDING',
+        pendingReason: 'OUTER_RECEIPT_PENDING',
+        outerTransactionHash: evidence.outerTransactionHash,
+      });
     }
     refuse('DURABLE_WRITE_PENDING', 'exact signed transaction is still pending without a receipt');
   }
@@ -1022,6 +1043,23 @@ export async function broadcastDurableSignedGenlayerWrite({
     canonicalOuter,
     rpcPolicy,
   });
+  if (finalized.finalityPending) {
+    if (receiptStatus !== '1') {
+      refuse('DURABLE_WRITE_FINALITY', 'reverted outer receipt is not finalized on Bradbury EVM');
+    }
+    // A lagging finalized head is an availability condition only after the
+    // observed status-1 receipt proves the exact consensus event identity.
+    // Do not let malformed or conflicting logs masquerade as healthy pending.
+    receiptInnerTransaction(receipt, evidence);
+    return Object.freeze({
+      outcome: 'PENDING',
+      pendingReason: 'OUTER_FINALITY_PENDING',
+      outerTransactionHash: evidence.outerTransactionHash,
+      receiptBlockHash: canonicalOuter.blockHash,
+      receiptBlockNumber: canonicalOuter.blockNumber,
+      finalizedHeadBlockNumber: finalized.finalizedHeadBlockNumber,
+    });
+  }
   const finalizedReceiptStatus = exactOuterReceiptStatus(finalized.receipt, evidence);
   if (receiptStatus !== finalizedReceiptStatus) {
     refuse('DURABLE_WRITE_FINALITY', 'outer receipt status changed during finality revalidation');
