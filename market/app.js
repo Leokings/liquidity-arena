@@ -2434,6 +2434,7 @@ class LiquidityArenaApp {
   openWindow(windowName) {
     if (!WINDOW_CONFIG[windowName]) return;
     this.window = windowName;
+    $('#event-dock').dataset.mode = this.feedMode;
     const config = WINDOW_CONFIG[windowName];
     document.querySelectorAll('#timeframe-controls button').forEach((button) => {
       const active = button.dataset.window === windowName;
