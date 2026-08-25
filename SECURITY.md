@@ -69,7 +69,7 @@ The keeper can reconcile payout preparation, dispatch, retry, confirmation, and 
 
 Readiness requires exact V8 address, roles, factory, source/schema/protocol, stake policy, payout activation, risk activation, reserve capacity, future epochs, and live data feeds.
 
-Public history is V8-only. Schema health requires migrations 001–004 with exact checksums and rejects unknown later migrations. Legacy rows are retained internally only as inactive audit data. Public queries and writes bind the configured V8 address and roles, and payout stage proofs retain distinct retry attempts by transaction identity.
+Public history is V8-only. Schema health requires migrations 001–010 with exact checksums and rejects any migration newer than version 10. Legacy rows are retained internally only as inactive audit data. Public queries and writes bind the configured V8 address and roles, and payout stage proofs retain distinct retry attempts by transaction identity.
 
 ## Web and secret handling
 
