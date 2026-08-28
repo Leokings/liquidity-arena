@@ -14,6 +14,8 @@ import {
   plannedPayoutScanRanges,
   runV8KeeperCli,
   runV8KeeperOnce,
+  v8KeeperFailureEvent,
+  V8KeeperError,
   V8_FACTORY_VIEW_ABI,
   V8_KEEPER_ABI,
   validateReceiptIdentity,
@@ -32,12 +34,90 @@ import {
 } from '../history/durable-signed-test-helper.mjs';
 import { validateDurablePendingOutcome } from './authoritative-keeper-journal.mjs';
 import { createMemoryAuthoritativeKeeperJournalClient } from './authoritative-keeper-journal.test-helper.mjs';
+import { publicBroadcastFailure } from './keeper-diagnostics.mjs';
 
 const CONTRACT = '0x1111111111111111111111111111111111111111';
 const OWNER = '0x2222222222222222222222222222222222222222';
 const KEEPER = TEST_DURABLE_SIGNER;
 const TREASURY = '0x4444444444444444444444444444444444444444';
 const PAYOUT = 'a'.repeat(64);
+
+test('blocked keeper diagnostics expose the operation and RPC cause without private journal material', () => {
+  const raw = `0x${'ab'.repeat(500)}`;
+  const secret = 'not-for-public-actions-logs';
+  const operationId = 'c'.repeat(64);
+  const outerHash = `0x${'d'.repeat(64)}`;
+  const error = new V8KeeperError('RUN_BLOCKED', 'Keeper blocked', {
+    summary: {
+      blocked: true,
+      pending: [{
+        operationId,
+        method: 'create_epoch',
+        subjectType: 'epoch',
+        subjectId: '1787886000',
+        state: 'SIGNED',
+        reason: 'SIGNED_REPLAY_PENDING',
+        code: 'DURABLE_WRITE_PENDING',
+        outerTransactionHash: outerHash,
+        message: `missing receipt for ${raw}\nKEEPER_JOURNAL_SECRET=${secret}`,
+        broadcastFailure: {
+          code: 'UNKNOWN_ERROR', rpcCode: -32005,
+          message: `node is at capacity\nrawTransaction=${raw}\nAuthorization: Bearer ${secret}`,
+          payload: { raw, secret },
+        },
+        operation: { signedRawTransaction: raw, secret },
+      }],
+      failures: [],
+      accepted: [{ operation: { raw, secret } }],
+    },
+  });
+  const event = v8KeeperFailureEvent(error);
+  assert.equal(event.event, 'V8_KEEPER_FAILED');
+  assert.equal(event.code, 'RUN_BLOCKED');
+  assert.equal(event.blocked, true);
+  assert.equal(event.pendingCount, 1);
+  assert.equal(event.pending[0].operationId, operationId);
+  assert.equal(event.pending[0].outerTransactionHash, outerHash);
+  assert.equal(event.pending[0].reason, 'SIGNED_REPLAY_PENDING');
+  assert.equal(event.pending[0].broadcastFailure.rpcCode, -32005);
+  assert.match(event.pending[0].broadcastFailure.message, /node is at capacity/);
+  const text = JSON.stringify(event);
+  assert.ok(!text.includes(raw));
+  assert.ok(!text.includes(secret));
+  assert.ok(!text.includes('payload'));
+  assert.ok(!text.includes('accepted'));
+});
+
+test('failure diagnostics cover fresh action failures and remain bounded for malformed summaries', () => {
+  const failure = { type: 'CREATE_EPOCH', epochEndTimestamp: 1787886000, code: 'DURABLE_WRITE_PENDING', message: 'x'.repeat(1000) };
+  const event = v8KeeperFailureEvent(new V8KeeperError('ACTION_FAILURES', 'actions failed', {
+    summary: { blocked: true, pending: [], failures: Array.from({ length: 40 }, () => failure) },
+  }));
+  assert.equal(event.failuresCount, 40);
+  assert.equal(event.failures.length, 30);
+  assert.equal(event.failures[0].message.length, 256);
+  assert.equal(event.failures[0].epochEndTimestamp, 1787886000);
+  assert.deepEqual(v8KeeperFailureEvent(Object.assign(new Error('bad config'), { details: null })), {
+    event: 'V8_KEEPER_FAILED', code: 'UNEXPECTED', message: 'bad config',
+  });
+  assert.deepEqual(v8KeeperFailureEvent({ details: { summary: { pending: [null, 1, 'invalid'], failures: {} } } }).pending, [{}, {}, {}]);
+});
+
+test('RPC diagnostics select only bounded public error fields, never the ethers request payload', () => {
+  const raw = `0x${'cd'.repeat(500)}`;
+  const error = Object.assign(new Error(`rawTransaction=${raw}`), {
+    code: 'UNKNOWN_ERROR',
+    info: {
+      error: { code: -32005, message: 'node is at capacity' },
+      payload: { params: [raw] },
+    },
+  });
+  assert.deepEqual(publicBroadcastFailure(error), {
+    code: 'UNKNOWN_ERROR', rpcCode: -32005, message: 'node is at capacity',
+  });
+  assert.ok(!JSON.stringify(publicBroadcastFailure(new Error(`Request failed: ${raw}`))).includes(raw));
+  assert.ok(!JSON.stringify(publicBroadcastFailure(new Error('Authorization: Bearer private-token'))).includes('private-token'));
+});
 const NOW = Date.UTC(2027, 0, 15, 10, 0, 0) / 1000;
 
 function config(operator = {}) {
@@ -751,6 +831,43 @@ test('ambiguous hashless CLI failure logs its cause and leaves PREPARED blocking
     /hunter2|rpc\.example\.invalid|a{64}|very-secret-token|alpha beta gamma/i,
   );
   assert.equal(telemetry.broadcastAttempted, null);
+});
+
+test('exhausted admission failure remains SIGNED and blocks fresh signatures while retaining its public cause', async () => {
+  const journal = createMemoryAuthoritativeKeeperJournalClient();
+  let signatures = 0;
+  const broadcastFailure = { code: 'UNKNOWN_ERROR', rpcCode: -32005, message: 'transaction gas rate limit exceeded: node is at capacity' };
+  const operator = emptyExecutionOperator({
+    createSignedWrite: async (operation) => {
+      signatures += 1;
+      return createTestSignedWrite(operation);
+    },
+    broadcastSignedWrite: async () => {
+      throw Object.assign(new Error('exact signed transaction is still pending without a receipt'), {
+        code: 'DURABLE_WRITE_PENDING', broadcastFailure,
+      });
+    },
+  });
+  const options = {
+    config: config(), execute: true, operator, journalClient: journal.client,
+    nowEpochSeconds: NOW, logger: () => {}, sleep: async () => {},
+    journalSessionOptions: { setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {} },
+  };
+  await assert.rejects(runV8KeeperOnce(options), (error) => {
+    assert.equal(error.code, 'ACTION_FAILURES');
+    assert.deepEqual(v8KeeperFailureEvent(error).failures[0].broadcastFailure, broadcastFailure);
+    return true;
+  });
+  const [operation] = journal.operations.values();
+  assert.equal(operation.state, 'SIGNED');
+  const recovered = await runV8KeeperOnce(options);
+  assert.equal(recovered.blocked, true);
+  assert.equal(isHealthyDurablePendingSummary(recovered), false);
+  assert.equal(recovered.pending[0].reason, 'SIGNED_REPLAY_PENDING');
+  assert.equal(recovered.pending[0].code, 'DURABLE_WRITE_PENDING');
+  assert.equal(recovered.pending[0].outerTransactionHash, operation.outerTransactionHash);
+  assert.deepEqual(recovered.pending[0].broadcastFailure, broadcastFailure);
+  assert.equal(signatures, 1);
 });
 
 test('durable outer pending stays SIGNED across fresh execution and authoritative recovery', async () => {

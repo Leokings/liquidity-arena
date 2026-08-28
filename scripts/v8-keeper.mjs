@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Contract, JsonRpcProvider } from 'ethers';
 import { createClient } from 'genlayer-js';
 import { testnetBradbury } from 'genlayer-js/chains';
+import { sanitizedDiagnosticText } from './keeper-diagnostics.mjs';
 
 import { createKeeperJournalClientFromEnvironment } from '../keeper-journal/client.mjs';
 import { keeperAttemptOperationId } from '../keeper-journal/schema.mjs';
@@ -999,18 +1000,6 @@ function freshWriteBudgetMs(config) {
     + config.operator.postStateAttempts * config.operator.postStateIntervalMs;
 }
 
-function sanitizedDiagnosticText(value) {
-  return String(value ?? '')
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/https?:\/\/\S+/gi, '[redacted-url]')
-    .replace(/\b[A-Z][A-Z0-9_]*(?:PASSWORD|SECRET|PRIVATE_KEY|MNEMONIC|KEYSTORE|CREDENTIAL)[A-Z0-9_]*\s*[:=][^\r\n]*/g, '[redacted]')
-    .replace(/\b(?:authorization|credential|keystore|mnemonic|password|private[_ -]?key|secret)\b[^\r\n]*/gi, '[redacted]')
-    .replace(/\b(?:0x)?[0-9a-f]{64}\b/gi, '[redacted-64hex]')
-    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 function fixedLowerLevelReason(error) {
   const source = String(`${error?.stderr ?? ''}\n${error?.stdout ?? ''}`);
   if (/\binsufficient funds\b/i.test(source)) return 'INSUFFICIENT_FUNDS';
@@ -1446,7 +1435,12 @@ export async function runV8KeeperOnce({
           })));
           break;
         } catch (error) {
-          failures.push({ ...planned, code: error?.code || 'ACTION_FAILED', message: error instanceof Error ? error.message : String(error) });
+          failures.push({
+            ...planned,
+            code: error?.code || 'ACTION_FAILED',
+            message: error instanceof Error ? error.message : String(error),
+            ...(error?.broadcastFailure ? { broadcastFailure: error.broadcastFailure } : {}),
+          });
           skipped.push(...plan.actions.slice(index + 1).map((item) => ({ ...item, reason: 'BLOCKED_AFTER_ACTION_FAILURE' })));
           break;
         }
@@ -1595,10 +1589,58 @@ export async function runV8KeeperCli(argv = process.argv.slice(2), {
   return summary;
 }
 
+function publicFailureOperation(entry) {
+  const result = {};
+  for (const key of ['operationId', 'logicalOperationId', 'payoutId']) {
+    if (typeof entry?.[key] === 'string' && /^[0-9a-f]{64}$/.test(entry[key])) result[key] = entry[key];
+  }
+  for (const key of ['transactionHash', 'outerTransactionHash']) {
+    if (typeof entry?.[key] === 'string' && /^0x[0-9a-f]{64}$/.test(entry[key])) result[key] = entry[key];
+  }
+  for (const key of ['type', 'method', 'subjectType', 'state', 'lifecycleStatus', 'reason', 'code']) {
+    if (typeof entry?.[key] === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(entry[key])) result[key] = entry[key];
+  }
+  if (typeof entry?.subjectId === 'string' && /^(?:[0-9]{1,19}|[0-9a-f]{64})$/.test(entry.subjectId)) {
+    result.subjectId = entry.subjectId;
+  }
+  if (Number.isSafeInteger(entry?.epochEndTimestamp) && entry.epochEndTimestamp > 0) {
+    result.epochEndTimestamp = entry.epochEndTimestamp;
+  }
+  if (typeof entry?.message === 'string') result.message = sanitizedDiagnosticText(entry.message).slice(0, 256);
+  if (entry?.broadcastFailure && typeof entry.broadcastFailure === 'object') {
+    const { code, rpcCode, message } = entry.broadcastFailure;
+    result.broadcastFailure = {
+      code: typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code : 'RPC_BROADCAST_FAILED',
+      ...(Number.isSafeInteger(rpcCode) ? { rpcCode } : {}),
+      message: sanitizedDiagnosticText(typeof message === 'string' ? message : '').slice(0, 256),
+    };
+  }
+  return result;
+}
+
+export function v8KeeperFailureEvent(error) {
+  const code = String(error?.code || 'UNEXPECTED');
+  const result = {
+    event: 'V8_KEEPER_FAILED',
+    code: /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code : 'UNEXPECTED',
+    message: sanitizedDiagnosticText(error instanceof Error ? error.message : String(error)).slice(0, 256),
+  };
+  const summary = error?.details?.summary;
+  if (summary && typeof summary === 'object') {
+    if (typeof summary.blocked === 'boolean') result.blocked = summary.blocked;
+    for (const key of ['pending', 'failures']) {
+      if (!Array.isArray(summary[key])) continue;
+      result[`${key}Count`] = summary[key].length;
+      result[key] = summary[key].slice(0, 30).map(publicFailureOperation);
+    }
+  }
+  return Object.freeze(result);
+}
+
 const invokedPath = process.argv[1] ? fileURLToPath(import.meta.url) : '';
 if (invokedPath && process.argv[1] === invokedPath) {
   runV8KeeperCli().catch((error) => {
-    console.error(JSON.stringify({ event: 'V8_KEEPER_FAILED', code: error?.code || 'UNEXPECTED', message: error instanceof Error ? error.message : String(error) }));
+    console.error(JSON.stringify(v8KeeperFailureEvent(error)));
     process.exitCode = 1;
   });
 }

@@ -331,6 +331,140 @@ async function replay(fixture, rpc, overrides = {}) {
   });
 }
 
+function admissionError(retryAfterMs = 1937) {
+  return Object.assign(new Error('could not coalesce error'), {
+    code: 'UNKNOWN_ERROR',
+    info: { error: {
+      code: -32005,
+      message: `server returned an error response: error code -32005: transaction gas rate limit exceeded: node is at capacity, retry in ~${retryAfterMs}ms, data: {"retryAfterMs":${retryAfterMs}}`,
+    } },
+  });
+}
+
+function admissionProvider(evidence, { succeedAt = 2, error = admissionError(), nonce = '0x7' } = {}) {
+  let broadcasts = 0;
+  return provider({
+    eth_getTransactionReceipt: () => broadcasts >= succeedAt ? newTransactionReceipt(evidence) : null,
+    eth_getTransactionByHash: () => broadcasts >= succeedAt ? canonicalOuterTransaction(evidence) : null,
+    eth_getBlockByNumber: ([tag]) => tag === 'latest'
+      ? { number: '0x1233', hash: FINALIZED_HASH, timestamp: '0x64' }
+      : tag === 'finalized'
+        ? { number: '0x1235', hash: FINALIZED_HASH, timestamp: '0x65' }
+        : canonicalBlock(evidence),
+    eth_getTransactionCount: nonce,
+    eth_sendRawTransaction: () => {
+      broadcasts += 1;
+      if (broadcasts < succeedAt) throw error;
+      return evidence.outerTransactionHash;
+    },
+  });
+}
+
+test('Bradbury admission throttling retries the identical durable bytes after the requested backoff', async () => {
+  const fixture = await signedFixture();
+  const rpc = admissionProvider(fixture.evidence);
+  const delays = [];
+  const result = await replay(fixture, rpc, { sleep: async (milliseconds) => delays.push(milliseconds) });
+  assert.equal(result.outcome, 'SUBMITTED');
+  assert.equal(result.transactionHash, INNER_HASH);
+  assert.deepEqual(delays, [2187]);
+  const broadcasts = rpc.calls.filter(({ method }) => method === 'eth_sendRawTransaction');
+  assert.equal(broadcasts.length, 2);
+  assert.ok(broadcasts.every(({ args }) => args[0] === fixture.evidence.rawTransaction));
+  assert.equal(rpc.calls.filter(({ method }) => method === 'eth_getTransactionCount').length, 2);
+});
+
+test('admission retries are bounded and preserve the sanitized RPC rejection on exhaustion', async () => {
+  const fixture = await signedFixture();
+  const rpc = admissionProvider(fixture.evidence, { succeedAt: Number.POSITIVE_INFINITY });
+  const delays = [];
+  await assert.rejects(replay(fixture, rpc, { sleep: async (ms) => delays.push(ms) }), (error) => {
+    assert.equal(error.code, 'DURABLE_WRITE_PENDING');
+    assert.equal(error.broadcastFailure.rpcCode, -32005);
+    assert.match(error.broadcastFailure.message, /node is at capacity/);
+    assert.doesNotMatch(JSON.stringify(error), new RegExp(fixture.evidence.rawTransaction));
+    return true;
+  });
+  assert.deepEqual(delays, [2187, 2187]);
+  assert.equal(rpc.calls.filter(({ method }) => method === 'eth_sendRawTransaction').length, 3);
+});
+
+test('admission retry refuses an unexpectedly consumed nonce before resending', async () => {
+  const fixture = await signedFixture();
+  const rpc = admissionProvider(fixture.evidence, { nonce: '0x8' });
+  await assert.rejects(replay(fixture, rpc), { code: 'DURABLE_WRITE_NONCE_CONSUMED' });
+  assert.equal(rpc.calls.filter(({ method }) => method === 'eth_sendRawTransaction').length, 1);
+});
+
+test('admission retry reconciles a receipt appearing during backoff without another broadcast', async () => {
+  const fixture = await signedFixture();
+  let visible = false;
+  const rpc = admissionProvider(fixture.evidence, { succeedAt: Number.POSITIVE_INFINITY });
+  const originalSend = rpc.send.bind(rpc);
+  rpc.send = async (method, args) => {
+    if (visible && method === 'eth_getTransactionReceipt') return newTransactionReceipt(fixture.evidence);
+    if (visible && method === 'eth_getTransactionByHash') return canonicalOuterTransaction(fixture.evidence);
+    return originalSend(method, args);
+  };
+  const result = await replay(fixture, rpc, { sleep: async () => { visible = true; } });
+  assert.equal(result.outcome, 'SUBMITTED');
+  assert.equal(rpc.calls.filter(({ method }) => method === 'eth_sendRawTransaction').length, 1);
+});
+
+test('unknown broadcast errors and malformed throttle hints never authorize another send', async () => {
+  const fixture = await signedFixture();
+  for (const error of [
+    Object.assign(new Error('timeout'), { code: 'TIMEOUT' }),
+    admissionError(-1),
+    admissionError(60_000),
+    Object.assign(admissionError(), { info: { error: { code: -32000, message: admissionError().info.error.message } } }),
+    Object.assign(admissionError(), { info: { error: { code: -32005, message: 'different capacity error' } } }),
+  ]) {
+    const rpc = admissionProvider(fixture.evidence, { succeedAt: Number.POSITIVE_INFINITY, error });
+    await assert.rejects(replay(fixture, rpc), { code: 'DURABLE_WRITE_PENDING' });
+    assert.equal(rpc.calls.filter(({ method }) => method === 'eth_sendRawTransaction').length, 1);
+  }
+});
+
+test('admission backoff cannot outlive the bounded RPC deadline', async () => {
+  const fixture = await signedFixture();
+  const rpc = admissionProvider(fixture.evidence);
+  const delays = [];
+  await assert.rejects(replay(fixture, rpc, {
+    clockMs: () => 0,
+    deadlineAtMs: 1000,
+    sleep: async (ms) => delays.push(ms),
+  }), { code: 'DURABLE_WRITE_DEADLINE' });
+  assert.deepEqual(delays, []);
+  assert.equal(rpc.calls.filter(({ method }) => method === 'eth_sendRawTransaction').length, 1);
+});
+
+test('admission retry must renew and reload the exact active journal fence before resending', async () => {
+  const fixture = await signedFixture();
+  const rpc = admissionProvider(fixture.evidence);
+  const load = fixture.journalSession.loadSigned.bind(fixture.journalSession);
+  let loads = 0;
+  fixture.journalSession.loadSigned = async (...args) => {
+    const response = await load(...args);
+    loads += 1;
+    return loads === 3 ? { ...response, fencingToken: '8' } : response;
+  };
+  await assert.rejects(replay(fixture, rpc), { code: 'DURABLE_WRITE_JOURNAL' });
+  assert.equal(loads, 3);
+  assert.equal(rpc.calls.filter(({ method }) => method === 'eth_sendRawTransaction').length, 1);
+});
+
+test('admission retry refuses an envelope whose validity margin expires during backoff', async () => {
+  const fixture = await signedFixture();
+  const rpc = admissionProvider(fixture.evidence);
+  let now = 100;
+  await assert.rejects(replay(fixture, rpc, {
+    clockSeconds: () => now,
+    sleep: async () => { now = 86400; },
+  }), { code: 'DURABLE_WRITE_EXPIRED' });
+  assert.equal(rpc.calls.filter(({ method }) => method === 'eth_sendRawTransaction').length, 1);
+});
+
 test('durable signer rewrites to exact 24-hour validity and persists before exposing bytes', async () => {
   let beforeSignCalls = 0;
   const fixture = await signedFixture({ beforeSign: async () => { beforeSignCalls += 1; } });
