@@ -34,7 +34,8 @@ const DEFAULT_ACCOUNT_NAME = 'liquidity-arena-v8-keeper';
 const DEFAULT_RECEIPT_ATTEMPTS = 90;
 const DEFAULT_RECEIPT_INTERVAL_MS = 2_000;
 const DEFAULT_RPC_TIMEOUT_MS = 12_000;
-const MAX_ADMISSION_BROADCAST_ATTEMPTS = 3;
+const MAX_ADMISSION_BROADCAST_ATTEMPTS = 10;
+const MAX_ADMISSION_BACKOFF_MS = 30_000;
 const MIN_VALIDITY_MARGIN_SECONDS = 300n;
 const SIGNED_VALIDITY_SECONDS = 24n * 60n * 60n;
 const MIN_INITIAL_VALIDITY_SECONDS = 23n * 60n * 60n;
@@ -973,9 +974,16 @@ export async function broadcastDurableSignedGenlayerWrite({
           // Never replace or re-sign. Only the explicit admission throttle can
           // retry immediately; timeouts and other errors keep hash-only recovery.
           broadcastFailure = publicBroadcastFailure(error);
-          retryDelayMs = broadcastAdmissionRetryDelayMs(error);
-          lastBroadcastWasThrottled = retryDelayMs !== null;
-          if (retryDelayMs === null || attempt === MAX_ADMISSION_BROADCAST_ATTEMPTS) break;
+          const hintedDelayMs = broadcastAdmissionRetryDelayMs(error);
+          lastBroadcastWasThrottled = hintedDelayMs !== null;
+          if (hintedDelayMs === null || attempt === MAX_ADMISSION_BROADCAST_ATTEMPTS) break;
+          // Use the existing bounded recovery window for sustained congestion.
+          // Never retry sooner than the node asks, and slow down after repeated
+          // admission failures instead of abandoning the run after a few seconds.
+          retryDelayMs = Math.max(
+            hintedDelayMs,
+            Math.min(MAX_ADMISSION_BACKOFF_MS, 1_000 * (2 ** (attempt - 1))),
+          );
         }
         if (deadlineAtMs - clockMs() <= retryDelayMs + rpcTimeoutMs) {
           refuse('DURABLE_WRITE_DEADLINE', 'admission backoff cannot fit within the keeper deadline', { broadcastFailure });

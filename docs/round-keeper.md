@@ -51,8 +51,10 @@ request was throttled before admission; waiting only for a receipt can leave the
 exact signed envelope unseen and block all future epoch creation.
 
 For that exact error with a valid `retryAfterMs` hint (1–30,000 milliseconds), the
-keeper waits for the requested delay plus 250 milliseconds and tries at most
-three broadcasts per signed operation in one invocation. Every retry checks the stored hash again,
+keeper waits at least the requested delay plus 250 milliseconds and tries at most
+ten broadcasts per signed operation within the existing four-minute recovery deadline.
+Repeated throttles increase the backoff exponentially from one second to thirty seconds;
+a longer valid node hint still takes precedence. Every retry checks the stored hash again,
 requires unchanged latest and pending nonces, rechecks the validity window, and
 renews the lease and reloads the same signed bytes before sending. A receipt or
 known exact transaction suppresses another broadcast. Unknown errors, mismatched
