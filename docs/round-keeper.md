@@ -191,7 +191,13 @@ Active workflows:
 
 Both jobs hard-gate the exact repository and protected `main` ref before reading secret-bearing configuration. Configure the GitHub environment with the V8 keeper encrypted keystore/password, history ingest secret, app URLs, and public V8 variables.
 
-The Cloudflare backup scheduler dispatches these same workflow names. Its existing Worker name is retained so deployment replaces the former scheduler rather than leaving a parallel legacy worker.
+The Cloudflare backup scheduler checks every quarter hour at minutes 12, 27, 42, and 57,
+five minutes after each native keeper slot. A completed success covers only its current quarter
+hour; an active run from an earlier slot still suppresses dispatch. This lets a later invocation
+reconcile an outer-finality pending result without waiting a full hour when GitHub drops a native
+schedule. The watchdog backup remains hourly at minute 57. Both dispatch the same protected-main
+workflow names. The existing Worker name is retained so deployment replaces the former scheduler
+rather than leaving a parallel legacy worker.
 
 ## Incident handling
 

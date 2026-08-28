@@ -6,15 +6,23 @@ journal secret, or contract write implementation.
 
 The V8-only native GitHub schedules remain primary:
 
-- `27 * * * *` — Bradbury V8 epoch and payout keeper
+- `7,22,37,52 * * * *` — Bradbury V8 epoch and payout keeper
 - `47 * * * *` — operations watchdog
 
-Cloudflare checks ten minutes later:
+Cloudflare checks each keeper slot five minutes later, and the watchdog ten minutes later:
 
-- `37 * * * *` — dispatch the keeper only when the current UTC hour has no active or successful
-  `main` run
+- `12,27,42,57 * * * *` — dispatch the keeper when the current UTC quarter hour has no successful
+  `main` run and there is no recent active run, including one from an earlier slot
 - `57 * * * *` — dispatch the watchdog only when the current UTC hour has no active or successful
   `main` run
+
+The keeper may exit successfully while an exact outer transaction awaits finality. That success
+must not suppress the rest of the hour: a later slot still needs to reconcile the transaction and
+create future rounds. The preflight reads up to ten runs from one hour before the current slot,
+so a long-running keeper or queued run continues to suppress duplicate dispatch across slot and
+hour boundaries. GitHub's 55-minute keeper timeout bounds that active-run lookback. Watchdog
+success still covers the full UTC hour. The previous hourly keeper cron remains accepted by the
+Worker during Cloudflare trigger propagation, but is no longer part of the deployed configuration.
 
 The preflight accepts native `schedule` and Cloudflare `workflow_dispatch` keeper runs. The
 watchdog preflight additionally accepts its automatic `workflow_run` invocation. A preflight
@@ -59,7 +67,7 @@ new fine-grained GitHub token there, then run the explicit deploy command to con
 source/config and Cron Triggers are current.
 
 After deployment, verify both Cron Triggers in the Cloudflare dashboard and inspect Worker logs at
-the next `:37` and `:57` UTC boundaries. A successful dispatch is only queue evidence. Final proof
+the next `:12`, `:27`, `:42`, or `:57` keeper boundary and the `:57` watchdog boundary. A successful dispatch is only queue evidence. Final proof
 must include the resulting GitHub job conclusion, keeper journal state, contract post-state,
 history health, and watchdog issue state.
 

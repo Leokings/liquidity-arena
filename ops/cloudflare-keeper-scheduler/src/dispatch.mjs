@@ -2,21 +2,27 @@ const GITHUB_API_ORIGIN = 'https://api.github.com';
 const GITHUB_API_VERSION = '2026-03-10';
 const GITHUB_REPOSITORY = 'Leokings/liquidity-arena';
 const GITHUB_REF = 'main';
-const RESPONSE_LIMIT_BYTES = 96 * 1024;
+const RESPONSE_LIMIT_BYTES = 192 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
+const HOUR_MS = 60 * 60 * 1_000;
+const KEEPER_CRON = '12,27,42,57 * * * *';
+const WATCHDOG_CRON = '57 * * * *';
+const LEGACY_KEEPER_CRON = '37 * * * *';
 
 const TARGETS = Object.freeze({
-  '37 * * * *': Object.freeze({
+  [KEEPER_CRON]: Object.freeze({
     name: 'keeper',
     workflow: 'bradbury-v8-keeper.yml',
     events: Object.freeze(['schedule', 'workflow_dispatch']),
     inputs: null,
+    slotMs: 15 * 60 * 1_000,
   }),
-  '57 * * * *': Object.freeze({
+  [WATCHDOG_CRON]: Object.freeze({
     name: 'watchdog',
     workflow: 'bradbury-v8-ops-watchdog.yml',
     events: Object.freeze(['schedule', 'workflow_dispatch', 'workflow_run']),
     inputs: Object.freeze({ synthetic_failure: 'false' }),
+    slotMs: HOUR_MS,
   }),
 });
 
@@ -50,7 +56,10 @@ function requiredScheduledTime(value) {
 }
 
 function requiredTarget(cron) {
-  const target = TARGETS[String(cron || '')];
+  // Cloudflare cron changes propagate separately from Worker code. Accept the
+  // previous keeper trigger during rollout, with the new quarter-hour policy.
+  const expression = String(cron || '');
+  const target = TARGETS[expression === LEGACY_KEEPER_CRON ? KEEPER_CRON : expression];
   if (!target) throw new Error('The Cloudflare cron expression is not allowlisted.');
   return target;
 }
@@ -108,10 +117,8 @@ async function fetchWithTimeout(fetchImpl, url, options) {
   }
 }
 
-function currentUtcSlotStart(scheduledTime) {
-  const slot = new Date(scheduledTime);
-  slot.setUTCMinutes(0, 0, 0);
-  return slot.getTime();
+function currentUtcSlotStart(scheduledTime, target) {
+  return Math.floor(scheduledTime / target.slotMs) * target.slotMs;
 }
 
 function safeRunId(run) {
@@ -123,28 +130,31 @@ function evaluateRuns(workflowRuns, target, scheduledTime) {
   if (!Array.isArray(workflowRuns)) {
     throw new Error('GitHub returned an invalid workflow-runs response.');
   }
-  const slotStart = currentUtcSlotStart(scheduledTime);
+  const slotStart = currentUtcSlotStart(scheduledTime, target);
+  // A keeper can run for 55 minutes. An active run from an earlier slot must
+  // still suppress dispatch; only successful completed runs expire per slot.
   const relevant = workflowRuns.filter((run) => {
     const createdAt = Date.parse(String(run?.created_at || ''));
     return run?.head_branch === GITHUB_REF
       && target.events.includes(String(run?.event || ''))
       && Number.isFinite(createdAt)
-      && createdAt >= slotStart
+      && createdAt >= slotStart - HOUR_MS
       && createdAt <= scheduledTime + (5 * 60 * 1_000);
   });
 
   const active = relevant.find((run) => ACTIVE_RUN_STATUSES.has(String(run?.status || '')));
   if (active) {
-    return Object.freeze({ dispatch: false, reason: 'current_hour_run_active', runId: safeRunId(active) });
+    return Object.freeze({ dispatch: false, reason: 'workflow_run_active', runId: safeRunId(active) });
   }
-  const successful = relevant.find((run) => (
+  const currentSlot = relevant.filter((run) => Date.parse(run.created_at) >= slotStart);
+  const successful = currentSlot.find((run) => (
     String(run?.status || '') === 'completed'
     && String(run?.conclusion || '') === 'success'
   ));
   if (successful) {
-    return Object.freeze({ dispatch: false, reason: 'current_hour_run_succeeded', runId: safeRunId(successful) });
+    return Object.freeze({ dispatch: false, reason: 'current_slot_run_succeeded', runId: safeRunId(successful) });
   }
-  return Object.freeze({ dispatch: true, reason: relevant.length ? 'current_hour_runs_failed' : 'current_hour_run_missing', runId: null });
+  return Object.freeze({ dispatch: true, reason: currentSlot.length ? 'current_slot_runs_failed' : 'current_slot_run_missing', runId: null });
 }
 
 async function preflight({ fetchImpl, target, token, scheduledTime }) {
@@ -153,8 +163,8 @@ async function preflight({ fetchImpl, target, token, scheduledTime }) {
     GITHUB_API_ORIGIN,
   );
   url.searchParams.set('branch', GITHUB_REF);
-  url.searchParams.set('created', `>=${new Date(currentUtcSlotStart(scheduledTime)).toISOString()}`);
-  url.searchParams.set('per_page', '5');
+  url.searchParams.set('created', `>=${new Date(currentUtcSlotStart(scheduledTime, target) - HOUR_MS).toISOString()}`);
+  url.searchParams.set('per_page', '10');
 
   let response;
   try {
@@ -228,7 +238,7 @@ export async function runScheduledBackup({
   const target = requiredTarget(cron);
   const time = requiredScheduledTime(scheduledTime);
   const dispatchToken = requiredDispatchToken(token);
-  const slot = new Date(currentUtcSlotStart(time)).toISOString();
+  const slot = new Date(currentUtcSlotStart(time, target)).toISOString();
   const decision = await preflight({ fetchImpl, target, token: dispatchToken, scheduledTime: time });
 
   if (!decision.dispatch) {
