@@ -385,8 +385,55 @@ test('admission retries are bounded and preserve the sanitized RPC rejection on 
     assert.doesNotMatch(JSON.stringify(error), new RegExp(fixture.evidence.rawTransaction));
     return true;
   });
-  assert.deepEqual(delays, [2187, 2187]);
-  assert.equal(rpc.calls.filter(({ method }) => method === 'eth_sendRawTransaction').length, 3);
+  assert.deepEqual(delays, [2187, 2187, 4000, 8000, 16000, 30000, 30000, 30000, 30000]);
+  assert.equal(rpc.calls.filter(({ method }) => method === 'eth_sendRawTransaction').length, 10);
+});
+
+test('sustained admission throttling can recover beyond the former three-attempt limit', async () => {
+  const fixture = await signedFixture();
+  const rpc = admissionProvider(fixture.evidence, { succeedAt: 7 });
+  const delays = [];
+  let loads = 0;
+  const load = fixture.journalSession.loadSigned.bind(fixture.journalSession);
+  fixture.journalSession.loadSigned = async (...args) => { loads += 1; return load(...args); };
+  const result = await replay(fixture, rpc, { sleep: async (ms) => delays.push(ms) });
+  assert.equal(result.outcome, 'SUBMITTED');
+  assert.deepEqual(delays, [2187, 2187, 4000, 8000, 16000, 30000]);
+  const sends = rpc.calls.filter(({ method }) => method === 'eth_sendRawTransaction');
+  assert.equal(sends.length, 7);
+  assert.ok(sends.every(({ args }) => args[0] === fixture.evidence.rawTransaction));
+  assert.equal(loads, 8, 'initial load plus a fresh fenced load before every broadcast');
+});
+
+test('admission backoff respects long hints and avoids tight loops for small hints', async () => {
+  const fixture = await signedFixture();
+  for (const [hint, expected] of [[30_000, [30_250, 30_250]], [1, [1000, 2000]]]) {
+    const rpc = admissionProvider(fixture.evidence, { succeedAt: 3, error: admissionError(hint) });
+    const delays = [];
+    const result = await replay(fixture, rpc, { sleep: async (ms) => delays.push(ms) });
+    assert.equal(result.outcome, 'SUBMITTED');
+    assert.deepEqual(delays, expected);
+  }
+});
+
+test('repeated admission backoff stops before the existing deadline even with attempts left', async () => {
+  const fixture = await signedFixture();
+  const rpc = admissionProvider(fixture.evidence, { succeedAt: Number.POSITIVE_INFINITY });
+  const delays = [];
+  let elapsed = 0;
+  await assert.rejects(replay(fixture, rpc, {
+    clockMs: () => elapsed,
+    deadlineAtMs: 20_000,
+    rpcTimeoutMs: 250,
+    sleep: async (ms) => { delays.push(ms); elapsed += ms; },
+  }), (error) => {
+    assert.equal(error.code, 'DURABLE_WRITE_DEADLINE');
+    assert.equal(error.broadcastFailure.rpcCode, -32005);
+    return true;
+  });
+  assert.deepEqual(delays, [2187, 2187, 4000, 8000]);
+  assert.equal(rpc.calls.filter(({ method }) => method === 'eth_sendRawTransaction').length, 5);
+  assert.ok(elapsed < 20_000);
 });
 
 test('admission retry refuses an unexpectedly consumed nonce before resending', async () => {
