@@ -134,7 +134,17 @@ export async function runOpsWatchdog({
       && result.body?.checks?.contract?.ready === true
       && result.body?.checks?.keeperCoverage?.ready === true
       && result.body?.checks?.binance?.ready === true;
-    results.push(check('application readiness', ready, `HTTP ${result.status}; status=${result.body?.status || 'unknown'}`));
+    const notReady = ['genlayerRpc', 'contract', 'keeperCoverage', 'binance']
+      .filter((name) => result.body?.checks?.[name]?.ready !== true);
+    const coverageEpochs = result.body?.checks?.keeperCoverage?.epochEnds;
+    const coverageDetail = notReady.includes('keeperCoverage') && Array.isArray(coverageEpochs)
+      ? coverageEpochs.filter((value) => Number.isSafeInteger(value) && value > 0).slice(0, 8).join(',')
+      : '';
+    results.push(check('application readiness', ready, [
+      `HTTP ${result.status}; status=${result.body?.status || 'unknown'}`,
+      ...(notReady.length ? [`not_ready=${notReady.join(',')}`] : []),
+      ...(coverageDetail ? [`coverage_epoch_ends=${coverageDetail}`] : []),
+    ].join('; ')));
   } catch (error) {
     results.push(check('application readiness', false, error?.message || 'request failed'));
   }

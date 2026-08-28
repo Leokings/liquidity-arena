@@ -43,6 +43,30 @@ The keeper never calls EVM `withdraw()` and has no recipient key.
 
 ## Durable journal
 
+### Broadcast admission failures
+
+Bradbury can reject `eth_sendRawTransaction` with RPC code `-32005` and
+`transaction gas rate limit exceeded: node is at capacity`. This means the
+request was throttled before admission; waiting only for a receipt can leave the
+exact signed envelope unseen and block all future epoch creation.
+
+For that exact error with a valid `retryAfterMs` hint (1–30,000 milliseconds), the
+keeper waits for the requested delay plus 250 milliseconds and tries at most
+three broadcasts per signed operation in one invocation. Every retry checks the stored hash again,
+requires unchanged latest and pending nonces, rechecks the validity window, and
+renews the lease and reloads the same signed bytes before sending. A receipt or
+known exact transaction suppresses another broadcast. Unknown errors, mismatched
+hashes, nonce changes, and exhausted deadlines never authorize this retry path.
+No replacement signature is made, and exhausted admission retries still fail.
+
+`V8_KEEPER_FAILED` includes bounded public `pending` and `failures` entries with
+the operation ID, outer hash, reason code, and sanitized broadcast rejection.
+The watchdog reports which readiness checks failed and the epochs needed for
+coverage. Do not clear a `SIGNED` row or create a replacement merely because an
+RPC cannot find its hash; reconcile the recorded transaction first.
+
+### State and recovery
+
 Journal schema V10 supports epoch and payout subjects, a hard two-slot pipeline, immutable handoff
 lineage, same-subject exclusion, and narrowly gated revalidation of a finalized generic
 receipt-identity quarantine. A V10 operation moves `PREPARED -> SIGNED -> SUBMITTED`: the exact

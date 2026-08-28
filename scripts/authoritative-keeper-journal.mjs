@@ -876,7 +876,10 @@ export async function reconcileAuthoritativeOperation({
         verified: false,
         operation,
         pending: pending(operation, 'SIGNED_REPLAY_PENDING', {
+          outerTransactionHash: operation.outerTransactionHash,
+          code: error?.code || 'SIGNED_REPLAY_FAILED',
           message: error instanceof Error ? error.message : String(error),
+          ...(error?.broadcastFailure ? { broadcastFailure: error.broadcastFailure } : {}),
         }),
       });
     }

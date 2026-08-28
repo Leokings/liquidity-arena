@@ -25,6 +25,7 @@ import {
   normalizeDurableJournalOperation,
 } from '../keeper-journal/signed-transaction.mjs';
 import { GENLAYER_BRADBURY_RPC_URL } from './genlayer-command.mjs';
+import { broadcastAdmissionRetryDelayMs, publicBroadcastFailure } from './keeper-diagnostics.mjs';
 
 const HASH = /^0x[0-9a-f]{64}$/;
 const ADDRESS = /^0x[0-9a-f]{40}$/;
@@ -33,6 +34,7 @@ const DEFAULT_ACCOUNT_NAME = 'liquidity-arena-v8-keeper';
 const DEFAULT_RECEIPT_ATTEMPTS = 90;
 const DEFAULT_RECEIPT_INTERVAL_MS = 2_000;
 const DEFAULT_RPC_TIMEOUT_MS = 12_000;
+const MAX_ADMISSION_BROADCAST_ATTEMPTS = 3;
 const MIN_VALIDITY_MARGIN_SECONDS = 300n;
 const SIGNED_VALIDITY_SECONDS = 24n * 60n * 60n;
 const MIN_INITIAL_VALIDITY_SECONDS = 23n * 60n * 60n;
@@ -924,6 +926,8 @@ export async function broadcastDurableSignedGenlayerWrite({
   }
   const rpcPolicy = Object.freeze({ rpcTimeoutMs, deadlineAtMs, clockMs });
   let broadcastHashMismatch = false;
+  let broadcastFailure = null;
+  let lastBroadcastWasThrottled = false;
   let receipt = await getOuterReceipt(provider, evidence, {
     attempts: 1,
     intervalMs: 0,
@@ -944,33 +948,86 @@ export async function broadcastDurableSignedGenlayerWrite({
     }
     if (transaction) assertExactOuterTransaction(transaction, evidence);
     if (!transaction) {
-      await assertReplayValidityMargin(provider, evidence, clockSeconds, rpcPolicy);
-      const reloadedEvidence = await loadPersistedEvidence();
-      if (sha256(JSON.stringify(reloadedEvidence)) !== sha256(JSON.stringify(evidence))
-          || reloadedEvidence.outerTransactionHash !== evidence.outerTransactionHash) {
-        refuse('DURABLE_WRITE_JOURNAL', 'persisted signed evidence changed before broadcast');
-      }
-      evidence = reloadedEvidence;
-      try {
-        const returnedHash = await boundedRpc(
+      for (let attempt = 1; attempt <= MAX_ADMISSION_BROADCAST_ATTEMPTS; attempt += 1) {
+        await assertReplayValidityMargin(provider, evidence, clockSeconds, rpcPolicy);
+        const reloadedEvidence = await loadPersistedEvidence();
+        if (sha256(JSON.stringify(reloadedEvidence)) !== sha256(JSON.stringify(evidence))
+            || reloadedEvidence.outerTransactionHash !== evidence.outerTransactionHash) {
+          refuse('DURABLE_WRITE_JOURNAL', 'persisted signed evidence changed before broadcast');
+        }
+        evidence = reloadedEvidence;
+        let retryDelayMs;
+        try {
+          const returnedHash = await boundedRpc(
+            provider,
+            'eth_sendRawTransaction',
+            [evidence.rawTransaction],
+            rpcPolicy,
+          );
+          broadcastHashMismatch = String(returnedHash ?? '').toLowerCase()
+            !== evidence.outerTransactionHash;
+          broadcastFailure = null;
+          lastBroadcastWasThrottled = false;
+          break;
+        } catch (error) {
+          // Never replace or re-sign. Only the explicit admission throttle can
+          // retry immediately; timeouts and other errors keep hash-only recovery.
+          broadcastFailure = publicBroadcastFailure(error);
+          retryDelayMs = broadcastAdmissionRetryDelayMs(error);
+          lastBroadcastWasThrottled = retryDelayMs !== null;
+          if (retryDelayMs === null || attempt === MAX_ADMISSION_BROADCAST_ATTEMPTS) break;
+        }
+        if (deadlineAtMs - clockMs() <= retryDelayMs + rpcTimeoutMs) {
+          refuse('DURABLE_WRITE_DEADLINE', 'admission backoff cannot fit within the keeper deadline', { broadcastFailure });
+        }
+        await sleep(retryDelayMs);
+        // Even a rejected request may race with another exact replay. Inspect
+        // the stored hash and nonce again before the next fenced LOAD_SIGNED.
+        receipt = await getOuterReceipt(provider, evidence, {
+          attempts: 1, intervalMs: 0, sleep, rpcPolicy,
+        });
+        if (receipt) break;
+        const observed = await boundedRpc(
           provider,
-          'eth_sendRawTransaction',
-          [evidence.rawTransaction],
+          'eth_getTransactionByHash',
+          [evidence.outerTransactionHash],
           rpcPolicy,
         );
-        broadcastHashMismatch = String(returnedHash ?? '').toLowerCase()
-          !== evidence.outerTransactionHash;
-      } catch {
-        // A timeout, "already known", or nonce race is resolved only through
-        // the deterministic outer hash below. Never construct another tx.
+        if (observed) {
+          assertExactOuterTransaction(observed, evidence);
+          break;
+        }
+        const [latest, pending] = await Promise.all([
+          boundedRpc(provider, 'eth_getTransactionCount', [evidence.signerAddress, 'latest'], rpcPolicy),
+          boundedRpc(provider, 'eth_getTransactionCount', [evidence.signerAddress, 'pending'], rpcPolicy),
+        ]);
+        const nonce = BigInt(evidence.outerNonce);
+        const latestNonce = quantity(latest, 'latest nonce before admission retry');
+        const pendingNonce = quantity(pending, 'pending nonce before admission retry');
+        if (latestNonce > nonce || pendingNonce > nonce) {
+          refuse('DURABLE_WRITE_NONCE_CONSUMED', 'signed nonce was consumed without the exact outer transaction', { broadcastFailure });
+        }
+        if (latestNonce !== nonce || pendingNonce !== nonce) {
+          refuse('DURABLE_WRITE_NONCE_STATE', 'signer nonce is not exact before admission retry', { broadcastFailure });
+        }
       }
     }
-    receipt = await getOuterReceipt(provider, evidence, {
-      attempts: receiptAttempts,
-      intervalMs: receiptIntervalMs,
-      sleep,
-      rpcPolicy,
-    });
+    if (!receipt) {
+      try {
+        receipt = await getOuterReceipt(provider, evidence, {
+          // A rejected admission has no receipt to wait three minutes for.
+          attempts: lastBroadcastWasThrottled ? 1 : receiptAttempts,
+          intervalMs: receiptIntervalMs,
+          sleep,
+          rpcPolicy,
+        });
+      } catch (error) {
+        if (broadcastFailure && error instanceof DurableGenlayerWriteError) {
+          throw new DurableGenlayerWriteError(error.code, error.message, { broadcastFailure });
+        }
+        throw error;
+      }
+    }
   }
   if (!receipt) {
     let exactTransaction;
@@ -1027,7 +1084,9 @@ export async function broadcastDurableSignedGenlayerWrite({
         outerTransactionHash: evidence.outerTransactionHash,
       });
     }
-    refuse('DURABLE_WRITE_PENDING', 'exact signed transaction is still pending without a receipt');
+    refuse('DURABLE_WRITE_PENDING', 'exact signed transaction is still pending without a receipt', {
+      ...(broadcastFailure ? { broadcastFailure } : {}),
+    });
   }
   const canonicalOuter = await assertCanonicalOuterReceipt(
     provider,

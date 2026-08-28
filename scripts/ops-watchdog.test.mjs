@@ -106,6 +106,36 @@ test('watchdog fails on a failed workflow event, stale schedule, and degraded hi
   assert.match(watchdogMarkdown(result), /Overall: \*\*FAIL\*\*/);
 });
 
+test('watchdog identifies missing epoch coverage instead of reporting only HTTP 503', async () => {
+  const fetchImpl = healthyFetch([]);
+  const result = await runOpsWatchdog({
+    appUrl: 'https://liquidity-arena.example.test',
+    journalUrl: 'https://liquidity-arena.example.test/api/keeper-journal',
+    journalSecret: SECRET,
+    githubRepository: 'Leokings/liquidity-arena',
+    githubToken: 'github-token-value-long-enough',
+    fetchImpl: async (url, options) => {
+      if (new URL(url).pathname === '/readyz') {
+        return response({
+          status: 'degraded',
+          checks: {
+            genlayerRpc: { ready: true },
+            contract: { ready: true },
+            keeperCoverage: { ready: false, epochEnds: [1787900400, 1787904000, SECRET, -1, null] },
+            binance: { ready: true },
+          },
+        }, 503);
+      }
+      return fetchImpl(url, options);
+    },
+    now: () => NOW,
+  });
+  assert.equal(result.healthy, false);
+  const readiness = result.checks.find(({ name }) => name === 'application readiness');
+  assert.equal(readiness.detail, 'HTTP 503; status=degraded; not_ready=keeperCoverage; coverage_epoch_ends=1787900400,1787904000');
+  assert.ok(!watchdogMarkdown(result).includes(SECRET));
+});
+
 test('watchdog stays degraded when the latest scheduled keeper run failed', async () => {
   const requests = [];
   const fetchImpl = healthyFetch(requests);
