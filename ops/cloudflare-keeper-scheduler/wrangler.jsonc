@@ -7,7 +7,7 @@
   "preview_urls": false,
   "triggers": {
     "crons": [
-      "37 * * * *",
+      "12,27,42,57 * * * *",
       "57 * * * *"
     ]
   },

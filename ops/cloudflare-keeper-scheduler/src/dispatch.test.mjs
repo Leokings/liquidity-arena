@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { runScheduledBackup, schedulerConfiguration } from './dispatch.mjs';
 import worker from './worker.mjs';
 
 const TOKEN = 'github_pat_scheduler_test_value_123456789';
-const SCHEDULED_TIME = Date.parse('2026-08-21T08:37:00.000Z');
+const SCHEDULED_TIME = Date.parse('2026-08-21T08:42:00.000Z');
 
 function response(body, status = 200) {
   return new Response(status === 204 ? null : JSON.stringify(body), {
@@ -23,16 +24,140 @@ test('configuration exposes only the two allowlisted backup cron expressions', (
   assert.deepEqual(schedulerConfiguration, {
     repository: 'Leokings/liquidity-arena',
     ref: 'main',
-    crons: ['37 * * * *', '57 * * * *'],
+    crons: ['12,27,42,57 * * * *', '57 * * * *'],
   });
+  const deployed = JSON.parse(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8'));
+  assert.deepEqual(deployed.triggers.crons, schedulerConfiguration.crons);
   assert.equal('fetch' in worker, false);
 });
 
-test('missing current-hour keeper run dispatches main with exact bounded credentials', async () => {
+test('a successful earlier quarter does not suppress the next keeper slot', async () => {
+  let requests = 0;
+  const result = await runScheduledBackup({
+    cron: schedulerConfiguration.crons[0],
+    scheduledTime: SCHEDULED_TIME,
+    token: TOKEN,
+    logger: logger(),
+    fetchImpl: async () => {
+      requests += 1;
+      return requests === 1 ? response({ workflow_runs: [{
+        id: 71,
+        head_branch: 'main',
+        event: 'workflow_dispatch',
+        status: 'completed',
+        conclusion: 'success',
+        created_at: '2026-08-21T08:29:59.999Z',
+      }] }) : response(null, 204);
+    },
+  });
+  assert.equal(result.status, 'dispatched');
+  assert.equal(result.reason, 'current_slot_run_missing');
+  assert.equal(result.slot, '2026-08-21T08:30:00.000Z');
+  assert.equal(requests, 2);
+});
+
+test('active keeper runs suppress dispatch across quarter and hour boundaries', async () => {
+  for (const status of ['in_progress', 'pending', 'queued', 'requested', 'waiting']) {
+    for (const createdAt of ['2026-08-21T08:01:00.000Z', '2026-08-21T07:55:00.000Z']) {
+      let requests = 0;
+      const result = await runScheduledBackup({
+        cron: schedulerConfiguration.crons[0],
+        scheduledTime: SCHEDULED_TIME,
+        token: TOKEN,
+        logger: logger(),
+        fetchImpl: async () => {
+          requests += 1;
+          return response({ workflow_runs: [{
+            id: 72, head_branch: 'main', event: 'schedule', status,
+            conclusion: null, created_at: createdAt,
+          }] });
+        },
+      });
+      assert.equal(result.status, 'skipped', status + ' ' + createdAt);
+      assert.equal(result.reason, 'workflow_run_active');
+      assert.equal(result.runId, 72);
+      assert.equal(requests, 1);
+    }
+  }
+});
+
+test('each keeper trigger uses its UTC quarter including midnight rollover', async () => {
+  for (const [at, slot, lookback] of [
+    ['2026-08-21T00:12:00Z', '2026-08-21T00:00:00.000Z', '2026-08-20T23:00:00.000Z'],
+    ['2026-08-21T08:27:00Z', '2026-08-21T08:15:00.000Z', '2026-08-21T07:15:00.000Z'],
+    ['2026-08-21T08:42:00Z', '2026-08-21T08:30:00.000Z', '2026-08-21T07:30:00.000Z'],
+    ['2026-08-21T08:57:00Z', '2026-08-21T08:45:00.000Z', '2026-08-21T07:45:00.000Z'],
+  ]) {
+    let requests = 0;
+    const result = await runScheduledBackup({
+      cron: schedulerConfiguration.crons[0], scheduledTime: Date.parse(at),
+      token: TOKEN, logger: logger(),
+      fetchImpl: async (url) => {
+        requests += 1;
+        if (requests === 1) {
+          assert.equal(new URL(url).searchParams.get('created'), '>=' + lookback);
+          return response({ workflow_runs: [] });
+        }
+        return response(null, 204);
+      },
+    });
+    assert.equal(result.slot, slot);
+    assert.equal(result.status, 'dispatched');
+  }
+});
+
+test('watchdog successes still cover the full UTC hour', async () => {
+  let requests = 0;
+  const result = await runScheduledBackup({
+    cron: '57 * * * *', scheduledTime: Date.parse('2026-08-21T08:57:00Z'),
+    token: TOKEN, logger: logger(),
+    fetchImpl: async () => {
+      requests += 1;
+      return response({ workflow_runs: [{
+        id: 73, head_branch: 'main', event: 'workflow_run',
+        status: 'completed', conclusion: 'success', created_at: '2026-08-21T08:01:00Z',
+      }] });
+    },
+  });
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.slot, '2026-08-21T08:00:00.000Z');
+  assert.equal(result.reason, 'current_slot_run_succeeded');
+  assert.equal(requests, 1);
+});
+
+test('previous hourly keeper trigger remains safe during Cloudflare propagation', async () => {
+  let requests = 0;
+  const result = await runScheduledBackup({
+    cron: '37 * * * *', scheduledTime: Date.parse('2026-08-21T08:37:00Z'),
+    token: TOKEN, logger: logger(),
+    fetchImpl: async () => {
+      requests += 1;
+      return requests === 1 ? response({ workflow_runs: [] }) : response(null, 204);
+    },
+  });
+  assert.equal(result.target, 'keeper');
+  assert.equal(result.slot, '2026-08-21T08:30:00.000Z');
+  assert.equal(result.status, 'dispatched');
+});
+
+test('oversized preflight responses stop before dispatching', async () => {
+  let requests = 0;
+  await assert.rejects(() => runScheduledBackup({
+    cron: schedulerConfiguration.crons[0], scheduledTime: SCHEDULED_TIME,
+    token: TOKEN, logger: logger(),
+    fetchImpl: async () => {
+      requests += 1;
+      return response({ workflow_runs: [], padding: 'x'.repeat(193 * 1024) });
+    },
+  }), /invalid response/);
+  assert.equal(requests, 1);
+});
+
+test('missing current-slot keeper run dispatches main with exact bounded credentials', async () => {
   const requests = [];
   const output = logger();
   const result = await runScheduledBackup({
-    cron: '37 * * * *',
+    cron: '12,27,42,57 * * * *',
     scheduledTime: SCHEDULED_TIME,
     token: TOKEN,
     logger: output,
@@ -45,14 +170,14 @@ test('missing current-hour keeper run dispatches main with exact bounded credent
 
   assert.equal(result.status, 'dispatched');
   assert.equal(result.target, 'keeper');
-  assert.equal(result.reason, 'current_hour_run_missing');
+  assert.equal(result.reason, 'current_slot_run_missing');
   assert.equal(result.runId, 12345);
   assert.equal(requests.length, 2);
   assert.equal(requests[0].options.method, 'GET');
   assert.equal(requests[0].url.pathname, '/repos/Leokings/liquidity-arena/actions/workflows/bradbury-v8-keeper.yml/runs');
   assert.equal(requests[0].url.searchParams.get('branch'), 'main');
-  assert.equal(requests[0].url.searchParams.get('created'), '>=2026-08-21T08:00:00.000Z');
-  assert.equal(requests[0].url.searchParams.get('per_page'), '5');
+  assert.equal(requests[0].url.searchParams.get('created'), '>=2026-08-21T07:30:00.000Z');
+  assert.equal(requests[0].url.searchParams.get('per_page'), '10');
   assert.equal(requests[1].options.method, 'POST');
   assert.equal(requests[1].url.pathname, '/repos/Leokings/liquidity-arena/actions/workflows/bradbury-v8-keeper.yml/dispatches');
   assert.deepEqual(JSON.parse(requests[1].options.body), { ref: 'main' });
@@ -90,10 +215,10 @@ for (const run of [
   { status: 'in_progress', conclusion: null, event: 'schedule' },
   { status: 'completed', conclusion: 'success', event: 'workflow_dispatch' },
 ]) {
-  test(`current-hour ${run.status} keeper run skips backup dispatch`, async () => {
+  test(`current-slot ${run.status} keeper run skips backup dispatch`, async () => {
     let requests = 0;
     const result = await runScheduledBackup({
-      cron: '37 * * * *',
+      cron: '12,27,42,57 * * * *',
       scheduledTime: SCHEDULED_TIME,
       token: TOKEN,
       logger: logger(),
@@ -125,7 +250,7 @@ test('old or failed keeper runs do not suppress the backup dispatch', async () =
   for (const item of cases) {
     let requests = 0;
     const result = await runScheduledBackup({
-      cron: '37 * * * *',
+      cron: '12,27,42,57 * * * *',
       scheduledTime: SCHEDULED_TIME,
       token: TOKEN,
       logger: logger(),
@@ -146,33 +271,33 @@ test('old or failed keeper runs do not suppress the backup dispatch', async () =
   }
 });
 
-test('bounded current-hour query accepts five realistic large workflow records', async () => {
+test('bounded current-slot query accepts ten realistic large workflow records', async () => {
   let requests = 0;
-  const workflowRuns = Array.from({ length: 5 }, (_, index) => ({
+  const workflowRuns = Array.from({ length: 10 }, (_, index) => ({
     id: 200 + index,
     head_branch: 'main',
-    event: index === 4 ? 'workflow_dispatch' : 'schedule',
-    status: index === 4 ? 'completed' : 'completed',
-    conclusion: index === 4 ? 'success' : 'failure',
-    created_at: `2026-08-21T08:${String(20 + index).padStart(2, '0')}:00.000Z`,
+    event: index === 9 ? 'workflow_dispatch' : 'schedule',
+    status: index === 9 ? 'completed' : 'completed',
+    conclusion: index === 9 ? 'success' : 'failure',
+    created_at: `2026-08-21T08:${String(31 + index).padStart(2, '0')}:00.000Z`,
     actor: { login: 'scheduler-fixture', avatar_url: `https://example.test/${'x'.repeat(9_000)}` },
   }));
   const result = await runScheduledBackup({
-    cron: '37 * * * *',
+    cron: '12,27,42,57 * * * *',
     scheduledTime: SCHEDULED_TIME,
     token: TOKEN,
     logger: logger(),
     fetchImpl: async (url) => {
       requests += 1;
       const parsed = new URL(url);
-      assert.equal(parsed.searchParams.get('created'), '>=2026-08-21T08:00:00.000Z');
-      assert.equal(parsed.searchParams.get('per_page'), '5');
+      assert.equal(parsed.searchParams.get('created'), '>=2026-08-21T07:30:00.000Z');
+      assert.equal(parsed.searchParams.get('per_page'), '10');
       return response({ workflow_runs: workflowRuns });
     },
   });
   assert.equal(result.status, 'skipped');
-  assert.equal(result.reason, 'current_hour_run_succeeded');
-  assert.equal(result.runId, 204);
+  assert.equal(result.reason, 'current_slot_run_succeeded');
+  assert.equal(result.runId, 209);
   assert.equal(requests, 1);
 });
 
@@ -180,7 +305,7 @@ test('preflight network, rate-limit, and server failures fail open to dispatch',
   for (const mode of ['network', 429, 503]) {
     let requests = 0;
     const result = await runScheduledBackup({
-      cron: '37 * * * *',
+      cron: '12,27,42,57 * * * *',
       scheduledTime: SCHEDULED_TIME,
       token: TOKEN,
       logger: logger(),
@@ -203,7 +328,7 @@ test('authorization and configuration failures stop without a dispatch', async (
     let requests = 0;
     await assert.rejects(
       () => runScheduledBackup({
-        cron: '37 * * * *',
+        cron: '12,27,42,57 * * * *',
         scheduledTime: SCHEDULED_TIME,
         token: TOKEN,
         logger: logger(),
@@ -226,7 +351,7 @@ test('dispatch failure is reported without disclosing token or response body', a
   let requests = 0;
   await assert.rejects(
     () => runScheduledBackup({
-      cron: '37 * * * *',
+      cron: '12,27,42,57 * * * *',
       scheduledTime: SCHEDULED_TIME,
       token: TOKEN,
       logger: logger(),
@@ -249,7 +374,7 @@ test('dispatch failure is reported without disclosing token or response body', a
 test('malformed token and unknown cron fail before any request', async () => {
   let requests = 0;
   for (const options of [
-    { cron: '37 * * * *', token: `${TOKEN}\nleak` },
+    { cron: '12,27,42,57 * * * *', token: `${TOKEN}\nleak` },
     { cron: '38 * * * *', token: TOKEN },
   ]) {
     await assert.rejects(
@@ -283,7 +408,7 @@ test('worker schedules through waitUntil and has no public request handler', asy
   };
   try {
     worker.scheduled(
-      { cron: '37 * * * *', scheduledTime: SCHEDULED_TIME },
+      { cron: '12,27,42,57 * * * *', scheduledTime: SCHEDULED_TIME },
       { CLOUDFLARE_GITHUB_TOKEN: TOKEN },
       { waitUntil: (promise) => promises.push(promise) },
     );
