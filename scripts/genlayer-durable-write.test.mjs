@@ -138,12 +138,14 @@ function signingRequest(signerAddress, method = 'create_epoch', args = [17875548
   };
 }
 
-function signingProvider(estimate = '0xc3500') {
+function signingProvider(estimate = '0xc3500', overrides = {}) {
   return provider({
     eth_getBlockByNumber: { number: '0x20', hash: FINALIZED_HASH, timestamp: '0x5a' },
     eth_estimateGas: estimate,
     eth_getTransactionCount: ['0x7', '0x7'],
     eth_getBalance: '0xde0b6b3a7640000',
+    eth_call: '0x',
+    ...overrides,
   });
 }
 
@@ -530,6 +532,16 @@ test('durable signer rewrites to exact 24-hour validity and persists before expo
     ({ method }) => method === 'eth_estimateGas',
   ).args[0].data;
   assert.equal(estimatedData, Transaction.from(evidence.rawTransaction).data);
+  assert.equal(evidence.gasLimit, '1350000');
+  const simulated = fixture.rpc.calls.find(({ method }) => method === 'eth_call');
+  assert.deepEqual(simulated.args, [{
+    from: evidence.signerAddress,
+    to: BRADBURY_CONSENSUS_ADDRESS,
+    data: estimatedData,
+    value: '0x0',
+    gas: `0x${BigInt(evidence.gasLimit).toString(16)}`,
+    gasPrice: `0x${BigInt(evidence.gasPriceWei).toString(16)}`,
+  }, 'latest']);
   assert.equal(Object.values(fixture.signedWrite).includes(evidence.rawTransaction), false);
 });
 
@@ -545,7 +557,7 @@ test('durable signer rejects a lease-renewal delay that consumes the 23-hour ini
   ));
 });
 
-test('durable signer uses the larger fresh estimate but rejects the SDK 200000 fallback', async () => {
+test('durable signer pads the larger fresh estimate but rejects the SDK 200000 fallback', async () => {
   const wallet = Wallet.createRandom();
   const operation = preparedOperation(wallet.address);
   let walletSignCalls = 0;
@@ -572,7 +584,80 @@ test('durable signer uses the larger fresh estimate but rejects the SDK 200000 f
   assert.equal(walletSignCalls, 0);
 
   const higherEstimate = await signedFixture({ rpc: signingProvider('0xdbba1') });
-  assert.equal(higherEstimate.evidence.gasLimit, '900001');
+  assert.equal(higherEstimate.evidence.gasLimit, '1350002');
+});
+
+test('consensus gas margin covers an underestimated call without changing replayed bytes', async () => {
+  const wallet = Wallet.createRandom();
+  const rpc = signingProvider('0xd8ef9', {
+    eth_call: ([request]) => {
+      if (BigInt(request.gas) < 1_200_000n) throw new Error('out of gas');
+      return '0x';
+    },
+  });
+  const fixture = await signedFixture({
+    wallet,
+    rpc,
+    clientFactory: ({ account }) => ({
+      async initializeConsensusSmartContract() {},
+      async writeContract() {
+        await account.signTransaction({ ...signingRequest(wallet.address), gas: 888_569n });
+      },
+    }),
+  });
+  assert.equal(fixture.evidence.gasLimit, '1332854');
+  const broadcast = replayProvider(fixture.evidence);
+  await replay(fixture, broadcast);
+  assert.equal(broadcast.calls.find(({ method }) => method === 'eth_sendRawTransaction').args[0],
+    fixture.evidence.rawTransaction);
+});
+
+test('gas margin cannot exceed the existing gas ceiling or pending balance', async () => {
+  const wallet = Wallet.createRandom();
+  let walletSignCalls = 0;
+  for (const { estimate, overrides, code } of [
+    { estimate: `0x${3_333_334n.toString(16)}`, overrides: {}, code: 'DURABLE_WRITE_ESTIMATE' },
+    {
+      estimate: '0xc3500',
+      overrides: { eth_getBalance: `0x${200_000_000_000_000n.toString(16)}` },
+      code: 'DURABLE_WRITE_COST',
+    },
+  ]) {
+    const rpc = signingProvider(estimate, overrides);
+    await assert.rejects(signedFixture({
+      rpc,
+      wallet: {
+        address: wallet.address,
+        async signTransaction(request) {
+          walletSignCalls += 1;
+          return wallet.signTransaction(request);
+        },
+      },
+    }), error => error.code === code
+      && error.walletSignAttempted === false && error.broadcastAttempted === false);
+    assert.equal(rpc.calls.some(({ method }) => method === 'eth_call'), false);
+  }
+  assert.equal(walletSignCalls, 0);
+});
+
+test('failed or malformed consensus simulation never reaches the signer', async () => {
+  const wallet = Wallet.createRandom();
+  let walletSignCalls = 0;
+  for (const simulation of [new Error('execution reverted'), '0x1234', null]) {
+    const rpc = signingProvider('0xc3500', { eth_call: simulation });
+    await assert.rejects(signedFixture({
+      rpc,
+      wallet: {
+        address: wallet.address,
+        async signTransaction(request) {
+          walletSignCalls += 1;
+          return wallet.signTransaction(request);
+        },
+      },
+    }), error => error.code === 'DURABLE_WRITE_SIMULATION'
+      && error.walletSignAttempted === false && error.broadcastAttempted === false);
+  }
+  assert.equal(walletSignCalls, 0);
 });
 
 test('durable signer rejects a non-regular or oversized keystore before decrypting', async () => {

@@ -43,6 +43,17 @@ The keeper never calls EVM `withdraw()` and has no recipient key.
 
 ## Durable journal
 
+### Consensus gas preflight
+
+Fresh writes reserve 50% gas headroom above the larger of the SDK limit and an
+independent estimate of the exact calldata, rounded up. Bradbury estimates can
+understate gas consumed by nested consensus calls at inclusion. The padded limit
+must still fit the existing 5,000,000 gas ceiling, gas-price and total-cost caps,
+and pending signer balance; it is never clipped to make an unsafe request fit.
+An exact read-only `eth_call` with the chosen gas limit must succeed before any
+signature is made. Reverts, RPC failures, or unexpected return data fail unsigned.
+Already signed journal entries retain their original bytes and gas limit.
+
 ### Broadcast admission failures
 
 Bradbury can reject `eth_sendRawTransaction` with RPC code `-32005` and

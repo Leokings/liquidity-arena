@@ -314,7 +314,10 @@ async function freshSigningPreflight({
   }
   const estimate = quantity(estimateRaw, 'independent gas estimate');
   const sdkGasLimit = exactGas(request);
-  const gasLimit = sdkGasLimit > estimate ? sdkGasLimit : estimate;
+  const estimatedGas = sdkGasLimit > estimate ? sdkGasLimit : estimate;
+  // Bradbury consensus can consume more gas at inclusion than eth_estimateGas
+  // predicts. Reserve 50% headroom, rounding up, without raising either cap.
+  const gasLimit = (estimatedGas * 3n + 1n) / 2n;
   if (estimate <= 0n || estimate > MAX_KEEPER_WRITE_GAS
       || sdkGasLimit <= 0n || sdkGasLimit === 200_000n || sdkGasLimit > MAX_KEEPER_WRITE_GAS
       || gasLimit > MAX_KEEPER_WRITE_GAS) {
@@ -351,6 +354,27 @@ async function freshSigningPreflight({
   if (gasPrice <= 0n || gasPrice > MAX_KEEPER_WRITE_GAS_PRICE_WEI
       || maximumCost > MAX_KEEPER_WRITE_COST_ATTO || balance < maximumCost) {
     refuse('DURABLE_WRITE_COST', 'keeper write exceeds the gas-price/cost cap or balance', {
+      broadcastAttempted: false,
+    });
+  }
+
+  let simulation;
+  try {
+    simulation = await boundedRpc(provider, 'eth_call', [{
+      from: expectedSigner,
+      to,
+      data,
+      value: '0x0',
+      gas: `0x${gasLimit.toString(16)}`,
+      gasPrice: `0x${gasPrice.toString(16)}`,
+    }, 'latest'], rpcPolicy);
+  } catch {
+    refuse('DURABLE_WRITE_SIMULATION', 'Bradbury consensus call failed before signing', {
+      broadcastAttempted: false,
+    });
+  }
+  if (simulation !== '0x') {
+    refuse('DURABLE_WRITE_SIMULATION', 'Bradbury consensus simulation returned unexpected data', {
       broadcastAttempted: false,
     });
   }
